@@ -5,7 +5,125 @@
 //! configuration; in the browser there is no filesystem, so the same state
 //! lives in eframe's storage (or, where it is bundled data, nowhere at all).
 
-use sdroxide_types::QsoRecord;
+use sdroxide_types::{Command, QsoRecord, RadioState, RxId, RxState, Vfo};
+use serde::{Deserialize, Serialize};
+
+/// What a remote browser seat last used — mode, dial, and the RX knobs the
+/// listener overlay carries — so a hard reload can ask for them again instead
+/// of inheriting the station's shared main RX (often still SONDE after an
+/// earlier promote).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RemoteSeatSnapshot {
+    pub freq_hz: f64,
+    pub rx: RxState,
+}
+
+impl RemoteSeatSnapshot {
+    pub fn from_state(state: &RadioState) -> Self {
+        Self { freq_hz: state.active_freq_hz(), rx: state.rx[0] }
+    }
+
+    /// Commands the remote UI already knows how to send; the server rewrites
+    /// each to the matching `ListenerSet*` for this seat. Only the routed
+    /// knobs — a bare `SetWfmStereo` / `SetManualGain` would hit the shared
+    /// main RX instead of this browser's overlay.
+    pub fn restore_commands(&self) -> Vec<Command> {
+        let rx = RxId::Main;
+        let r = &self.rx;
+        vec![
+            Command::SetMode { rx, mode: r.mode },
+            Command::SetFilter { rx, lo: r.filter_lo, hi: r.filter_hi },
+            Command::SetVfo { vfo: Vfo::A, hz: self.freq_hz },
+            Command::SetVolume { rx, v: r.volume },
+            Command::SetMute { rx, muted: r.muted },
+            Command::SetAgc { rx, agc: r.agc },
+            Command::SetSquelch { rx, db: r.squelch_db },
+            Command::SetNoiseReduction { rx, level: r.noise_reduction },
+            Command::SetAutoNotch { rx, on: r.auto_notch },
+        ]
+    }
+}
+
+pub(in crate::app) fn remote_seat_key(radio_id: u32) -> String {
+    if radio_id == 0 {
+        "remote_seat".into()
+    } else {
+        format!("remote_seat:{radio_id}")
+    }
+}
+
+/// Load a seat snapshot for a remote tab. Native remote uses eframe storage;
+/// the browser also checks a dedicated localStorage key written on every
+/// State so a hard reload before eframe's periodic save still restores.
+pub(in crate::app) fn load_remote_seat(
+    storage: Option<&dyn eframe::Storage>,
+    radio_id: u32,
+) -> Option<RemoteSeatSnapshot> {
+    let key = remote_seat_key(radio_id);
+    #[cfg(target_arch = "wasm32")]
+    if let Some(snap) = load_remote_seat_local(&key) {
+        return Some(snap);
+    }
+    storage.and_then(|s| eframe::get_value(s, &key))
+}
+
+pub(in crate::app) fn persist_remote_seat(
+    storage: &mut dyn eframe::Storage,
+    radio_id: u32,
+    snap: &RemoteSeatSnapshot,
+) {
+    let key = remote_seat_key(radio_id);
+    eframe::set_value(storage, &key, snap);
+    #[cfg(target_arch = "wasm32")]
+    persist_remote_seat_local(&key, snap);
+}
+
+/// Immediate browser write so a hard reload right after a mode/freq change
+/// still finds the seat. No-op on native (eframe `save` is enough there).
+pub(in crate::app) fn persist_remote_seat_eager(radio_id: u32, snap: &RemoteSeatSnapshot) {
+    let key = remote_seat_key(radio_id);
+    #[cfg(target_arch = "wasm32")]
+    persist_remote_seat_local(&key, snap);
+    #[cfg(not(target_arch = "wasm32"))]
+    let _ = (key, snap);
+}
+
+#[cfg(target_arch = "wasm32")]
+fn local_seat_key(key: &str) -> String {
+    format!("sdroxide/{key}")
+}
+
+#[cfg(target_arch = "wasm32")]
+fn load_remote_seat_local(key: &str) -> Option<RemoteSeatSnapshot> {
+    let storage = web_sys::window()?.local_storage().ok()??;
+    let raw = storage.get_item(&local_seat_key(key)).ok()??;
+    serde_json::from_str(&raw).ok()
+}
+
+#[cfg(target_arch = "wasm32")]
+fn persist_remote_seat_local(key: &str, snap: &RemoteSeatSnapshot) {
+    let Ok(raw) = serde_json::to_string(snap) else { return };
+    let Some(window) = web_sys::window() else { return };
+    let Ok(Some(storage)) = window.local_storage() else { return };
+    let _ = storage.set_item(&local_seat_key(key), &raw);
+}
+
+#[cfg(test)]
+mod remote_seat_tests {
+    use super::*;
+    use sdroxide_types::Mode;
+
+    #[test]
+    fn restore_puts_mode_before_the_dial() {
+        let snap = RemoteSeatSnapshot {
+            freq_hz: 98_500_000.0,
+            rx: RxState::with_mode(Mode::Wfm),
+        };
+        let cmds = snap.restore_commands();
+        assert!(matches!(cmds[0], Command::SetMode { mode: Mode::Wfm, .. }));
+        assert!(cmds.iter().any(|c| matches!(c, Command::SetVfo { hz, .. } if (*hz - 98.5e6).abs() < 1.0)));
+    }
+}
 
 // ── Logbook persistence (native: config-dir JSON; wasm: eframe storage) ──────
 #[cfg(not(target_arch = "wasm32"))]

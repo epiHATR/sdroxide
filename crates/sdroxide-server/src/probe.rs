@@ -82,11 +82,9 @@ pub(crate) fn ask(shared: &Arc<Shared>, req: DeviceProbe) {
     }
 }
 
-/// Into the reliable lane of whichever session is attached — which may no
-/// longer be the one that asked, if it dropped mid-scan. Harmless: an answer
-/// nobody is waiting for lands in a list that is redrawn on demand.
+/// Into every reliable lane on this radio — which may no longer include the
+/// client that asked, if it dropped mid-scan. Harmless: an answer nobody is
+/// waiting for lands in a list that is redrawn on demand.
 fn reply(shared: &Arc<Shared>, answer: ProbeAnswer) {
-    if let Some(s) = shared.session.lock().unwrap().as_ref() {
-        let _ = s.reliable.try_send(ServerMsg::ProbeAnswer(Box::new(answer)));
-    }
+    shared.broadcast_reliable(ServerMsg::ProbeAnswer(Box::new(answer)));
 }

@@ -1,6 +1,6 @@
 //! End-to-end server test: real engine (signal generator) + real WebSocket
 //! client. Covers the handshake, sign-in, state echo, spectrum/audio streaming,
-//! and the single-client Busy rule.
+//! shared multi-client on one radio, and exclusive PTT.
 
 use std::time::Duration;
 
@@ -150,33 +150,47 @@ async fn full_session_flow() {
         }
     }
 
-    // Second client gets Busy.
+    // Second client shares the radio — same VFO, not Busy.
     let (mut ws2, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{PORT}/ws"))
         .await
         .expect("connect 2");
     send(&mut ws2, &hello()).await;
     match recv_msg(&mut ws2).await {
-        ServerMsg::Busy => {}
-        other => panic!("expected Busy, got {other:?}"),
+        ServerMsg::HelloAck { state, .. } => {
+            assert!(
+                (state.vfo_a_hz - 14_100_000.0).abs() < 1.0,
+                "second client must join the shared dial, got {}",
+                state.vfo_a_hz
+            );
+        }
+        other => panic!("expected HelloAck for second client, got {other:?}"),
     }
 
-    // First client drops; after cleanup a new client can connect again.
-    drop(ws);
-    drop(ws2);
-    tokio::time::sleep(Duration::from_millis(500)).await;
-    let (mut ws3, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{PORT}/ws"))
-        .await
-        .expect("reconnect");
-    send(&mut ws3, &hello()).await;
-    match recv_msg(&mut ws3).await {
-        ServerMsg::HelloAck { .. } => {}
-        other => panic!("expected HelloAck on reconnect, got {other:?}"),
+    // First retunes again — both follow.
+    send(&mut ws, &ClientMsg::Command(Command::SetVfo { vfo: Vfo::A, hz: 14_200_000.0 })).await;
+    loop {
+        if let ServerMsg::State(s) = recv_msg(&mut ws).await
+            && (s.vfo_a_hz - 14_200_000.0).abs() < 1.0
+        {
+            break;
+        }
     }
+    loop {
+        if let ServerMsg::State(s) = recv_msg(&mut ws2).await
+            && (s.vfo_a_hz - 14_200_000.0).abs() < 1.0
+        {
+            break;
+        }
+    }
+
+    // PTT: first claims; second's key-down is ignored (first stays keyed).
+    send(&mut ws, &ClientMsg::Command(Command::SetPtt(true))).await;
+    send(&mut ws2, &ClientMsg::Command(Command::SetPtt(true))).await;
+    send(&mut ws, &ClientMsg::Command(Command::SetPtt(false))).await;
 }
 
-/// The sign-in, over a real socket: what a wrong password costs, and the two
-/// things a client that has not given one must not be able to do — take the
-/// single-client slot, or reach the radio.
+/// The sign-in, over a real socket: what a wrong password costs, and that a
+/// client that has not given one must not be able to reach the radio.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_server_with_credentials_signs_clients_in() {
     spawn_server(
@@ -233,12 +247,11 @@ async fn a_server_with_credentials_signs_clients_in() {
         started.elapsed()
     );
 
-    // ...and now that somebody is in, the slot really is held: the one still
-    // sitting on the challenge signs in and is told the radio is taken.
+    // ...and a second signed-in client may share the radio (independent VFOs on IQ).
     send(&mut ws, &ClientMsg::Auth { username: "oe1test".into(), password: "hunter2".into() })
         .await;
     match recv_msg(&mut ws).await {
-        ServerMsg::Busy => {}
-        other => panic!("expected Busy for the second signed-in client, got {other:?}"),
+        ServerMsg::HelloAck { .. } => {}
+        other => panic!("expected HelloAck for the second signed-in client, got {other:?}"),
     }
 }

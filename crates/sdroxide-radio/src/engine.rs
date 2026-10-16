@@ -6,7 +6,7 @@
 //! (persisted engine-side), hardware gain/antenna control, and
 //! viewport-aware spectrum frames. TX arrives in M5.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -1330,6 +1330,18 @@ impl RxChain {
     }
 }
 
+/// One remote client's independent receive VFO inside the shared IQ window.
+///
+/// Dial, mode and filter are private; the hardware LO (`center_hz`) is not.
+/// Audio is accumulated to 20 ms (960 @ 48 kHz) blocks and emitted as
+/// [`RadioEvent::ListenerAudio`].
+struct RemoteListener {
+    dial_hz: f64,
+    rx: sdroxide_types::RxState,
+    chain: RxChain,
+    pending: Vec<f32>,
+}
+
 /// Where a running scan has got to.
 ///
 /// The two shapes a scan can take are one type because they differ only in how
@@ -2420,6 +2432,9 @@ struct Engine {
     main: Option<RxChain>,
     sub: Option<RxChain>,
     mixer: Option<StereoMixer>,
+    /// Per remote-session software VFOs (OpenWebRX-style). Empty on a local
+    /// desktop engine; the server attaches one seat per signed-in client.
+    listeners: HashMap<u64, RemoteListener>,
     audio_out_rate: f64,
     /// Active MP3 recording of the receiver audio, if any.
     recorder: Option<Recorder>,
@@ -4093,6 +4108,7 @@ fn engine_thread(
         main,
         sub: None,
         mixer,
+        listeners: HashMap::new(),
         audio_out_rate,
         recorder: None,
         cal_offset_db: engine_cfg.cal_offset_db,
@@ -5482,6 +5498,8 @@ impl Engine {
         if let Some(mixer) = self.mixer.as_mut() {
             mixer.push(&self.main_play, right, &self.main_play_rec, rec_right);
         }
+        // Independent remote VFOs on the same IQ (OpenWebRX-style).
+        self.run_listeners(iq);
         // Feed the high-resolution channel spectrum from the DDC output.
         if let (Some(ca), Some(main)) = (self.channel_analyzer.as_mut(), self.main.as_ref()) {
             ca.process(main.channel_iq());
@@ -9412,6 +9430,164 @@ impl Engine {
                 }
             }
 
+            AttachListener { id } => self.attach_listener(id),
+            DetachListener { id } => {
+                self.listeners.remove(&id);
+            }
+            ListenerSetVfo { id, hz } => {
+                // Create-on-write: a tune can beat AttachListener on the cmd
+                // queue (or arrive after a missed attach). A silent no-op left
+                // the UI showing independent dials while every client still
+                // demodulated the attach frequency — same audio, different VFOs.
+                self.ensure_listener(id);
+                let mut hz = hz.max(0.0);
+                // In-span: only this seat moves. Outside the usable window the
+                // shared LO retunes and *every* seat follows that dial — last
+                // client wins (403 → 446 makes both tabs read 446).
+                let usable = self.state.sample_rate * 0.45;
+                let moved_lo = (hz - self.state.center_hz).abs() > usable && self.retune_for_vfo(hz);
+                hz = self.clamp_to_passband(hz);
+                let center = self.state.center_hz;
+                let drive_rs41 = self.listeners.get(&id).is_some_and(|l| l.rx.mode.is_rs41());
+                if moved_lo {
+                    // Write the typed dial onto every seat *before*
+                    // update_tuning. That path's sync_listeners would otherwise
+                    // clamp each seat's *old* dial onto the new passband edge
+                    // (center − span/2) and emit ListenerState — and the
+                    // server's Attach-protection then treats that edge as the
+                    // seat's intent, bouncing 446 → 441.95 (and similar).
+                    match self.state.active_vfo {
+                        Vfo::A => self.state.vfo_a_hz = hz,
+                        Vfo::B => self.state.vfo_b_hz = hz,
+                    }
+                    self.state.band = Band::containing(hz);
+                    let ids: Vec<u64> = self.listeners.keys().copied().collect();
+                    for lid in ids {
+                        if let Some(lis) = self.listeners.get_mut(&lid) {
+                            lis.dial_hz = hz;
+                            lis.chain.set_offset_hz(hz - center);
+                        }
+                    }
+                    self.update_tuning();
+                    // Publish the new LO before ListenerState events. The
+                    // server caches center_hz from State; without this, its
+                    // Attach-protection resync still sees the old window and
+                    // can bounce 403 ↔ 446 across seats.
+                    self.emit_state();
+                    for lid in self.listeners.keys().copied().collect::<Vec<_>>() {
+                        self.emit_listener_state(lid);
+                    }
+                } else if let Some(lis) = self.listeners.get_mut(&id) {
+                    lis.dial_hz = hz;
+                    lis.chain.set_offset_hz(lis.dial_hz - center);
+                    self.emit_listener_state(id);
+                }
+                // Only the SONDE seat steers the shared sonde DDC.
+                if drive_rs41 {
+                    if !moved_lo {
+                        match self.state.active_vfo {
+                            Vfo::A => self.state.vfo_a_hz = hz,
+                            Vfo::B => self.state.vfo_b_hz = hz,
+                        }
+                        self.state.band = Band::containing(hz);
+                        self.follow_dial();
+                        self.update_tuning();
+                    }
+                    self.sync_rs41_window();
+                }
+            }
+            ListenerSetMode { id, mode } => {
+                self.ensure_listener(id);
+                let center = self.state.center_hz;
+                if let Some(lis) = self.listeners.get_mut(&id) {
+                    lis.rx.mode = mode;
+                    let (lo, hi) = mode.default_filter();
+                    lis.rx.filter_lo = lo;
+                    lis.rx.filter_hi = hi;
+                    let dial = lis.dial_hz;
+                    let rx = lis.rx;
+                    lis.chain.build_for_mode(&rx, dial);
+                    lis.chain.set_offset_hz(dial - center);
+                }
+                // Remote SetMode is rewritten to ListenerSetMode. Station lanes
+                // (SONDE, AIS, digi, …) still key off main RX mode — without
+                // promoting here the lane never starts and the web panel sits
+                // on "starting the sonde decoder…".
+                //
+                // Promote only. Never demote main when a seat picks WFM/SSB:
+                // that was killing a running sonde the moment a browser
+                // connected or left SONDE, while other seats (or the station
+                // itself) still needed the lane.
+                if mode.has_bottom_panel() {
+                    self.set_rx_mode(RxId::Main, mode);
+                    // set_rx_mode may auto-park the dial (e.g. 403 MHz).
+                    let dial = self.clamp_to_passband(self.state.rx_freq_hz());
+                    let center = self.state.center_hz;
+                    if let Some(lis) = self.listeners.get_mut(&id) {
+                        lis.dial_hz = dial;
+                        let rx = lis.rx;
+                        lis.chain.build_for_mode(&rx, dial);
+                        lis.chain.set_offset_hz(dial - center);
+                    }
+                }
+                self.emit_listener_state(id);
+            }
+            ListenerSetFilter { id, lo, hi } => {
+                self.ensure_listener(id);
+                let center = self.state.center_hz;
+                if let Some(lis) = self.listeners.get_mut(&id) {
+                    lis.rx.filter_lo = lo;
+                    lis.rx.filter_hi = hi;
+                    let dial = lis.dial_hz;
+                    let rx = lis.rx;
+                    lis.chain.build_for_mode(&rx, dial);
+                    lis.chain.set_offset_hz(dial - center);
+                }
+                self.emit_listener_state(id);
+            }
+            ListenerSetVolume { id, v } => {
+                self.ensure_listener(id);
+                if let Some(lis) = self.listeners.get_mut(&id) {
+                    lis.rx.volume = v.clamp(0.0, 1.0);
+                }
+                self.emit_listener_state(id);
+            }
+            ListenerSetMute { id, muted } => {
+                self.ensure_listener(id);
+                if let Some(lis) = self.listeners.get_mut(&id) {
+                    lis.rx.muted = muted;
+                }
+                self.emit_listener_state(id);
+            }
+            ListenerSetAgc { id, agc } => {
+                self.ensure_listener(id);
+                if let Some(lis) = self.listeners.get_mut(&id) {
+                    lis.rx.agc = agc;
+                }
+                self.emit_listener_state(id);
+            }
+            ListenerSetSquelch { id, db } => {
+                self.ensure_listener(id);
+                if let Some(lis) = self.listeners.get_mut(&id) {
+                    lis.rx.squelch_db = db;
+                }
+                self.emit_listener_state(id);
+            }
+            ListenerSetNoiseReduction { id, level } => {
+                self.ensure_listener(id);
+                if let Some(lis) = self.listeners.get_mut(&id) {
+                    lis.rx.noise_reduction = level;
+                }
+                self.emit_listener_state(id);
+            }
+            ListenerSetAutoNotch { id, on } => {
+                self.ensure_listener(id);
+                if let Some(lis) = self.listeners.get_mut(&id) {
+                    lis.rx.auto_notch = on;
+                }
+                self.emit_listener_state(id);
+            }
+
             SetQo100Config(cfg) => {
                 self.state.qo100 = cfg;
                 // Held in step with the live setting for symmetry with the
@@ -11535,12 +11711,27 @@ impl Engine {
         }
     }
 
+    /// Dial the sonde lane should centre on: a remote seat in SONDE mode (stable
+    /// lowest session id when several are in SONDE), else the shared main dial.
+    fn rs41_dial_hz(&self) -> f64 {
+        self.listeners
+            .iter()
+            .filter(|(_, l)| l.rx.mode.is_rs41())
+            .min_by_key(|(id, _)| *id)
+            .map(|(_, l)| l.dial_hz)
+            .unwrap_or_else(|| self.state.rx_freq_hz())
+    }
+
+    fn rs41_mode_wanted(&self) -> bool {
+        self.state.rx[0].mode.is_rs41() || self.listeners.values().any(|l| l.rx.mode.is_rs41())
+    }
+
     /// Why the sonde decoder cannot run, or `None` when it can.
     fn rs41_unavailable(&self) -> Option<String> {
         if self.audio_mode {
             return Some("SONDE needs I/Q — this front end hands over demodulated audio".into());
         }
-        let dial = self.state.rx_freq_hz();
+        let dial = self.rs41_dial_hz();
         if !self.caps.may_rx_hz(sdroxide_types::RS41_DEFAULT_HZ) {
             return Some("this radio cannot reach the 400–406 MHz radiosonde band".into());
         }
@@ -11559,7 +11750,7 @@ impl Engine {
     fn build_rs41_window(&mut self) -> (Ddc, f64) {
         let lane = self.rs41_cfg.kind.lane_rate_hz();
         let mut ddc = Ddc::new(self.state.sample_rate, lane);
-        let center = self.state.rx_freq_hz();
+        let center = self.rs41_dial_hz();
         ddc.set_offset_hz(center - self.state.center_hz);
         self.rs41_in_rate = self.state.sample_rate;
         (ddc, center)
@@ -11572,7 +11763,7 @@ impl Engine {
         } else {
             self.state.rs41 = self.rs41_cfg;
         }
-        let want = self.state.rx[0].mode.is_rs41()
+        let want = self.rs41_mode_wanted()
             && self.rs41_cfg.enabled
             && self.rs41_unavailable().is_none();
         // Kind / lane-rate change needs a full restart so the DDC and *mod
@@ -11615,9 +11806,10 @@ impl Engine {
         if self.rs41_ddc.is_none() {
             return;
         }
-        let want_lane = self.rs41_cfg.kind.lane_rate_hz();
-        let rebuild = (self.state.sample_rate - self.rs41_in_rate).abs() >= 1.0
-            || self.rs41_ddc.as_ref().is_some_and(|ddc| (ddc.out_rate() - want_lane).abs() >= 1.0);
+        // Rebuild only when the IQ rate changed. Comparing DDC out_rate to the
+        // *target* lane (48 kHz) was always true — the DDC lands on ~50.625 kHz
+        // from 8.1 Msps — so every tune rebuilt the window and logged a storm.
+        let rebuild = (self.state.sample_rate - self.rs41_in_rate).abs() >= 1.0;
         if rebuild {
             let (ddc, center) = self.build_rs41_window();
             let rate = ddc.out_rate();
@@ -11629,7 +11821,7 @@ impl Engine {
             info!(rate, center, "sonde window rebuilt");
             return;
         }
-        let center = self.state.rx_freq_hz();
+        let center = self.rs41_dial_hz();
         let Some(ddc) = self.rs41_ddc.as_mut() else { return };
         ddc.set_offset_hz(center - self.state.center_hz);
         if (center - self.rs41_center_hz).abs() < 1.0 {
@@ -11645,8 +11837,7 @@ impl Engine {
     fn poll_rs41(&mut self) {
         let unavailable = self.rs41_unavailable();
         let Some(d) = self.rs41.as_ref() else {
-            if self.state.rx[0].mode.is_rs41() && self.rs41_idle_sent.as_ref() != Some(&unavailable)
-            {
+            if self.rs41_mode_wanted() && self.rs41_idle_sent.as_ref() != Some(&unavailable) {
                 self.rs41_idle_sent = Some(unavailable.clone());
                 let st = sdroxide_types::Rs41Status {
                     unavailable,
@@ -15085,6 +15276,97 @@ impl Engine {
         hz.clamp(lo, hi)
     }
 
+    /// Open a per-session DDC on the shared IQ (remote multi-user). CAT/
+    /// audio-mode rigs have no span to slice, so they stay collaborative.
+    /// Idempotent: a second attach (or create-on-write) leaves an existing
+    /// seat alone so a late AttachListener cannot wipe a dial already set.
+    fn attach_listener(&mut self, id: u64) {
+        if self.audio_mode || self.listeners.contains_key(&id) {
+            return;
+        }
+        let out_rate = if self.audio_out_rate > 0.0 { self.audio_out_rate } else { 48_000.0 };
+        let dial = self.clamp_to_passband(self.state.rx_freq_hz());
+        let rx = self.state.rx[0];
+        let mut chain = RxChain::new(self.state.sample_rate, &rx, out_rate, dial);
+        chain.set_offset_hz(dial - self.state.center_hz);
+        self.listeners.insert(
+            id,
+            RemoteListener { dial_hz: dial, rx, chain, pending: Vec::new() },
+        );
+        self.emit_listener_state(id);
+    }
+
+    fn ensure_listener(&mut self, id: u64) {
+        if !self.listeners.contains_key(&id) {
+            self.attach_listener(id);
+        }
+    }
+
+    fn emit_listener_state(&self, id: u64) {
+        let Some(lis) = self.listeners.get(&id) else {
+            return;
+        };
+        let _ = self.event_tx.send(RadioEvent::ListenerState {
+            id,
+            freq_hz: lis.dial_hz,
+            rx: lis.rx,
+        });
+    }
+
+    /// Keep every listener's NCO and dial inside the current passband after
+    /// the hardware LO or sample rate moved.
+    fn sync_listeners(&mut self) {
+        if self.listeners.is_empty() {
+            return;
+        }
+        let center = self.state.center_hz;
+        let (lo, hi) = self.passband();
+        let rate = self.state.sample_rate;
+        let out_rate = if self.audio_out_rate > 0.0 { self.audio_out_rate } else { 48_000.0 };
+        let mut dirty = Vec::new();
+        for (&id, lis) in self.listeners.iter_mut() {
+            let dial = lis.dial_hz.clamp(lo, hi);
+            if (dial - lis.dial_hz).abs() > 0.5 {
+                lis.dial_hz = dial;
+                dirty.push(id);
+            }
+            // Sample-rate change rebuilds the chain; otherwise only the offset.
+            if (lis.chain.in_rate - rate).abs() > 1.0 {
+                let rx = lis.rx;
+                lis.chain = RxChain::new(rate, &rx, out_rate, dial);
+            }
+            lis.chain.set_offset_hz(dial - center);
+        }
+        for id in dirty {
+            self.emit_listener_state(id);
+        }
+    }
+
+    /// Demod each remote listener and emit 20 ms PCM blocks.
+    fn run_listeners(&mut self, iq: &[Complex32]) {
+        if self.listeners.is_empty() || iq.is_empty() {
+            return;
+        }
+        let center = self.state.center_hz;
+        let mut emissions: Vec<(u64, Vec<f32>)> = Vec::new();
+        for (&id, lis) in self.listeners.iter_mut() {
+            lis.chain.set_offset_hz(lis.dial_hz - center);
+            lis.chain.run(iq, &lis.rx, false);
+            let audio = lis.chain.out_audio();
+            if audio.is_empty() {
+                continue;
+            }
+            lis.pending.extend_from_slice(audio);
+            while lis.pending.len() >= 960 {
+                let chunk: Vec<f32> = lis.pending.drain(..960).collect();
+                emissions.push((id, chunk));
+            }
+        }
+        for (id, pcm) in emissions {
+            let _ = self.event_tx.send(RadioEvent::ListenerAudio { id, pcm });
+        }
+    }
+
     /// Park the sub receiver on the inactive VFO when it has never been placed
     /// (zero), or when its frequency has fallen outside the device passband —
     /// a band change, a retune, or a sample-rate change moving the hardware out
@@ -15850,6 +16132,7 @@ impl Engine {
         if let Some(c) = self.sub.as_mut() {
             c.set_offset_hz(sub_offset);
         }
+        self.sync_listeners();
         // Keep a wideband-IQ rig's own VFO on our dial (TCI); no-op elsewhere. This
         // way returning from TX doesn't snap the rig back to the IQ centre.
         self.source.set_if_offset(main_offset);

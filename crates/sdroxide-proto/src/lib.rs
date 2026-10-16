@@ -1558,7 +1558,12 @@ use sdroxide_types::{
 /// `SONDE`. Wire break vs v180 peers that still expect the old shapes.
 ///
 /// v182: `Rs41Sonde.datetime` — sonde-reported timestamp for SondeHub uploads.
-pub const PROTO_VERSION: u16 = 182;
+///
+/// v183: remote multi-listener VFOs — `Command::AttachListener` /
+/// `DetachListener` / `ListenerSet*` (server rewrites per-session dial
+/// commands). Wire break only if an old peer must reject new commands cleanly;
+/// `RadioState` layout is unchanged (listener dial is overlaid per session).
+pub const PROTO_VERSION: u16 = 183;
 const VERSION_BYTE: u8 = 0x12;
 
 #[derive(Debug, thiserror::Error)]

@@ -653,9 +653,14 @@ impl eframe::App for SdroxideApp {
                     // Stay inside the column left of the system / band dock —
                     // panel children must not paint over the dock resize grip.
                     ui.set_clip_rect(ui.max_rect());
-                    let pan =
+                    let mut pan =
                         spectrum_view::WindowPan::of(self.caps.as_ref(), self.state.center_hz)
                             .with_outer(Some(self.zoom_out_window()), self.state.sample_rate);
+                    // Remote seats share one LO — pan/follow must not re-SetVfo
+                    // every frame after an out-of-window tune (flickers all tabs).
+                    if self.ctrl.engine_is_remote() {
+                        pan.allow_lo_follow = false;
+                    }
                     spectrum_view::show_ext(
                         ui,
                         &mut self.view,
@@ -901,9 +906,14 @@ impl eframe::App for SdroxideApp {
             if show_wf {
                 ui.allocate_ui(egui::vec2(width, wf_h), |ui| {
                     ui.set_clip_rect(ui.max_rect());
-                    let pan =
+                    let mut pan =
                         spectrum_view::WindowPan::of(self.caps.as_ref(), self.state.center_hz)
                             .with_outer(Some(self.zoom_out_window()), self.state.sample_rate);
+                    // Remote seats share one LO — pan/follow must not re-SetVfo
+                    // every frame after an out-of-window tune (flickers all tabs).
+                    if self.ctrl.engine_is_remote() {
+                        pan.allow_lo_follow = false;
+                    }
                     spectrum_view::show_ext(
                         ui,
                         &mut self.view,
@@ -1166,6 +1176,15 @@ impl eframe::App for SdroxideApp {
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         eframe::set_value(storage, &self.view_key, &self.view);
+        // Per-browser remote seat (mode/dial/RX). Written by every remote tab
+        // for its own radio id — not gated on station_writer.
+        if self.seat_persist_ready && self.ctrl.engine_is_remote() {
+            super::persist::persist_remote_seat(
+                storage,
+                self.radio_id,
+                &super::persist::RemoteSeatSnapshot::from_state(&self.state),
+            );
+        }
         // The station-wide keys are written by exactly one tab — every tab
         // holds its own copy of these, and the last to save would otherwise
         // overwrite the tab the operator actually changed them on.
@@ -1288,6 +1307,27 @@ impl SdroxideApp {
                         self.clear_digi_band_rx();
                     }
                     self.recenter_if_tuned_away(prev_vfo, prev_rate);
+                    // Replay this browser's last mode/dial after Attach seeded
+                    // us from the shared main RX (often still SONDE).
+                    if let Some(snap) = self.seat_restore.take() {
+                        let same = (snap.freq_hz - self.state.active_freq_hz()).abs() < 1.0
+                            && snap.rx.mode == self.state.rx[0].mode;
+                        if !same {
+                            for c in snap.restore_commands() {
+                                self.ctrl.send(c);
+                            }
+                        }
+                        self.seat_persist_ready = true;
+                        // Keep the stored seat — do not replace it with the
+                        // attach default we just received before restore lands.
+                        super::persist::persist_remote_seat_eager(self.radio_id, &snap);
+                    } else if self.ctrl.engine_is_remote() {
+                        self.seat_persist_ready = true;
+                        super::persist::persist_remote_seat_eager(
+                            self.radio_id,
+                            &super::persist::RemoteSeatSnapshot::from_state(&self.state),
+                        );
+                    }
                     // The announcer diffs *this* — the engine's own snapshot —
                     // rather than `self.state` per frame, because the UI
                     // mutates that optimistically before the engine confirms
@@ -1735,6 +1775,9 @@ impl SdroxideApp {
                 // announcement left it. There is nothing to seed on the way
                 // past.
                 RadioEvent::RadioConfig(_) => {}
+                // Server-only: the pump overlays listener dials onto State and
+                // unicasts audio. A local/native controller never emits these.
+                RadioEvent::ListenerState { .. } | RadioEvent::ListenerAudio { .. } => {}
             }
         }
         // A switched-off skimmer stops emitting, so its last boxes would sit on

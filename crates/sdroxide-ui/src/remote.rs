@@ -651,9 +651,11 @@ impl RadioController for RemoteController {
         // lasts, and the most expensive one to act on at the far end — held to
         // a rate the network and the radio can carry, latest value wins. See
         // [`CENTER_COALESCE_S`]; `flush_center` releases it.
-        if let Command::SetCenter(hz) = cmd {
-            self.center_pending = Some(hz);
-            self.flush_center();
+        if let Command::SetCenter(_) = cmd {
+            // Dropped on remote. CTR / edge-pan would retune the shared LO
+            // (or fight the server when another seat is connected) and flash
+            // every client's waterfall. Out-of-band typed/RCL dials still
+            // move the LO via ListenerSetVfo — last writer wins.
             return;
         }
         self.send_msg(ClientMsg::Command(cmd));

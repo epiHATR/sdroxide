@@ -415,6 +415,13 @@ pub struct SdroxideApp {
     /// Result of the last PlutoSDR "Test connection".
     pluto_test_result: Option<TestOutcome>,
     seen_first_state: bool,
+    /// Remote/web only: last mode/dial/RX knobs from the previous visit, to
+    /// replay after HelloAck so a hard reload does not inherit the station's
+    /// shared main RX (often still SONDE). Consumed on the first State.
+    seat_restore: Option<persist::RemoteSeatSnapshot>,
+    /// Remote seat snapshot has been applied (or there was none). Until then
+    /// we must not overwrite the stored seat with the attach default.
+    seat_persist_ready: bool,
     show_memories: bool,
     /// The RDS window. Opened from the RDS chip in the receive menu, which only
     /// appears on WFM.
@@ -1362,6 +1369,9 @@ impl SdroxideApp {
         let solar3d_view = view.solar3d;
         #[cfg(target_arch = "wasm32")]
         let _ = &wgpu_render_state;
+        let remote = ctrl.engine_is_remote();
+        let seat_restore =
+            if remote { persist::load_remote_seat(storage, radio_id) } else { None };
         SdroxideApp {
             ctrl,
             display_class,
@@ -1463,6 +1473,8 @@ impl SdroxideApp {
             pluto_devices: Vec::new(),
             pluto_test_result: None,
             seen_first_state: false,
+            seat_restore,
+            seat_persist_ready: !remote,
             show_memories: false,
             show_rds: false,
             show_drm: false,

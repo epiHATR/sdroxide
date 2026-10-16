@@ -1,10 +1,15 @@
 //! Server mode: HTTP (static WASM client) + a WebSocket session per radio,
 //! speaking `sdroxide-proto`.
 //!
-//! One session per radio, and one client per session: `/ws` is the station's
-//! first radio — all a single-radio station has, and all a client that knows
-//! nothing of a roster ever asks for — while `/ws/<id>` names any of them.
-//! `/radios` lists what is on offer.
+//! `/ws` is the station's first radio — all a single-radio station has, and
+//! all a client that knows nothing of a roster ever asks for — while
+//! `/ws/<id>` names any of them. `/radios` lists what is on offer.
+//!
+//! Several clients may share one radio. On an IQ front end each client gets an
+//! independent software VFO (dial / mode / filter / audio) inside the shared
+//! capture bandwidth — OpenWebRX-style. The hardware LO and waterfall stay
+//! shared. TX (PTT / Tune / CW key / mic) is exclusive to one client at a time.
+//! A hard cap keeps audio fan-out bounded.
 //!
 //! Lanes into the socket (per the project plan):
 //! - control/state/memories/meters: reliable queue, never intentionally dropped
@@ -20,9 +25,10 @@ mod probe;
 mod session;
 mod solar;
 
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -34,7 +40,8 @@ use tracing::{info, warn};
 use sdroxide_proto::solar::SolarServerMsg;
 use sdroxide_proto::{AudioCodec, ServerMsg};
 use sdroxide_types::{
-    Command, DeviceCaps, DigiStatus, MemoryChannel, RadioEvent, RadioState, RdsData, SpectrumFrame,
+    Command, DeviceCaps, DigiStatus, MemoryChannel, RadioEvent, RadioState, RdsData, RxId, RxState,
+    SpectrumFrame, Vfo,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -163,10 +170,25 @@ pub struct ServerParams {
     pub radio_power: Option<RadioPowerFn>,
 }
 
+/// How many browsers may share one radio. Beyond this, new sockets get
+/// [`ServerMsg::Busy`] (server full) rather than starving the ones already on.
+pub(crate) const MAX_CLIENTS_PER_RADIO: usize = 8;
+
 pub(crate) struct SessionTx {
+    pub id: u64,
     pub reliable: mpsc::Sender<ServerMsg>,
     pub audio: mpsc::Sender<ServerMsg>,
     pub rx_codec: AudioCodec,
+    /// Per-session RX audio sequence (listener unicasts).
+    pub audio_seq: AtomicU32,
+}
+
+/// One remote client's overlaid dial / RX settings (independent of shared
+/// [`Latest::state`] VFO).
+#[derive(Clone)]
+pub(crate) struct ListenerView {
+    pub freq_hz: f64,
+    pub rx: RxState,
 }
 
 #[derive(Default, Clone)]
@@ -365,13 +387,11 @@ impl Station {
     /// told that *its own* radio has gone: the roster it gets simply does not
     /// list `me` any more.
     pub(crate) fn tell_roster(&self, r: &Shared, list: &[sdroxide_proto::RadioInfo]) {
-        if let Some(s) = r.session.lock().unwrap().as_ref() {
-            let _ = s.reliable.try_send(ServerMsg::Radios {
-                me: r.id,
-                radios: list.to_vec(),
-                editable: self.editable(),
-            });
-        }
+        r.broadcast_reliable(ServerMsg::Radios {
+            me: r.id,
+            radios: list.to_vec(),
+            editable: self.editable(),
+        });
     }
 
     /// Tell every client what the station now has. Sent to all of them, not
@@ -443,7 +463,7 @@ impl Station {
         // dropped sender leaves what it has already queued to be drained.
         let list = self.roster();
         self.tell_roster(&gone, &list);
-        *gone.session.lock().unwrap() = None;
+        gone.drop_all_sessions();
         for r in self.list() {
             self.tell_roster(&r, &list);
         }
@@ -514,8 +534,11 @@ impl Station {
             primary,
             cmd_tx: r.cmd_tx,
             latest: Mutex::new(Latest::default()),
-            session: Mutex::new(None),
-            busy: AtomicBool::new(false),
+            sessions: Mutex::new(Vec::new()),
+            next_session_id: AtomicU64::new(1),
+            ptt_owner: Mutex::new(None),
+            listener_views: Mutex::new(HashMap::new()),
+            listener_opus: Mutex::new(HashMap::new()),
             mic_tx: Mutex::new(r.mic_tx),
             spectrum_rx,
             wide_spectrum_rx,
@@ -567,14 +590,23 @@ pub(crate) struct Shared {
     pub primary: bool,
     pub cmd_tx: crossbeam_channel::Sender<Command>,
     pub latest: Mutex<Latest>,
-    pub session: Mutex<Option<SessionTx>>,
-    pub busy: AtomicBool,
+    /// Live control clients on this radio. Each may own an independent
+    /// software VFO ([`Self::listener_views`]); TX is gated by [`Self::ptt_owner`].
+    pub sessions: Mutex<Vec<SessionTx>>,
+    pub next_session_id: AtomicU64,
+    /// Which session currently holds PTT / Tune / CW key / mic, if any.
+    pub ptt_owner: Mutex<Option<u64>>,
+    /// Per-session listener overlays — present once the engine has answered
+    /// [`Command::AttachListener`]. Used to personalise [`ServerMsg::State`]
+    /// and to route dial commands.
+    pub listener_views: Mutex<HashMap<u64, ListenerView>>,
+    /// Opus encoders for per-listener RX audio (one per session that needs it).
+    pub listener_opus: Mutex<HashMap<u64, opus::Encoder>>,
     pub mic_tx: Mutex<rtrb::Producer<f32>>,
     pub spectrum_rx: watch::Receiver<Option<SpectrumFrame>>,
     pub wide_spectrum_rx: watch::Receiver<Option<SpectrumFrame>>,
-    /// The solar-system viewers on `/solar-ws`. Independent of `busy`: they
-    /// control nothing, so any number may watch alongside the one control
-    /// client. See [`solar`].
+    /// The solar-system viewers on `/solar-ws`. Independent of control
+    /// sessions: they control nothing. See [`solar`].
     ///
     /// One feed for the station, held by every radio: it is a picture of the
     /// sky over this site, and a second radio does not put the station under a
@@ -621,6 +653,351 @@ impl Shared {
             return label;
         }
         format!("Radio {}", self.id + 1)
+    }
+
+    /// Register a control client. `Err` means the radio is full — caller sends
+    /// [`ServerMsg::Busy`] and closes. Returns the session id.
+    ///
+    /// When other clients are already connected, `rx_codec` is forced to match
+    /// the first so the pump encodes RX audio once.
+    pub(crate) fn try_add_session(
+        &self,
+        reliable: mpsc::Sender<ServerMsg>,
+        audio: mpsc::Sender<ServerMsg>,
+        mut rx_codec: AudioCodec,
+    ) -> Result<u64, ()> {
+        let mut sessions = self.sessions.lock().unwrap();
+        if sessions.len() >= MAX_CLIENTS_PER_RADIO {
+            return Err(());
+        }
+        if let Some(first) = sessions.first() {
+            rx_codec = first.rx_codec;
+        }
+        let id = self.next_session_id.fetch_add(1, Ordering::Relaxed);
+        sessions.push(SessionTx {
+            id,
+            reliable,
+            audio,
+            rx_codec,
+            audio_seq: AtomicU32::new(0),
+        });
+        Ok(id)
+    }
+
+    /// Drop one client. Returns whether it held the TX key (caller must clear PTT).
+    pub(crate) fn remove_session(&self, id: u64) -> bool {
+        let mut sessions = self.sessions.lock().unwrap();
+        sessions.retain(|s| s.id != id);
+        self.listener_views.lock().unwrap().remove(&id);
+        self.listener_opus.lock().unwrap().remove(&id);
+        let mut owner = self.ptt_owner.lock().unwrap();
+        if *owner == Some(id) {
+            *owner = None;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub(crate) fn drop_all_sessions(&self) {
+        self.sessions.lock().unwrap().clear();
+        *self.ptt_owner.lock().unwrap() = None;
+        self.listener_views.lock().unwrap().clear();
+        self.listener_opus.lock().unwrap().clear();
+    }
+
+    pub(crate) fn broadcast_reliable(&self, msg: ServerMsg) {
+        // State is personalised per listener so each client sees its own dial.
+        if let ServerMsg::State(base) = &msg {
+            self.broadcast_personalized_state(base);
+            return;
+        }
+        let sessions = self.sessions.lock().unwrap();
+        for s in sessions.iter() {
+            if let Err(e) = s.reliable.try_send(msg.clone()) {
+                let dropped = e.into_inner();
+                warn!(
+                    radio = self.id,
+                    session = s.id,
+                    "reliable lane full; dropping {}",
+                    msg_kind(&dropped)
+                );
+            }
+        }
+    }
+
+    /// Send [`ServerMsg::State`] with each session's listener dial overlaid.
+    pub(crate) fn broadcast_personalized_state(&self, base: &RadioState) {
+        let views = self.listener_views.lock().unwrap();
+        let sessions = self.sessions.lock().unwrap();
+        for s in sessions.iter() {
+            let state = overlay_listener(base, views.get(&s.id));
+            if let Err(e) = s.reliable.try_send(ServerMsg::State(state)) {
+                let dropped = e.into_inner();
+                warn!(
+                    radio = self.id,
+                    session = s.id,
+                    "reliable lane full; dropping {}",
+                    msg_kind(&dropped)
+                );
+            }
+        }
+    }
+
+    pub(crate) fn send_reliable(&self, session_id: u64, msg: ServerMsg) {
+        let sessions = self.sessions.lock().unwrap();
+        if let Some(s) = sessions.iter().find(|s| s.id == session_id)
+            && let Err(e) = s.reliable.try_send(msg)
+        {
+            let dropped = e.into_inner();
+            warn!(
+                radio = self.id,
+                session = session_id,
+                "reliable lane full; dropping {}",
+                msg_kind(&dropped)
+            );
+        }
+    }
+
+    pub(crate) fn broadcast_audio(&self, msg: ServerMsg) {
+        // With independent listeners, each client gets ListenerAudio unicasts
+        // instead of the shared main-mixer mix.
+        if !self.listener_views.lock().unwrap().is_empty() {
+            return;
+        }
+        let sessions = self.sessions.lock().unwrap();
+        for s in sessions.iter() {
+            let _ = s.audio.try_send(msg.clone()); // drop under backpressure — by design
+        }
+    }
+
+    pub(crate) fn send_audio(&self, session_id: u64, msg: ServerMsg) {
+        let sessions = self.sessions.lock().unwrap();
+        if let Some(s) = sessions.iter().find(|s| s.id == session_id) {
+            let _ = s.audio.try_send(msg);
+        }
+    }
+
+    /// Per-session RX seat vs shared station.
+    ///
+    /// * **Same IQ window** — VFO, mode, filter, volume, mute, AGC, squelch,
+    ///   NR, notch are rewritten onto this session's listener (independent UI).
+    /// * **Outside that window** (typed/RCL dial past the usable span) —
+    ///   [`Command::ListenerSetVfo`] retunes the shared LO and every seat's
+    ///   dial follows that frequency — last client wins.
+    /// * **Pan / SetCenter** with 2+ clients is ignored so "centre on dial"
+    ///   does not drag everyone when both VFOs still fit (403 vs 406).
+    /// * Station Settings, gain/antenna, TX, and decode lanes stay shared.
+    ///
+    /// CAT/audio-mode radios have no shared IQ span — leave them collaborative.
+    pub(crate) fn route_command(&self, session_id: u64, cmd: Command) -> Command {
+        if self.latest.lock().unwrap().caps.audio_mode {
+            return cmd;
+        }
+        match cmd {
+            Command::SetCenter(hz) => {
+                let others = self.sessions.lock().unwrap().len() > 1;
+                if others {
+                    let cur = self.latest.lock().unwrap().state.center_hz;
+                    Command::SetCenter(cur)
+                } else {
+                    Command::SetCenter(hz)
+                }
+            }
+            Command::SetVfo { hz, .. } | Command::TuneInSpan { hz, .. } => {
+                if let Some(v) = self.listener_views.lock().unwrap().get_mut(&session_id) {
+                    v.freq_hz = hz;
+                }
+                Command::ListenerSetVfo { id: session_id, hz }
+            }
+            Command::SetMode { rx: RxId::Main, mode } => {
+                if let Some(v) = self.listener_views.lock().unwrap().get_mut(&session_id) {
+                    v.rx.mode = mode;
+                    let (lo, hi) = mode.default_filter();
+                    v.rx.filter_lo = lo;
+                    v.rx.filter_hi = hi;
+                }
+                Command::ListenerSetMode { id: session_id, mode }
+            }
+            Command::SetFilter { rx: RxId::Main, lo, hi } => {
+                if let Some(v) = self.listener_views.lock().unwrap().get_mut(&session_id) {
+                    v.rx.filter_lo = lo;
+                    v.rx.filter_hi = hi;
+                }
+                Command::ListenerSetFilter { id: session_id, lo, hi }
+            }
+            Command::SetVolume { rx: RxId::Main, v } => {
+                if let Some(view) = self.listener_views.lock().unwrap().get_mut(&session_id) {
+                    view.rx.volume = v;
+                }
+                Command::ListenerSetVolume { id: session_id, v }
+            }
+            Command::SetMute { rx: RxId::Main, muted } => {
+                if let Some(v) = self.listener_views.lock().unwrap().get_mut(&session_id) {
+                    v.rx.muted = muted;
+                }
+                Command::ListenerSetMute { id: session_id, muted }
+            }
+            Command::SetAgc { rx: RxId::Main, agc } => {
+                if let Some(v) = self.listener_views.lock().unwrap().get_mut(&session_id) {
+                    v.rx.agc = agc;
+                }
+                Command::ListenerSetAgc { id: session_id, agc }
+            }
+            Command::SetSquelch { rx: RxId::Main, db } => {
+                if let Some(v) = self.listener_views.lock().unwrap().get_mut(&session_id) {
+                    v.rx.squelch_db = db;
+                }
+                Command::ListenerSetSquelch { id: session_id, db }
+            }
+            Command::SetNoiseReduction { rx: RxId::Main, level } => {
+                if let Some(v) = self.listener_views.lock().unwrap().get_mut(&session_id) {
+                    v.rx.noise_reduction = level;
+                }
+                Command::ListenerSetNoiseReduction { id: session_id, level }
+            }
+            Command::SetAutoNotch { rx: RxId::Main, on } => {
+                if let Some(v) = self.listener_views.lock().unwrap().get_mut(&session_id) {
+                    v.rx.auto_notch = on;
+                }
+                Command::ListenerSetAutoNotch { id: session_id, on }
+            }
+            Command::SetPtt(true) | Command::SetTune(true) => {
+                // TX uses the main chain — park it on this client's dial first.
+                if let Some(v) = self.listener_views.lock().unwrap().get(&session_id).cloned() {
+                    let _ = self.cmd_tx.send(Command::SetVfo { vfo: Vfo::A, hz: v.freq_hz });
+                    let _ = self.cmd_tx.send(Command::SetMode { rx: RxId::Main, mode: v.rx.mode });
+                    let _ = self.cmd_tx.send(Command::SetFilter {
+                        rx: RxId::Main,
+                        lo: v.rx.filter_lo,
+                        hi: v.rx.filter_hi,
+                    });
+                }
+                cmd
+            }
+            // RCL / memory recall updates the shared main dial. With per-session
+            // VFOs the browser only sees its listener overlay, so a recall that
+            // landed only on main looked like "nothing happened" — especially
+            // when the channel was outside the current IQ window.
+            Command::RecallMemory(mem_id) => {
+                let Some(m) = self
+                    .latest
+                    .lock()
+                    .unwrap()
+                    .memories
+                    .iter()
+                    .find(|m| m.id == mem_id)
+                    .cloned()
+                else {
+                    return cmd;
+                };
+                if let Some(v) = self.listener_views.lock().unwrap().get_mut(&session_id) {
+                    v.freq_hz = m.freq_hz;
+                    v.rx.mode = m.mode;
+                    v.rx.filter_lo = m.filter_lo;
+                    v.rx.filter_hi = m.filter_hi;
+                }
+                let _ = self.cmd_tx.send(Command::ListenerSetMode {
+                    id: session_id,
+                    mode: m.mode,
+                });
+                let _ = self.cmd_tx.send(Command::ListenerSetFilter {
+                    id: session_id,
+                    lo: m.filter_lo,
+                    hi: m.filter_hi,
+                });
+                // ListenerSetVfo retunes the shared LO when the channel is
+                // outside the usable span.
+                Command::ListenerSetVfo { id: session_id, hz: m.freq_hz }
+            }
+            other => other,
+        }
+    }
+
+    /// Encode one listener PCM block and unicast it.
+    pub(crate) fn deliver_listener_audio(&self, session_id: u64, pcm: &[f32]) {
+        let codec = {
+            let sessions = self.sessions.lock().unwrap();
+            let Some(s) = sessions.iter().find(|s| s.id == session_id) else {
+                return;
+            };
+            s.rx_codec
+        };
+        let payload = match codec {
+            AudioCodec::Opus48kMono => {
+                let mut encoders = self.listener_opus.lock().unwrap();
+                let enc = encoders.entry(session_id).or_insert_with(|| {
+                    opus::Encoder::new(48_000, opus::Channels::Mono, opus::Application::Audio)
+                        .expect("opus encoder")
+                });
+                match enc.encode_vec_float(pcm, 1400) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        warn!(session = session_id, "listener opus encode: {e}");
+                        return;
+                    }
+                }
+            }
+            AudioCodec::Pcm16_48k => {
+                let mut v = Vec::with_capacity(pcm.len() * 2);
+                for &s in pcm {
+                    let i = (s.clamp(-1.0, 1.0) * 32767.0) as i16;
+                    v.extend_from_slice(&i.to_le_bytes());
+                }
+                v
+            }
+        };
+        let seq = {
+            let sessions = self.sessions.lock().unwrap();
+            let Some(s) = sessions.iter().find(|s| s.id == session_id) else {
+                return;
+            };
+            s.audio_seq.fetch_add(1, Ordering::Relaxed).wrapping_add(1)
+        };
+        self.send_audio(session_id, ServerMsg::RxAudio { seq, payload });
+    }
+
+    /// Codec the pump should encode RX audio with (first connected client).
+    pub(crate) fn rx_codec(&self) -> Option<AudioCodec> {
+        self.sessions.lock().unwrap().first().map(|s| s.rx_codec)
+    }
+
+    /// Gate TX-related commands. Returns whether the command should reach the engine.
+    pub(crate) fn accept_tx_command(&self, session_id: u64, cmd: &Command) -> bool {
+        match cmd {
+            Command::SetPtt(true) | Command::SetTune(true) | Command::CwKey(true) => {
+                let mut owner = self.ptt_owner.lock().unwrap();
+                match *owner {
+                    None => {
+                        *owner = Some(session_id);
+                        true
+                    }
+                    Some(id) if id == session_id => true,
+                    Some(_) => false,
+                }
+            }
+            Command::SetPtt(false) | Command::SetTune(false) | Command::CwKey(false) => {
+                let mut owner = self.ptt_owner.lock().unwrap();
+                match *owner {
+                    Some(id) if id == session_id => {
+                        // Key-up from the owner frees the slot so another
+                        // client can transmit. Forwarding all three falses is
+                        // what clears a stuck Tune/CW if they claimed without
+                        // PTT.
+                        *owner = None;
+                        true
+                    }
+                    // Nobody owns TX — still forward false so a stuck key clears.
+                    None => true,
+                    Some(_) => false,
+                }
+            }
+            _ => true,
+        }
+    }
+
+    pub(crate) fn holds_ptt(&self, session_id: u64) -> bool {
+        *self.ptt_owner.lock().unwrap() == Some(session_id)
     }
 }
 
@@ -887,8 +1264,7 @@ fn pump(
             mono.push(0.5 * (l + r));
         }
 
-        let session_codec = shared.session.lock().unwrap().as_ref().map(|s| s.rx_codec);
-        match session_codec {
+        match shared.rx_codec() {
             None => mono.clear(),
             Some(codec) => {
                 while mono.len() >= 960 {
@@ -921,10 +1297,8 @@ fn pump(
                         }
                     };
                     audio_seq = audio_seq.wrapping_add(1);
-                    if let Some(s) = shared.session.lock().unwrap().as_ref() {
-                        // Bounded lane: dropping is the backpressure policy.
-                        let _ = s.audio.try_send(ServerMsg::RxAudio { seq: audio_seq, payload });
-                    }
+                    // Bounded lanes: dropping per client is the backpressure policy.
+                    shared.broadcast_audio(ServerMsg::RxAudio { seq: audio_seq, payload });
                     mono.drain(..960);
                 }
             }
@@ -943,6 +1317,17 @@ fn now_utc() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
+}
+
+/// Overlay a listener's dial onto the shared station state for that client's UI.
+fn overlay_listener(base: &RadioState, view: Option<&ListenerView>) -> RadioState {
+    let mut s = base.clone();
+    if let Some(v) = view {
+        s.vfo_a_hz = v.freq_hz;
+        s.active_vfo = Vfo::A;
+        s.rx[0] = v.rx;
+    }
+    s
 }
 
 fn handle_event(shared: &Shared, ev: RadioEvent) {
@@ -1018,6 +1403,13 @@ fn handle_event(shared: &Shared, ev: RadioEvent) {
     // `Capabilities` arm), which is a fact about the station's roster and not
     // about this radio's session.
     let mut renamed = false;
+    // Per-session listener updates — sent after the `latest` lock is released.
+    let mut listener_state: Option<(u64, RadioState)> = None;
+    let mut listener_audio: Option<(u64, Vec<f32>)> = None;
+    // Client already tuned (optimistic view) before the engine's attach
+    // snapshot arrived — push that dial/mode again so audio catches up.
+    let mut listener_resync: Option<(u64, f64)> = None;
+    let mut listener_mode_resync: Option<(u64, sdroxide_types::Mode)> = None;
     let msg = {
         let mut latest = shared.latest.lock().unwrap();
         match ev {
@@ -1254,6 +1646,54 @@ fn handle_event(shared: &Shared, ev: RadioEvent) {
                 latest.profiles = p.clone();
                 Some(ServerMsg::Profiles(p))
             }
+            RadioEvent::ListenerState { id, freq_hz, rx } => {
+                let mut views = shared.listener_views.lock().unwrap();
+                let half = latest.state.sample_rate / 2.0;
+                let (band_lo, band_hi) =
+                    (latest.state.center_hz - half, latest.state.center_hz + half);
+                let view = if let Some(prev) = views.get(&id) {
+                    // Attach must not wipe an in-band dial/mode the client
+                    // already asked for. If another seat moved the LO and this
+                    // dial no longer fits, accept the engine clamp — resyncing
+                    // would retune the LO back and fight the other client
+                    // (403 ↔ 446 waterfall flicker). Also require the *engine*
+                    // dial to still sit in our cached LO window: after an
+                    // out-of-span ListenerSetVfo, ListenerState can arrive
+                    // before State updates latest.center_hz, so prev looks
+                    // "in band" against a stale 403 while engine already
+                    // reports 446 — resyncing would bounce the LO forever.
+                    let freq_mismatch = (prev.freq_hz - freq_hz).abs() > 1.0;
+                    let mode_mismatch = prev.rx.mode != rx.mode;
+                    let prev_in_band =
+                        prev.freq_hz >= band_lo - 1.0 && prev.freq_hz <= band_hi + 1.0;
+                    let engine_in_band =
+                        freq_hz >= band_lo - 1.0 && freq_hz <= band_hi + 1.0;
+                    let protect_attach = prev_in_band && engine_in_band;
+                    if freq_mismatch && protect_attach {
+                        listener_resync = Some((id, prev.freq_hz));
+                    }
+                    if mode_mismatch && protect_attach {
+                        listener_mode_resync = Some((id, prev.rx.mode));
+                    }
+                    if freq_mismatch && protect_attach {
+                        ListenerView { freq_hz: prev.freq_hz, rx: prev.rx }
+                    } else if mode_mismatch && protect_attach {
+                        ListenerView { freq_hz, rx: prev.rx }
+                    } else {
+                        ListenerView { freq_hz, rx }
+                    }
+                } else {
+                    ListenerView { freq_hz, rx }
+                };
+                let state = overlay_listener(&latest.state, Some(&view));
+                views.insert(id, view);
+                listener_state = Some((id, state));
+                None
+            }
+            RadioEvent::ListenerAudio { id, pcm } => {
+                listener_audio = Some((id, pcm));
+                None
+            }
         }
     };
     // The satellite half of the station config also drives this machine's own
@@ -1265,20 +1705,20 @@ fn handle_event(shared: &Shared, ev: RadioEvent) {
         shared.solar.set_sat_config(sat);
     }
     if let Some(msg) = msg {
-        if let Some(s) = shared.session.lock().unwrap().as_ref() {
-            if let Err(e) = s.reliable.try_send(msg) {
-                // Name what was dropped. A client that falls behind sheds a
-                // burst of these in well under a second, and the consequence
-                // is not the same for every kind: a state or meter update is
-                // re-sent on the next tick and the client catches up by
-                // itself, while a notice, a decoded line or a spot exists
-                // once and is simply gone. Without the discriminant in the
-                // log there is no way to tell those two apart afterwards
-                // (issue #443).
-                let dropped = e.into_inner();
-                warn!("reliable lane full; dropping {}", msg_kind(&dropped));
-            }
-        }
+        // Fan out. `ServerMsg::State` is personalised inside broadcast_reliable.
+        shared.broadcast_reliable(msg);
+    }
+    if let Some((id, state)) = listener_state {
+        shared.send_reliable(id, ServerMsg::State(state));
+    }
+    if let Some((id, hz)) = listener_resync {
+        let _ = shared.cmd_tx.send(Command::ListenerSetVfo { id, hz });
+    }
+    if let Some((id, mode)) = listener_mode_resync {
+        let _ = shared.cmd_tx.send(Command::ListenerSetMode { id, mode });
+    }
+    if let Some((id, pcm)) = listener_audio {
+        shared.deliver_listener_audio(id, &pcm);
     }
     // ...and to everybody on the station, not just to this radio's client: the
     // roster is what every tab strip is drawn from, and a radio that has just

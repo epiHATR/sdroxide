@@ -366,10 +366,10 @@ pub enum Mode {
     /// serial, GPS position, altitude, temperature and humidity.
     ///
     /// A receive-only lane like [`Mode::Adsb`], [`Mode::Ais`] and
-    /// [`Mode::Hfdl`]: it is a thing to point the receiver at, owns its own
-    /// demod lane, has neither a QSO sequencer nor transmit, and shares none of
-    /// the digital modes' DigiConfig. Appended for the same reason as
-    /// [`Mode::Hell`].
+    /// [`Mode::Hfdl`] for the decoder (own IQ DDC, no QSO / DigiConfig /
+    /// transmit), but unlike those the main receive chain also runs an NFM
+    /// demod so the sonde can be heard while telemetry is decoded. Appended
+    /// for the same reason as [`Mode::Hell`].
     Rs41,
 }
 

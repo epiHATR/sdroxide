@@ -396,6 +396,23 @@ pub enum RadioEvent {
     ///
     /// Appended last, for the usual reason.
     Rs41Status(Box<crate::Rs41Status>),
+
+    /// Snapshot of one remote listener's dial / main-RX settings. The server
+    /// overlays this onto [`RadioEvent::State`] for that session only so each
+    /// client sees its own VFO while sharing `center_hz` and the waterfall.
+    ///
+    /// Native-UI / local engines never emit this. Appended for the usual reason.
+    ListenerState {
+        id: u64,
+        freq_hz: f64,
+        rx: crate::RxState,
+    },
+    /// One 20 ms (960-sample) mono block at 48 kHz for a remote listener.
+    /// The server encodes and unicasts it; not a wire type of its own.
+    ListenerAudio {
+        id: u64,
+        pcm: Vec<f32>,
+    },
 }
 
 /// Snapshot of the frontend's switchable sound devices (native clients).

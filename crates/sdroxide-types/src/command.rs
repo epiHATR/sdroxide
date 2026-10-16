@@ -1157,4 +1157,62 @@ pub enum Command {
     ///
     /// Appended for the usual reason — postcard numbers variants by position.
     SetRs41Config(crate::Rs41Settings),
+
+    // ── Remote multi-listener (OpenWebRX-style VFOs) ──
+    //
+    // One shared IQ capture; each web/remote session may own a software DDC
+    // ("listener") with its own dial, mode and filter inside that passband.
+    // The hardware LO (`center_hz`) stays shared. Appended for postcard.
+
+    /// Open a per-session receive chain. `id` is the server's session id.
+    /// No-op on CAT/audio-mode rigs (no shared IQ span to slice).
+    AttachListener {
+        id: u64,
+    },
+    /// Drop that chain when the session ends.
+    DetachListener {
+        id: u64,
+    },
+    /// Park this listener's dial inside the shared IQ window.
+    ///
+    /// In-span: only this seat moves (independent VFO). Outside the usable
+    /// span the engine retunes the shared LO and every seat's dial follows
+    /// — last writer wins (a second tab at 446 pulls the first tab to 446).
+    ListenerSetVfo {
+        id: u64,
+        hz: f64,
+    },
+    ListenerSetMode {
+        id: u64,
+        mode: Mode,
+    },
+    ListenerSetFilter {
+        id: u64,
+        lo: f32,
+        hi: f32,
+    },
+    ListenerSetVolume {
+        id: u64,
+        v: f32,
+    },
+    ListenerSetMute {
+        id: u64,
+        muted: bool,
+    },
+    ListenerSetAgc {
+        id: u64,
+        agc: AgcMode,
+    },
+    ListenerSetSquelch {
+        id: u64,
+        db: f32,
+    },
+    ListenerSetNoiseReduction {
+        id: u64,
+        level: NrLevel,
+    },
+    ListenerSetAutoNotch {
+        id: u64,
+        on: bool,
+    },
 }

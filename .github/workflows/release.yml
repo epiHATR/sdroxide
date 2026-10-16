@@ -853,11 +853,49 @@ jobs:
         run: |
           cd web-dist
           zip -r "../dist/sdroxide-web-$GITHUB_REF_NAME.zip" .
+      # Full history so we can find the previous tag for the changelog range.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ github.ref }}
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          cat > notes.md <<'EOF'
+          set -euo pipefail
+
+          # Closest ancestor tag (not this one). Falls back to the newest other
+          # v* tag by version if the current tip has no tagged ancestor yet.
+          PREV=""
+          if PREV=$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null); then
+            :
+          else
+            PREV=$(git tag -l 'v*' --sort=-version:refname \
+              | grep -vxF "$GITHUB_REF_NAME" | head -n1 || true)
+          fi
+
+          # Commits / PRs from PREV..this tag via GitHub's release-notes API.
+          # Do not hard-code a previous version — each release discovers it.
+          if [ -n "$PREV" ]; then
+            echo "Release notes range: $PREV → $GITHUB_REF_NAME"
+            gh api "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
+              -f tag_name="$GITHUB_REF_NAME" \
+              -f previous_tag_name="$PREV" \
+              --jq .body > changelog.md
+          else
+            echo "No previous tag found; generating notes from repository default"
+            gh api "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
+              -f tag_name="$GITHUB_REF_NAME" \
+              --jq .body > changelog.md
+          fi
+
+          # Changelog first; static download help after. --notes-file alone
+          # owns the body — pairing it with --generate-notes used to drop the
+          # commit list and leave only the hard-coded download text.
+          {
+            cat changelog.md
+            echo
+            cat <<'EOF'
           ### Which build to download
 
           Two builds are provided for every platform:
@@ -1012,8 +1050,10 @@ jobs:
           `http://<host>:4950` in a browser. `sdroxide-web-*.zip` contains the
           standalone web assets for use with `--web-root`.
           EOF
+          } > notes.md
+
           if ! gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
             gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
-              --title "sdroxide $GITHUB_REF_NAME" --notes-file notes.md --generate-notes
+              --title "sdroxide $GITHUB_REF_NAME" --notes-file notes.md
           fi
           gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --clobber dist/*

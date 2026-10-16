@@ -13725,12 +13725,23 @@ address at startup, and `curl http://HOST:4950/radios` answers the same question
 from anywhere. A radio that is not plugged in right now still gets its address
 and keeps trying to attach, the same way it would in the GUI.
 
-One *connection* operates one radio: the single-client rule is per radio, so
-two people can work two radios of the same station at once — and a native
-client makes one connection per radio by itself, so one operator gets the whole
-station in tabs ([8.2](#82-connect-a-native-remote-client)). A radio id that the
-station does not have is refused with a 404 rather than quietly answered by a
-different radio.
+Several *connections* may share one radio. On an **IQ** front end (SDR dongle,
+HPSDR, Pluto, …) each client gets its **own dial, mode, filter and audio**
+inside the shared capture bandwidth — the same idea as OpenWebRX. The waterfall
+and the hardware LO (`center_hz`) are shared: pan or band-change moves the
+window for everyone, and a dial that would leave the passband is clamped rather
+than retuning the radio under the others. Transmit is exclusive — only one
+client at a time may key PTT, Tune or the CW key, and only that client's
+microphone is used (their dial is copied to the transmitter for the over). A
+hard cap (eight clients per radio) refuses further sockets with Busy rather than
+starving the ones already on.
+
+**CAT / audio-mode** rigs (no shared IQ span) stay collaborative: everyone sees
+the same VFO. Digital-mode decode and the heavy demods (DRM, HD Radio, …) stay
+on the station's main chain, not per client. A native client still makes one
+connection per radio by itself, so one operator gets the whole station in tabs
+([8.2](#82-connect-a-native-remote-client)). A radio id that the station does
+not have is refused with a 404 rather than quietly answered by a different radio.
 
 **The roster can be changed from a client.** A headless station's radios used to
 be fixed at start-up: adding one meant editing `radios.json` on that machine and
@@ -13828,8 +13839,9 @@ which is the default, and what every version before this one did — and the
 server is open to anyone who can reach it.
 
 Nothing crosses before the sign-in is accepted, and — the part that matters most
-— an unauthenticated connection does **not** take the single-client slot. A
-stranger cannot lock you out of your own radio by opening a socket to it.
+— an unauthenticated connection does **not** count toward the per-radio client
+cap or hold PTT. A stranger cannot fill the seats or key the radio by merely
+opening a socket to it.
 
 **One sign-in per station, not per radio.** A station serves each of its radios
 on a connection of its own and asks each one for the password, but you answer

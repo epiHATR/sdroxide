@@ -197,10 +197,11 @@ async fn every_radio_in_the_roster_is_served_and_separately_addressable() {
         .expect("connect /ws/0");
     send(&mut zero, &hello()).await;
     match recv_msg(&mut zero).await {
-        // Busy is the *right* answer: /ws/0 and /ws are the same radio, and it
-        // already has a client.
-        ServerMsg::Busy => {}
-        other => panic!("expected Busy on /ws/0 while /ws is held, got {other:?}"),
+        // /ws/0 and /ws are the same radio — a second client may share it.
+        ServerMsg::HelloAck { caps, .. } => {
+            assert_eq!(caps.label, "First radio");
+        }
+        other => panic!("expected HelloAck on /ws/0 while /ws is held, got {other:?}"),
     }
 
     // A radio the station does not have is refused rather than rounded to one

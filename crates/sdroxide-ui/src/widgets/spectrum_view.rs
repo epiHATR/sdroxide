@@ -111,7 +111,7 @@ struct Fling {
 /// Built by [`WindowPan::of`] from the front end's capabilities. A drag that
 /// reaches the edge hands the rest of itself to the front end, which moves its
 /// centre and keeps the picture scrolling (issue #133).
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct WindowPan {
     /// The centre is the front end's own and can be commanded while the dial
     /// stays put — every SDR. False where the centre *is* the dial (a
@@ -146,6 +146,22 @@ pub struct WindowPan {
     /// view would shrink a restored window to the I/Q and the operator's zoom
     /// would be gone before the answer arrived.
     pub known: bool,
+    /// When false (remote / web), edge-pan and "follow the view into the band"
+    /// must not emit SetCenter / SetVfo. Those fight the shared LO after an
+    /// out-of-window tune (403 → 446) and make every tab's waterfall flicker.
+    pub allow_lo_follow: bool,
+}
+
+impl Default for WindowPan {
+    fn default() -> Self {
+        Self {
+            movable: false,
+            limits: (f64::MIN, f64::MAX),
+            outer: None,
+            known: false,
+            allow_lo_follow: true,
+        }
+    }
 }
 
 impl WindowPan {
@@ -162,7 +178,13 @@ impl WindowPan {
             .find(|&&(lo, hi)| (lo..=hi).contains(&center_hz))
             .copied()
             .unwrap_or((f64::MIN, f64::MAX));
-        Self { movable: !caps.audio_mode && !caps.center_is_dial, limits, outer: None, known: true }
+        Self {
+            movable: !caps.audio_mode && !caps.center_is_dial,
+            limits,
+            outer: None,
+            known: true,
+            allow_lo_follow: true,
+        }
     }
 
     /// Add the full-band window the view may zoom out into — see
@@ -280,6 +302,9 @@ fn follow_view_into_the_band(
     pan: WindowPan,
     cmds: &mut Vec<Command>,
 ) {
+    if !pan.allow_lo_follow {
+        return;
+    }
     if pan.outer.is_none() || !(dev_span > 0.0) || view.span() > dev_span {
         return;
     }
@@ -305,12 +330,12 @@ fn follow_view_into_the_band(
 
 fn pan_center(
     dev_center: &mut f64,
-    state: &mut RadioState,
+    _state: &mut RadioState,
     over: f64,
     pan: WindowPan,
     cmds: &mut Vec<Command>,
 ) {
-    if !pan.movable || over == 0.0 {
+    if !pan.allow_lo_follow || !pan.movable || over == 0.0 {
         return;
     }
     let hz = (*dev_center + over).clamp(pan.limits.0, pan.limits.1);
@@ -320,7 +345,11 @@ fn pan_center(
         return;
     }
     *dev_center = hz;
-    state.center_hz = hz;
+    // Do not write `state.center_hz` here. On a remote multi-user server
+    // SetCenter is ignored when another seat is connected; an optimistic
+    // write then snapped back on the next State and made the waterfall
+    // flash. The engine State is the authority on where the LO actually
+    // went. `dev_center` still tracks this gesture for the frame / clamp.
     cmds.push(Command::SetCenter(hz));
 }
 
@@ -3685,7 +3714,9 @@ mod tests {
         let over = pan_view(&mut view, 50_000.0, dev_center, span);
         pan_center(&mut dev_center, &mut state, over, movable(), &mut cmds);
         assert_eq!(dev_center, 14_200_000.0);
-        assert_eq!(state.center_hz, 14_200_000.0, "the echo the clamp reads this frame");
+        // Clamp reads `dev_center` this frame; `state.center_hz` waits for the
+        // engine so a rejected remote SetCenter cannot flash the waterfall.
+        assert_eq!(state.center_hz, center, "state waits for the engine echo");
         assert_eq!(cmds, vec![Command::SetCenter(14_200_000.0)]);
         view.clamp_to(dev_center, span);
         assert_eq!(

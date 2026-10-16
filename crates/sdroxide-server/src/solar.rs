@@ -4,7 +4,7 @@
 //!
 //! * **It is a viewer, not a controller.** Nothing here reaches `cmd_tx`; the
 //!   only inbound messages pick an SDO channel and ask for a refresh. So it does
-//!   not take the single-client slot `/ws` guards with `Shared::busy`, and any
+//!   not take a control seat on `/ws`, and any
 //!   number of maps can be open without touching who owns PTT.
 //! * **The feed is expensive and optional.** [`SolarFeed`] talks to thirteen
 //!   outbound endpoints. It starts when the first viewer connects and is dropped
