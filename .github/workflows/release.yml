@@ -282,12 +282,41 @@ jobs:
 
       - name: Install SoapySDR (macOS)
         if: runner.os == 'macOS' && matrix.variant == 'soapy'
-        run: brew install pkg-config soapysdr
+        id: brew_soapy
+        run: |
+          brew install pkg-config soapysdr
+          # Point the linker at whatever Cellar version brew just poured.
+          # Without this, a restored rust-cache can keep soapysdr-sys's old
+          # -L/opt/homebrew/Cellar/soapysdr/0.8.1_1/lib after brew moves on
+          # (0.9.0 today) and the final link fails with "library 'SoapySDR'
+          # not found".
+          PREFIX="$(brew --prefix soapysdr)"
+          # opt/soapysdr → ../Cellar/soapysdr/0.9.0 — use the Cellar leaf as the
+          # cache stamp (macOS readlink has no -f).
+          VER="$(basename "$(readlink "$PREFIX" || echo "$PREFIX")")"
+          echo "ver=${VER}" >> "$GITHUB_OUTPUT"
+          echo "PKG_CONFIG_PATH=${PREFIX}/lib/pkgconfig:${PKG_CONFIG_PATH:-}" >> "$GITHUB_ENV"
+          echo "LIBRARY_PATH=${PREFIX}/lib:${LIBRARY_PATH:-}" >> "$GITHUB_ENV"
+          echo "soapysdr prefix: ${PREFIX} (ver ${VER})"
+          ls "${PREFIX}/lib"/libSoapySDR* || true
 
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ matrix.label }}-${{ matrix.variant }}
+          # soapysdr Cellar version in the key: Homebrew bumps (0.8.1_1 → 0.9.0)
+          # must not reuse a cache whose soapysdr-sys still links the old path.
+          key: ${{ matrix.label }}-${{ matrix.variant }}-${{ steps.brew_soapy.outputs.ver || 'nosoapy' }}
+
+      - name: Drop stale soapysdr-sys build output (macOS soapy)
+        if: runner.os == 'macOS' && matrix.variant == 'soapy'
+        run: |
+          # rust-cache restores target/ after brew install. Wipe soapysdr-sys
+          # build dirs so cargo re-runs its probe against the current prefix.
+          find target -type d \( -name 'soapysdr-sys-*' -o -name 'soapysdr-*' \) \
+            -path '*/build/*' -prune -print -exec rm -rf {} + 2>/dev/null || true
+          # Also drop the cached rlib that recorded the old -L path.
+          find target -type f \( -name 'libsoapysdr*.rlib' -o -name 'libsoapysdr*.rmeta' \
+            -o -name 'libsoapysdr_sys*' \) -delete 2>/dev/null || true
 
       # The embed-web feature bakes these files into the binary via rust-embed.
       - name: Fetch web client
