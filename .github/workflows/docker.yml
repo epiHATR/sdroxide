@@ -1,0 +1,201 @@
+# Build the headless --server image and push it to GitHub Container Registry.
+#
+# Triggers
+#   • release published — waits until the Release workflow has uploaded the
+#     Linux *-compat tarballs, then packages them into a multi-arch image
+#   • workflow_dispatch — rebuild/retag an existing release by hand
+#
+# Images (owner lower-cased for GHCR)
+#   ghcr.io/<owner>/sdroxide:<tag>           e.g. v1.6.11
+#   ghcr.io/<owner>/sdroxide:<tag-without-v> e.g. 1.6.11
+#   ghcr.io/<owner>/sdroxide:latest          non-prerelease tags only
+#   ghcr.io/<owner>/sdroxide:<tag>-soapysdr  when SoapySDR variant is built
+#
+# First-time GHCR: after the first push, the package may be private — set
+# visibility under Packages → sdroxide → Package settings if you want pulls
+# without a token.
+
+name: Docker
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release tag to package (e.g. v1.6.11)"
+        required: true
+        type: string
+      soapysdr:
+        description: "Also build the -soapysdr image"
+        required: false
+        type: boolean
+        default: false
+      push_latest:
+        description: "Also tag :latest"
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE_NAME: sdroxide
+
+jobs:
+  # Resolve which image variants to build. Release events always do standard +
+  # soapysdr (both tarballs ship on every tag). Manual runs default to standard
+  # only unless "soapysdr" is checked.
+  variants:
+    name: pick variants
+    runs-on: ubuntu-latest
+    outputs:
+      suffixes: ${{ steps.pick.outputs.suffixes }}
+    steps:
+      - id: pick
+        run: |
+          if [[ "${{ github.event_name }}" == "release" ]]; then
+            echo 'suffixes=["", "-soapysdr"]' >> "$GITHUB_OUTPUT"
+          elif [[ "${{ inputs.soapysdr }}" == "true" ]]; then
+            echo 'suffixes=["", "-soapysdr"]' >> "$GITHUB_OUTPUT"
+          else
+            echo 'suffixes=[""]' >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    name: image${{ matrix.suffix || '-standard' }}
+    needs: variants
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        suffix: ${{ fromJson(needs.variants.outputs.suffixes) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve version / tags
+        id: meta
+        run: |
+          if [[ "${{ github.event_name }}" == "release" ]]; then
+            VERSION="${{ github.event.release.tag_name }}"
+            PRERELEASE="${{ github.event.release.prerelease }}"
+          else
+            VERSION="${{ inputs.version }}"
+            PRERELEASE=false
+          fi
+          if [[ -z "$VERSION" ]]; then
+            echo "version is empty" >&2
+            exit 1
+          fi
+          VERSION_NUM="${VERSION#v}"
+          SUFFIX='${{ matrix.suffix }}'
+          OWNER_LC="$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
+          IMAGE="ghcr.io/${OWNER_LC}/${{ env.IMAGE_NAME }}"
+
+          TAGS="${IMAGE}:${VERSION}${SUFFIX}"
+          TAGS+=",${IMAGE}:${VERSION_NUM}${SUFFIX}"
+
+          if [[ -z "$SUFFIX" ]]; then
+            if [[ "${{ github.event_name }}" == "release" && "$PRERELEASE" != "true" ]]; then
+              TAGS+=",${IMAGE}:latest"
+            elif [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.push_latest }}" == "true" ]]; then
+              TAGS+=",${IMAGE}:latest"
+            fi
+          fi
+
+          {
+            echo "version=$VERSION"
+            echo "image=$IMAGE"
+            echo "tags=$TAGS"
+            echo "suffix=$SUFFIX"
+          } >> "$GITHUB_OUTPUT"
+          echo "Packaging $VERSION (suffix='${SUFFIX:-none}') → $TAGS"
+
+      - name: Download Linux release tarballs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          SUFFIX: ${{ steps.meta.outputs.suffix }}
+        run: |
+          set -eux
+          mkdir -p artifacts
+          for label in linux-x86_64-compat linux-aarch64-compat; do
+            asset="sdroxide-${VERSION}-${label}${SUFFIX}.tar.gz"
+            echo "Fetching $asset"
+            # The Release job may still be uploading when `release` published
+            # fires — retry for a few minutes.
+            ok=0
+            for i in $(seq 1 20); do
+              if gh release download "$VERSION" \
+                   --repo "$GITHUB_REPOSITORY" \
+                   --pattern "$asset" \
+                   --dir artifacts; then
+                ok=1
+                break
+              fi
+              echo "asset not ready yet (attempt $i/20), waiting 30s…"
+              sleep 30
+            done
+            if [[ "$ok" -ne 1 ]]; then
+              echo "Failed to download $asset from release $VERSION" >&2
+              gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" || true
+              exit 1
+            fi
+            cp "artifacts/$asset" "artifacts/sdroxide-${label}.tar.gz"
+          done
+          ls -la artifacts
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          platforms: linux/amd64,linux/arm64
+          build-args: |
+            INSTALL_FROM=local
+            SDROXIDE_VERSION=${{ steps.meta.outputs.version }}
+            SDROXIDE_SUFFIX=${{ steps.meta.outputs.suffix }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: |
+            org.opencontainers.image.title=sdroxide
+            org.opencontainers.image.description=SDRoxide headless --server (browser UI on :4950)
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.version=${{ steps.meta.outputs.version }}
+            org.opencontainers.image.licenses=GPL-3.0-or-later
+          cache-from: type=gha,scope=sdroxide-docker${{ steps.meta.outputs.suffix }}
+          cache-to: type=gha,mode=max,scope=sdroxide-docker${{ steps.meta.outputs.suffix }}
+
+      - name: Summary
+        run: |
+          {
+            echo "## SDRoxide image pushed"
+            echo ""
+            echo '```'
+            echo "${{ steps.meta.outputs.tags }}" | tr ',' '\n'
+            echo '```'
+            echo ""
+            echo "Pull / run:"
+            echo ""
+            echo '```sh'
+            IMAGE="$(echo '${{ steps.meta.outputs.tags }}' | cut -d, -f1)"
+            echo "docker pull $IMAGE"
+            echo "docker run --rm -p 4950:4950 -v sdroxide-data:/data $IMAGE"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

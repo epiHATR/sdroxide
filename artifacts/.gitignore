@@ -1,0 +1,3 @@
+# Release tarballs dropped here by the Docker workflow / local builds.
+*
+!.gitignore

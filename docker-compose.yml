@@ -1,0 +1,41 @@
+# SDRoxide as a headless --server (browser UI).
+#
+# Pull the image your fork's Docker workflow pushed to GHCR (recommended):
+#
+#   SDROXIDE_IMAGE=ghcr.io/<you>/sdroxide:latest docker compose up -d
+#
+# Build from *your* GitHub release (must set both; nothing defaults to upstream):
+#
+#   SDROXIDE_REPO=<you>/sdroxide SDROXIDE_VERSION=v1.6.11 \
+#     docker compose build && docker compose up -d
+#
+# USB: keep `devices` / `group_add` below, or comment them out for network-only radios.
+
+services:
+  sdroxide:
+    image: ${SDROXIDE_IMAGE:-sdroxide:local}
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        INSTALL_FROM: release
+        # Your fork — e.g. hai-tran/sdroxide. Never defaults to dividebysandwich.
+        SDROXIDE_REPO: ${SDROXIDE_REPO:-}
+        SDROXIDE_VERSION: ${SDROXIDE_VERSION:-}
+    container_name: sdroxide
+    restart: unless-stopped
+    ports:
+      - "4950:4950"
+    volumes:
+      - sdroxide-data:/data
+    environment:
+      HOME: /data
+      XDG_CONFIG_HOME: /data/.config
+    devices:
+      - /dev/bus/usb:/dev/bus/usb
+    group_add:
+      - plugdev
+      - dialout
+
+volumes:
+  sdroxide-data:

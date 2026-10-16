@@ -1344,20 +1344,18 @@ fn add_static_routes(app: Router, web_root: Option<PathBuf>) -> Router {
     // presents as the client failing to start, not as an audio glitch.
     // `no-cache` still caches; it just requires revalidation, which the
     // embedded handler answers with a 304 off the ETag.
-    let app = app.layer(SetResponseHeaderLayer::if_not_present(
+    // Fingerprinted wasm/js keep long caches; index + bridge scripts must
+    // revalidate so a new build cannot pair with a stale audio_bridge.js.
+    let app = app.layer(SetResponseHeaderLayer::overriding(
         axum::http::header::CACHE_CONTROL,
         HeaderValue::from_static("no-cache"),
     ));
-    // Cross-origin isolation: lets the client use SharedArrayBuffer if the
-    // audio path is ever upgraded to it.
-    app.layer(SetResponseHeaderLayer::if_not_present(
-        axum::http::header::HeaderName::from_static("cross-origin-opener-policy"),
-        HeaderValue::from_static("same-origin"),
-    ))
-    .layer(SetResponseHeaderLayer::if_not_present(
-        axum::http::header::HeaderName::from_static("cross-origin-embedder-policy"),
-        HeaderValue::from_static("require-corp"),
-    ))
+    // Do *not* set Cross-Origin-Embedder-Policy: require-corp here.
+    // Nothing in the client uses SharedArrayBuffer yet, and COEP causes
+    // browsers to block the ~30 MB wasm (and any script Cloudflare / a
+    // reverse proxy injects) when the page is reached through HTTPS CDN
+    // frontends — which is exactly how most remote stations are published.
+    app
 }
 
 #[cfg(feature = "embed-web")]
