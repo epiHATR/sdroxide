@@ -310,3 +310,23 @@ Before opening the pull request:
 - `cargo test` the crates you touched, and `cargo run -- --siggen` if the UI moved.
 - The diff contains no secrets, no `crates/sdroxide-web/dist/`, and no `vendor/` rewrite.
 - The pull request says what an operator can do now, and how you ran it (host OS, arch, and the `cargo` command).
+
+## Releasing
+
+Operator-facing highlights for each version live in `release/vX.Y.Z.md`. The
+GitHub Release workflow builds the notes as: that file, then a **Changes**
+list of commits since the previous `v*` tag (`- subject. #hash by Author`),
+then the static download help.
+
+```sh
+./scripts/bump-version.sh 1.6.12   # bumps Cargo.toml + creates release/v1.6.12.md
+# edit release/v1.6.12.md
+git add Cargo.toml release/v1.6.12.md
+git commit -m "Bump version to 1.6.12"
+git tag v1.6.12
+git push origin main v1.6.12        # tag must exist on GitHub; push the prior tag too if it is new
+```
+
+The previous `v*` tag must already be on the remote so the Changes range
+resolves. Do not tag until `release/vX.Y.Z.md` is filled in — CI fails the
+release job if that file is missing.
