@@ -840,6 +840,14 @@ jobs:
     if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
     steps:
+      # Checkout first. download-artifact writes into the workspace; a later
+      # checkout would wipe dist/ and leave `gh release upload dist/*` with
+      # nothing to attach (empty release + "no matches found for dist/*").
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          ref: ${{ github.ref }}
       - uses: actions/download-artifact@v8
         with:
           pattern: pkg-*
@@ -851,13 +859,9 @@ jobs:
           path: web-dist
       - name: Zip standalone web client
         run: |
+          mkdir -p dist
           cd web-dist
           zip -r "../dist/sdroxide-web-$GITHUB_REF_NAME.zip" .
-      # Full history so we can find the previous tag for the changelog range.
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-          ref: ${{ github.ref }}
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}

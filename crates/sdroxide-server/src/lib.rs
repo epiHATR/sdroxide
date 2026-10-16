@@ -1767,9 +1767,6 @@ fn label_of(caps: &DeviceCaps) -> String {
 }
 
 fn add_static_routes(app: Router, web_root: Option<PathBuf>) -> Router {
-    use axum::http::HeaderValue;
-    use tower_http::set_header::SetResponseHeaderLayer;
-
     let app = match web_root {
         Some(dir) => {
             info!("serving web client from {}", dir.display());
@@ -1777,30 +1774,84 @@ fn add_static_routes(app: Router, web_root: Option<PathBuf>) -> Router {
         }
         None => add_embedded_or_placeholder(app),
     };
-    // Trunk fingerprints the wasm bundle, but index.html and the hand-written
-    // JS beside it keep fixed names. With no validator on those a browser is
-    // free to pair a cached `audio_bridge.js` with a freshly fingerprinted
-    // wasm, and the two then disagree about which functions exist — which
-    // presents as the client failing to start, not as an audio glitch.
-    // `no-cache` still caches; it just requires revalidation, which the
-    // embedded handler answers with a 304 off the ETag.
-    // Fingerprinted wasm/js keep long caches; index + bridge scripts must
-    // revalidate so a new build cannot pair with a stale audio_bridge.js.
-    let app = app.layer(SetResponseHeaderLayer::overriding(
-        axum::http::header::CACHE_CONTROL,
-        HeaderValue::from_static("no-cache"),
-    ));
+    // Per-asset Cache-Control: fingerprinted Trunk bundles are immutable and
+    // stay on disk; fixed-name HTML/JS revalidate so a new wasm hash cannot
+    // pair with a stale audio_bridge.js. Applied only to static paths — /ws
+    // and JSON endpoints are left alone.
+    //
     // Do *not* set Cross-Origin-Embedder-Policy: require-corp here.
     // Nothing in the client uses SharedArrayBuffer yet, and COEP causes
     // browsers to block the ~30 MB wasm (and any script Cloudflare / a
     // reverse proxy injects) when the page is reached through HTTPS CDN
     // frontends — which is exactly how most remote stations are published.
-    app
+    app.layer(axum::middleware::from_fn(web_cache_control_layer))
+}
+
+/// Trunk content-hashes `sdroxide-web-<hash>.js` / `*_bg.wasm`. Those URLs
+/// never change bytes, so the browser may keep them for a year. Everything
+/// else in `dist` keeps fixed names and must revalidate.
+fn fingerprinted_web_asset(name: &str) -> bool {
+    name.ends_with("_bg.wasm")
+        || (name.starts_with("sdroxide-web-")
+            && (name.ends_with(".js") || name.ends_with(".wasm")))
+}
+
+/// Cache-Control for a request path into the web client, or `None` when the
+/// path is not a static asset (sockets, /radios, …).
+fn web_asset_cache_control(path: &str) -> Option<&'static str> {
+    let trimmed = path.trim_start_matches('/');
+    let name = if trimmed.is_empty() || trimmed.ends_with('/') {
+        "index.html"
+    } else {
+        let leaf = trimmed.rsplit('/').next().unwrap_or(trimmed);
+        // Extensionless routes (`/ws`, `/radios`, …) are not page assets.
+        if !leaf.contains('.') {
+            return None;
+        }
+        leaf
+    };
+    if fingerprinted_web_asset(name) {
+        return Some("public, max-age=31536000, immutable");
+    }
+    // Fixed-name client files + anything else that looks like a page asset.
+    let static_ext = name.ends_with(".html")
+        || name.ends_with(".js")
+        || name.ends_with(".mjs")
+        || name.ends_with(".css")
+        || name.ends_with(".json")
+        || name.ends_with(".png")
+        || name.ends_with(".svg")
+        || name.ends_with(".ico")
+        || name.ends_with(".wasm")
+        || name.ends_with(".map");
+    if static_ext {
+        Some("no-cache")
+    } else {
+        None
+    }
+}
+
+async fn web_cache_control_layer(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    use axum::http::{HeaderValue, header};
+
+    let path = req.uri().path().to_owned();
+    let mut res = next.run(req).await;
+    if let Some(cc) = web_asset_cache_control(&path) {
+        if res.status().is_success() || res.status() == axum::http::StatusCode::NOT_MODIFIED {
+            if let Ok(value) = HeaderValue::from_str(cc) {
+                res.headers_mut().insert(header::CACHE_CONTROL, value);
+            }
+        }
+    }
+    res
 }
 
 #[cfg(feature = "embed-web")]
 fn add_embedded_or_placeholder(app: Router) -> Router {
-    use axum::http::{StatusCode, Uri, header};
+    use axum::http::{HeaderValue, StatusCode, Uri, header};
     use axum::response::IntoResponse;
 
     #[derive(rust_embed::RustEmbed)]
@@ -1826,14 +1877,41 @@ fn add_embedded_or_placeholder(app: Router) -> Router {
                     .and_then(|v| v.to_str().ok())
                     .is_some_and(|v| v.split(',').any(|t| t.trim() == etag));
                 if fresh {
-                    return (StatusCode::NOT_MODIFIED, [(header::ETAG, etag)]).into_response();
+                    let mut resp = (StatusCode::NOT_MODIFIED, [(header::ETAG, etag)]).into_response();
+                    if let Some(cc) = web_asset_cache_control(path) {
+                        if let Ok(v) = HeaderValue::from_str(cc) {
+                            resp.headers_mut().insert(header::CACHE_CONTROL, v);
+                        }
+                    }
+                    return resp;
                 }
-                let mime = mime_guess::from_path(path).first_or_octet_stream();
-                (
-                    [(header::CONTENT_TYPE, mime.as_ref().to_string()), (header::ETAG, etag)],
-                    f.data.into_owned(),
+                // mime_guess knows .wasm; keep an explicit fallback so Trunk's
+                // progress hook always sees application/wasm + a real length.
+                let mime = if path.ends_with(".wasm") {
+                    "application/wasm".to_string()
+                } else {
+                    mime_guess::from_path(path)
+                        .first_or_octet_stream()
+                        .as_ref()
+                        .to_string()
+                };
+                let body = f.data.into_owned();
+                let len = body.len();
+                let mut resp = (
+                    [
+                        (header::CONTENT_TYPE, mime),
+                        (header::ETAG, etag),
+                        (header::CONTENT_LENGTH, len.to_string()),
+                    ],
+                    body,
                 )
-                    .into_response()
+                    .into_response();
+                if let Some(cc) = web_asset_cache_control(path) {
+                    if let Ok(v) = HeaderValue::from_str(cc) {
+                        resp.headers_mut().insert(header::CACHE_CONTROL, v);
+                    }
+                }
+                resp
             }
             None => (StatusCode::NOT_FOUND, "not found").into_response(),
         }
@@ -1870,6 +1948,43 @@ fn add_embedded_or_placeholder(app: Router) -> Router {
          in crates/sdroxide-web and pass --web-root, or rebuild the server \
          with the embed-web feature."
     })
+}
+
+#[cfg(test)]
+mod web_cache_control_tests {
+    use super::{fingerprinted_web_asset, web_asset_cache_control};
+
+    #[test]
+    fn fingerprinted_bundles_are_immutable() {
+        assert!(fingerprinted_web_asset("sdroxide-web-abc123_bg.wasm"));
+        assert!(fingerprinted_web_asset("sdroxide-web-abc123.js"));
+        assert_eq!(
+            web_asset_cache_control("/sdroxide-web-abc123_bg.wasm"),
+            Some("public, max-age=31536000, immutable")
+        );
+        assert_eq!(
+            web_asset_cache_control("/sdroxide-web-abc123.js"),
+            Some("public, max-age=31536000, immutable")
+        );
+    }
+
+    #[test]
+    fn fixed_names_revalidate() {
+        assert!(!fingerprinted_web_asset("audio_bridge.js"));
+        assert!(!fingerprinted_web_asset("index.html"));
+        assert_eq!(web_asset_cache_control("/"), Some("no-cache"));
+        assert_eq!(web_asset_cache_control("/index.html"), Some("no-cache"));
+        assert_eq!(web_asset_cache_control("/audio_bridge.js"), Some("no-cache"));
+        assert_eq!(web_asset_cache_control("/initializer.mjs"), Some("no-cache"));
+    }
+
+    #[test]
+    fn sockets_are_untouched() {
+        assert_eq!(web_asset_cache_control("/ws"), None);
+        assert_eq!(web_asset_cache_control("/ws/0"), None);
+        assert_eq!(web_asset_cache_control("/radios"), None);
+        assert_eq!(web_asset_cache_control("/solar-ws"), None);
+    }
 }
 
 #[cfg(test)]

@@ -20,7 +20,9 @@
     <meta name="apple-mobile-web-app-title" content="sdroxide" />
     <link rel="apple-touch-icon" href="sdroxide-192.png" />
     <link rel="icon" type="image/png" sizes="192x192" href="sdroxide-192.png" />
-    <link data-trunk rel="rust" data-wasm-opt="z" />
+    <!-- data-initializer: progress UI while the fingerprinted wasm downloads
+         (Trunk 0.19+). See initializer.mjs. -->
+    <link data-trunk rel="rust" data-wasm-opt="z" data-initializer="initializer.mjs" />
     <link data-trunk rel="copy-file" href="assets/audio_bridge.js" />
     <link data-trunk rel="copy-file" href="assets/pcm_worklet.js" />
     <link data-trunk rel="copy-file" href="assets/ws_arraybuffer.js" />
@@ -78,9 +80,98 @@
             -webkit-user-select: text;
             user-select: text;
         }
+
+        /* Shown until Trunk's initializer reports wasm success. */
+        #sdroxide-loader {
+            position: fixed;
+            inset: 0;
+            z-index: 9999;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 1rem;
+            padding: 1.5rem;
+            box-sizing: border-box;
+            background: #0a0a0a;
+            color: #e8e8e8;
+            font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+        }
+        #sdroxide-loader[hidden] {
+            display: none !important;
+        }
+        #sdroxide-loader-brand {
+            font-size: 1.5rem;
+            font-weight: 600;
+            letter-spacing: 0.04em;
+            color: #ffd142;
+        }
+        #sdroxide-loader-status {
+            font-size: 0.95rem;
+            color: #b0b0b0;
+            text-align: center;
+            max-width: 22rem;
+        }
+        #sdroxide-loader-track {
+            width: min(20rem, 80vw);
+            height: 0.4rem;
+            border-radius: 999px;
+            background: #1e1e1e;
+            overflow: hidden;
+        }
+        #sdroxide-loader-bar {
+            height: 100%;
+            width: 0%;
+            border-radius: 999px;
+            background: #ffd142;
+            transition: width 0.12s ease-out;
+        }
+        #sdroxide-loader-bar.indeterminate {
+            animation: sdroxide-loader-slide 1.1s ease-in-out infinite;
+        }
+        @keyframes sdroxide-loader-slide {
+            0% { transform: translateX(-100%); }
+            100% { transform: translateX(250%); }
+        }
+        #sdroxide-loader-pct {
+            font-size: 0.8rem;
+            color: #888;
+            min-height: 1.2em;
+        }
+        #sdroxide-loader-error {
+            font-size: 0.85rem;
+            color: #ff8a8a;
+            text-align: center;
+            max-width: 24rem;
+            word-break: break-word;
+        }
+        #sdroxide-loader-retry {
+            margin-top: 0.5rem;
+            padding: 0.55rem 1.25rem;
+            border: 1px solid #ffd142;
+            border-radius: 4px;
+            background: transparent;
+            color: #ffd142;
+            font-size: 0.95rem;
+            cursor: pointer;
+        }
+        #sdroxide-loader-retry:hover {
+            background: rgba(255, 209, 66, 0.12);
+        }
     </style>
 </head>
 <body>
+    <div id="sdroxide-loader" role="status" aria-live="polite">
+        <div id="sdroxide-loader-brand">sdroxide</div>
+        <div id="sdroxide-loader-status">Loading client…</div>
+        <div id="sdroxide-loader-track">
+            <div id="sdroxide-loader-bar" class="indeterminate"></div>
+        </div>
+        <div id="sdroxide-loader-pct"></div>
+        <div id="sdroxide-loader-error" hidden></div>
+        <button type="button" id="sdroxide-loader-retry" hidden
+                onclick="location.reload()">Retry</button>
+    </div>
     <canvas id="sdroxide_canvas"></canvas>
 </body>
 </html>
