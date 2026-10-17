@@ -22,7 +22,9 @@ built-in, and **TCI and Hamlib rigctld servers** so third-party programs like WS
 
 <hr/>
 
-> ## [User Manual](docs/USER_MANUAL.md)
+> ## [User Manual](https://github.com/epiHATR/sdroxide/wiki)
+>
+> Editable source: [`docs/USER_MANUAL.md`](docs/USER_MANUAL.md). Screenshots live in [`docs/images/`](docs/images/).
 >
 > ### [QO-100 Quick-start Guide](docs/qo100-quickstart.en.md) ([Türkçe](docs/qo100-quickstart.tr.md))
 
@@ -523,7 +525,7 @@ the **Spots** and **Uploads** tabs of the Settings dialog, and surfaced by the
   fetched at runtime to draw them.
 
 Credentials are stored in plaintext under `~/.config/sdroxide/net.json` (as with
-other ham software). See the [User Manual](docs/USER_MANUAL.md) for setup steps.
+other ham software). See the [User Manual](https://github.com/epiHATR/sdroxide/wiki) for setup steps.
 
 ## Radio backends
 
