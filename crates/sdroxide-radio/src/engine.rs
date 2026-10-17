@@ -15,7 +15,6 @@ use tracing::{debug, info, trace, warn};
 
 use sdroxide_adsb::{AdsbAction, AdsbController};
 use sdroxide_ais::{AisAction, AisController};
-use sdroxide_meshtastic::{MeshtasticAction, MeshtasticController};
 use sdroxide_config::BandStacks;
 use sdroxide_digi::{
     AcarsController, AprsController, AtChatController, CwController, DigiAction, DigiController,
@@ -33,6 +32,7 @@ use sdroxide_dsp::{
 };
 use sdroxide_hfdl::HfdlController;
 use sdroxide_ism::{IsmAction, IsmController};
+use sdroxide_meshtastic::{MeshtasticAction, MeshtasticController};
 use sdroxide_nrsc5::{HdDemod, Mode as HdMode};
 use sdroxide_qo100::Qo100Controller;
 use sdroxide_rigctld::{RigState, RigctldController};
@@ -4511,6 +4511,9 @@ fn engine_thread(
     // would write them over the real thing.
     engine.emit_station_config();
     engine.emit_tle_sub_status();
+    // SatNOGS transmitter cache — same disk as TLE listings. Loaded so a SAT
+    // panel that opens before the solar feed has run still sees frequencies.
+    sdroxide_solar::satnogs::load_cached();
     // And this radio's own interface configuration, for the same reason again.
     // It is the only route a remote operator has to the settings that belong to
     // the device rather than to the receiver chain — a dongle's AGC mode, its
@@ -9542,7 +9545,8 @@ impl Engine {
                 // shared LO retunes and *every* seat follows that dial — last
                 // client wins (403 → 446 makes both tabs read 446).
                 let usable = self.state.sample_rate * 0.45;
-                let moved_lo = (hz - self.state.center_hz).abs() > usable && self.retune_for_vfo(hz);
+                let moved_lo =
+                    (hz - self.state.center_hz).abs() > usable && self.retune_for_vfo(hz);
                 hz = self.clamp_to_passband(hz);
                 let center = self.state.center_hz;
                 let drive_rs41 = self.listeners.get(&id).is_some_and(|l| l.rx.mode.is_rs41());
@@ -11860,9 +11864,8 @@ impl Engine {
         } else {
             self.state.rs41 = self.rs41_cfg;
         }
-        let want = self.rs41_mode_wanted()
-            && self.rs41_cfg.enabled
-            && self.rs41_unavailable().is_none();
+        let want =
+            self.rs41_mode_wanted() && self.rs41_cfg.enabled && self.rs41_unavailable().is_none();
         // Kind / lane-rate change needs a full restart so the DDC and *mod
         // process match the new family.
         let lane_mismatch = self
@@ -12800,10 +12803,8 @@ impl Engine {
 
     /// Amalgamated element listing for remote / wasm SAT pickers (no disk cache).
     fn emit_sat_tle_listing(&self) {
-        let text = sdroxide_solar::tlesub::amalgamated_text(
-            &self.sat_cfg.tle_text(),
-            &self.sat_cfg.subs,
-        );
+        let text =
+            sdroxide_solar::tlesub::amalgamated_text(&self.sat_cfg.tle_text(), &self.sat_cfg.subs);
         let _ = self.event_tx.send(RadioEvent::SatTleListing(text));
     }
 
@@ -12820,7 +12821,13 @@ impl Engine {
         let subs = self.sat_cfg.subs.clone();
         self.tle_refresh = std::thread::Builder::new()
             .name("sdroxide-tlesub".into())
-            .spawn(move || sdroxide_solar::tlesub::refresh_all(&subs))
+            .spawn(move || {
+                // SatNOGS transmitters ride the same UPDATE NOW: frequencies
+                // are the other half of working a bird, and the operator who
+                // pressed the button wants both halves current.
+                let _ = sdroxide_solar::satnogs::refresh();
+                sdroxide_solar::tlesub::refresh_all(&subs)
+            })
             .map_err(|e| warn!("could not start the TLE refresh: {e}"))
             .ok();
     }
@@ -13994,10 +14001,7 @@ impl Engine {
             }
         }
         // Meshtastic: onto the region's LongFast centre when entering the mode.
-        if rx == RxId::Main
-            && mode.is_meshtastic()
-            && !self.state.rx[0].mode.is_meshtastic()
-        {
+        if rx == RxId::Main && mode.is_meshtastic() && !self.state.rx[0].mode.is_meshtastic() {
             let hz = self.state.meshtastic.region.center_hz();
             if self.caps.may_rx_hz(hz) {
                 match self.state.active_vfo {
@@ -15630,10 +15634,7 @@ impl Engine {
         let rx = self.state.rx[0];
         let mut chain = RxChain::new(self.state.sample_rate, &rx, out_rate, dial);
         chain.set_offset_hz(dial - self.state.center_hz);
-        self.listeners.insert(
-            id,
-            RemoteListener { dial_hz: dial, rx, chain, pending: Vec::new() },
-        );
+        self.listeners.insert(id, RemoteListener { dial_hz: dial, rx, chain, pending: Vec::new() });
         self.emit_listener_state(id);
     }
 
@@ -15647,11 +15648,8 @@ impl Engine {
         let Some(lis) = self.listeners.get(&id) else {
             return;
         };
-        let _ = self.event_tx.send(RadioEvent::ListenerState {
-            id,
-            freq_hz: lis.dial_hz,
-            rx: lis.rx,
-        });
+        let _ =
+            self.event_tx.send(RadioEvent::ListenerState { id, freq_hz: lis.dial_hz, rx: lis.rx });
     }
 
     /// Keep every listener's NCO and dial inside the current passband after

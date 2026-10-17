@@ -3548,7 +3548,7 @@ impl SdroxideApp {
     /// open time.
     fn refresh_sat_subs_now(&mut self, cmds: &mut Vec<Command>) {
         cmds.push(Command::RefreshTleSubs);
-        self.sat_ui.note = "Fetching subscriptions…".to_string();
+        self.sat_ui.note = "Fetching TLE subscriptions and SatNOGS transmitters…".to_string();
         self.sat_ui.fetching = true;
     }
 
@@ -3562,15 +3562,29 @@ impl SdroxideApp {
         let done = &self.sat_sub_status;
         let failed = done.iter().filter(|s| s.error.is_some()).count();
         let total: usize = done.iter().map(|s| s.count).sum();
-        self.sat_ui.note = match (done.len(), failed) {
-            (0, _) => "No enabled subscriptions to update.".to_string(),
-            (n, 0) => format!("Updated {n} subscription(s): {total} satellites."),
-            (n, f) => format!("Updated {} of {n}; {f} failed — see the rows above.", n - f),
+        let tle = match (done.len(), failed) {
+            (0, _) => "No enabled TLE subscriptions.".to_string(),
+            (n, 0) => format!("{n} TLE subscription(s): {total} satellites"),
+            (n, f) => format!("{} of {n} TLE subscriptions ok; {f} failed", n - f),
         };
-        // The window's feed shares the disk cache with a local engine, so it is
-        // told to re-read rather than being left on what it loaded at open time.
         #[cfg(not(target_arch = "wasm32"))]
-        self.solar.reload_tle_subs();
+        {
+            // The engine wrote the SatNOGS cache on this host; reload so the
+            // SAT panel sees new links without waiting for the solar feed.
+            sdroxide_solar::satnogs::load_cached();
+            let tx = sdroxide_solar::satnogs::status();
+            let tx_note = match (&tx.error, tx.satellites) {
+                (Some(e), 0) => format!("SatNOGS transmitters failed: {e}"),
+                (Some(e), n) => format!("SatNOGS: {n} sats (last error: {e})"),
+                (None, n) => format!("SatNOGS: {n} satellites, {} links", tx.transmitters),
+            };
+            self.sat_ui.note = format!("Updated — {tle}; {tx_note}.");
+            self.solar.reload_tle_subs();
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.sat_ui.note = format!("Updated — {tle}.");
+        }
     }
 }
 

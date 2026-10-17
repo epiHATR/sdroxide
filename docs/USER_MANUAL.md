@@ -12611,6 +12611,14 @@ rest of that window's network activity follows ([7](#7-solar-system-3d-view)).
 **UPDATE NOW** fetches them all immediately without opening it. Fetched listings
 are cached on disk, so they survive a restart and keep working offline.
 
+The same button also refreshes **SatNOGS transmitters** — the uplink / downlink /
+mode table from [db.satnogs.org](https://db.satnogs.org/). A TLE only says where a
+satellite is; without frequencies the SAT panel cannot offer a link to lock. The
+built-in curated table (ISS, QO-100, …) still applies, and your own frequency
+overrides in this tab still win. SatNOGS fills in the rest, refreshed daily while
+the 3D view is open (or on demand with **UPDATE NOW**). Status for the last fetch
+is shown under **SatNOGS transmitters** on this tab.
+
 #### 6.9.2 Pasted element sets
 
 ![The manual TLE input area](images/settings-tle2.jpg)

@@ -60,6 +60,10 @@ pub(in crate::app) fn settings_tle_tab(ui: &mut egui::Ui, io: &mut SettingsIo) {
     ui.add_space(12.0);
     ui.separator();
     ui.add_space(8.0);
+    settings_tle_satnogs(ui, io);
+    ui.add_space(12.0);
+    ui.separator();
+    ui.add_space(8.0);
     settings_tle_pasted(ui, io);
     ui.add_space(12.0);
     ui.separator();
@@ -184,7 +188,10 @@ fn settings_tle_subscriptions(ui: &mut egui::Ui, io: &mut SettingsIo) {
             theme::GREEN(),
             theme::INK_ON_CYAN(),
         )
-        .on_hover_text("Ask the radio engine to fetch every enabled subscription now")
+        .on_hover_text(
+            "Ask the radio engine to fetch every enabled TLE subscription and the SatNOGS \
+             transmitters list now",
+        )
         .clicked()
         {
             *io.sat_sub_refresh = true;
@@ -204,6 +211,66 @@ fn settings_tle_subscriptions(ui: &mut egui::Ui, io: &mut SettingsIo) {
             }
         }
     });
+}
+
+/// SatNOGS published transmitters — the frequency half of working a satellite.
+fn settings_tle_satnogs(ui: &mut egui::Ui, io: &mut SettingsIo) {
+    use crate::theme;
+
+    ui.label(RichText::new("SatNOGS transmitters").strong());
+    ui.label(
+        RichText::new(
+            "Uplink / downlink / mode for thousands of satellites from db.satnogs.org. A TLE \
+             only says where a bird is; this is what to tune. Fetched daily while the solar \
+             window is open, and by UPDATE NOW above. Your frequency overrides still win.",
+        )
+        .weak()
+        .size(11.0),
+    );
+    ui.add_space(4.0);
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let st = sdroxide_solar::satnogs::status();
+        let (text, color) = match &st.error {
+            Some(e) if st.satellites == 0 => (e.clone(), theme::ALERT()),
+            Some(e) => (
+                format!(
+                    "still using {} satellites · {} links · {} old — refresh failed: {e}",
+                    st.satellites,
+                    st.transmitters,
+                    sdroxide_solar::timefmt::age(now_unix() - st.fetched_unix)
+                ),
+                theme::YELLOW(),
+            ),
+            None if st.fetched_unix == 0 => {
+                ("not fetched yet — press UPDATE NOW".to_string(), theme::LINE_LIT())
+            }
+            None => (
+                format!(
+                    "{} satellites · {} links · {} old",
+                    st.satellites,
+                    st.transmitters,
+                    sdroxide_solar::timefmt::age(now_unix() - st.fetched_unix)
+                ),
+                theme::GREEN(),
+            ),
+        };
+        ui.label(RichText::new(text).color(color).size(10.5));
+        let _ = io; // refresh flag is the shared UPDATE NOW above
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = io;
+        ui.label(
+            RichText::new(
+                "Fetched on the radio host. Open Settings ▸ TLE there (or run a native client) \
+                 and press UPDATE NOW.",
+            )
+            .color(theme::LINE_LIT())
+            .size(10.5),
+        );
+    }
 }
 
 /// Element sets pasted in by hand.

@@ -183,6 +183,11 @@ fn worker(
     // Publish whatever is on disk before touching the network, so the window
     // has content the moment it opens — including with no connection at all.
     load_cached(&shared, &cache, channel, resolution, &raw);
+    crate::satnogs::load_cached();
+    let mut satnogs_due_unix: i64 = {
+        let st = crate::satnogs::status();
+        if st.fetched_unix == 0 { 0 } else { st.fetched_unix + crate::satnogs::PERIOD_S }
+    };
     wake();
 
     loop {
@@ -204,6 +209,22 @@ fn worker(
             d.tle_subs = status;
             drop(d);
             raw(RawUpdate::Tle { geo: false, text: custom_tle_text(&cache, &pasted_text, &subs) });
+            changed = true;
+        }
+        // SatNOGS transmitters: daily. Separate from TLEs — the dump is large
+        // and frequencies barely move.
+        if now >= satnogs_due_unix {
+            satnogs_due_unix = now + crate::satnogs::PERIOD_S;
+            let st = crate::satnogs::refresh();
+            if st.error.is_some() {
+                tracing::warn!("SatNOGS transmitters: {}", st.error.as_deref().unwrap_or("?"));
+            } else {
+                tracing::info!(
+                    "SatNOGS transmitters: {} satellites, {} links",
+                    st.satellites,
+                    st.transmitters
+                );
+            }
             changed = true;
         }
         for src in Source::ALL {
@@ -229,6 +250,8 @@ fn worker(
                     s.attempt_unix = None;
                     s.consecutive_failures = 0;
                 }
+                satnogs_due_unix = 0;
+                subs_due_unix = 0;
             }
             Ok(FeedCmd::SetChannel(c)) => {
                 channel = c;
@@ -776,6 +799,9 @@ pub(crate) fn http_get(
     let mut resp = req.call().map_err(|e| e.to_string())?;
     if resp.status() == 304 {
         return Ok(None);
+    }
+    if resp.status().as_u16() == 429 {
+        return Err("HTTP 429 Too Many Requests".into());
     }
     if !resp.status().is_success() {
         return Err(format!("HTTP {}", resp.status()));

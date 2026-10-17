@@ -10,13 +10,13 @@
 //! Frequencies move. Transponders get switched to a different mode, FM birds
 //! are put into schedule-only operation, and a bird that has been quiet for a
 //! year comes back on a different passband. Nothing here is authoritative
-//! against the satellite itself, which is why this table is only half the
-//! story: the operator can add and correct entries of their own in
-//! [`sdroxide_types::SatConfig`], and those win over anything in this file.
+//! against the satellite itself, which is why this table is only one layer:
+//! [`for_norad`] prefers the operator's [`sdroxide_types::SatConfig`] overrides,
+//! then the SatNOGS transmitters cache ([`crate::satnogs`]), then this file.
 
 use std::sync::OnceLock;
 
-pub use sdroxide_types::{Passband, SatFreqs, SatLink, fmt_sat_mhz as fmt_mhz};
+pub use sdroxide_types::{Passband, SatConfig, SatFreqs, SatLink, fmt_sat_mhz as fmt_mhz};
 
 /// The built-in table, built once and shared.
 pub fn builtin() -> &'static [SatFreqs] {
@@ -27,6 +27,26 @@ pub fn builtin() -> &'static [SatFreqs] {
 /// Look a satellite up in the built-in table.
 pub fn builtin_for(norad_id: u64) -> Option<&'static SatFreqs> {
     builtin().iter().find(|s| s.norad_id == norad_id)
+}
+
+/// Resolve frequencies for a catalogue number.
+///
+/// Order: the operator's Settings ▸ TLE override, then the SatNOGS transmitters
+/// cache (native only), then the curated built-in table.
+pub fn for_norad(cfg: &SatConfig, norad_id: u64) -> Option<SatFreqs> {
+    if let Some(f) = cfg.freqs_for(norad_id) {
+        return Some(f.clone());
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(f) = crate::satnogs::cached_for(norad_id) {
+        return Some(f);
+    }
+    builtin_for(norad_id).cloned()
+}
+
+/// True when [`for_norad`] would yield at least one usable link.
+pub fn has_freqs(cfg: &SatConfig, norad_id: u64) -> bool {
+    for_norad(cfg, norad_id).is_some_and(|f| f.usable_links().next().is_some())
 }
 
 fn build() -> Vec<SatFreqs> {

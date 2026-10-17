@@ -1529,6 +1529,12 @@ impl SdroxideApp {
             self.sat_win.keys_capture = false;
             return;
         }
+        // SatNOGS freqs live next to the TLE cache; ensure they are in memory
+        // even if the solar window has never been opened this session.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let _ = sdroxide_solar::satnogs::status();
+        }
         let mut win = std::mem::take(&mut self.sat_win);
         // The QO-100 page keeps its own waterfall rows and texture between
         // frames, exactly as the picker keeps its element list. Taken here
@@ -1551,6 +1557,10 @@ impl SdroxideApp {
         let mut open = self.show_sat;
         let size =
             egui::vec2(crate::layout::window_w(ctx, 480.0), crate::layout::window_h(ctx, 520.0));
+        // Floor the floating window: `default_height` alone lets egui shrink to
+        // content, so the catalogue / pass-memo fill (one row per frame) and the
+        // pass-diagram pop-in after a pick make the window keep resizing.
+        let min_h = size.y;
         let pending = self.system_center_pending.sat;
         let resp = crate::layout::center_on_open(
             egui::Window::new("SATELLITE")
@@ -1559,13 +1569,15 @@ impl SdroxideApp {
                 .frame(crate::chrome::window_frame())
                 .resizable(true)
                 .default_width(size.x)
-                .default_height(size.y),
+                .default_height(size.y)
+                .min_height(min_h),
             ctx,
             pending,
             size,
         )
         .show(ctx, |ui| {
             crate::chrome::window_body_bg(ui);
+            ui.set_min_height(min_h);
             self.sat_body(ui, &mut win, &mut qo100, cmds)
         });
         if let Some(r) = &resp {
@@ -1736,8 +1748,7 @@ impl SdroxideApp {
             let e = &list.entries[t.next];
             t.next += 1;
             let Some(sat) = e.sat.as_ref() else { continue };
-            let workable = self.sat_cfg.freqs_for(e.norad_id).is_some()
-                || sdroxide_solar::satfreq::builtin_for(e.norad_id).is_some()
+            let workable = sdroxide_solar::satfreq::has_freqs(&self.sat_cfg, e.norad_id)
                 || e.tle.as_ref().is_some_and(|(l1, _)| pasted.contains(l1.as_str()));
             if !t.all && !workable {
                 continue;
@@ -2307,9 +2318,11 @@ impl SdroxideApp {
         });
 
         // Arrow keys walk the visible list (Satellites / Watching).
-        // Height: shrink to content when the list is short; grow into the
-        // remaining dock-slot height when there are hundreds of rows — never
-        // past `available_height`, so sibling dock chips keep their space.
+        // Height: shrink to content when the list is short so the pass
+        // timeline / diagram sits right under the rows; grow into the
+        // remaining slot when there are hundreds of rows — never past
+        // `available_height`. Window-level `min_height` (undocked) stops
+        // the popup resizing while memos fill.
         const LIST_MIN_H: f32 = 80.0;
         let row_ids: Vec<u64> = rows.iter().map(|(i, _, _)| list.entries[*i].norad_id).collect();
         let tab_sel = if watching_only { win.watch_selected } else { win.selected };
@@ -2323,7 +2336,7 @@ impl SdroxideApp {
         };
         let row_h = sat_table_row_h(ui);
         let list_content_h = row_h + 4.0 + rows.len() as f32 * row_h;
-        // Viewport = remaining dock height (capped). Content taller than this
+        // Viewport = remaining height (capped). Content taller than this
         // scrolls inside the ScrollArea — do not set max_height to content_h
         // or the list expands past the slot and scrolling dies.
         let list_budget = (ui.available_height() - detail_reserve).max(LIST_MIN_H);
@@ -2359,7 +2372,7 @@ impl SdroxideApp {
             .id_salt(if watching_only { "sat-watch-list" } else { "sat-list" })
             .max_height(list_view_h)
             // Overflowing lists keep a fixed viewport so the bar can scroll;
-            // short lists shrink to their rows.
+            // short lists shrink to their rows so the detail pane sits under them.
             .auto_shrink([false, !list_overflows]);
         if let Some(y) = win.list_scroll_y.take() {
             list_scroll = list_scroll.vertical_scroll_offset(y);
@@ -2479,19 +2492,16 @@ impl SdroxideApp {
             return;
         };
 
-        // The operator's own frequency table wins over the built-in one, the
-        // same rule the 3D view's pass window applies.
-        let freqs = match self.sat_cfg.freqs_for(id) {
-            Some(f) => Some(f.clone()),
-            None => sdroxide_solar::satfreq::builtin_for(id).cloned(),
-        };
-        // Selection chrome (timeline / links / actions) scrolls in whatever
-        // height the list left — keeps the whole page inside this dock slot.
+        // Operator override → SatNOGS cache → built-in curated table.
+        let freqs = sdroxide_solar::satfreq::for_norad(&self.sat_cfg, id);
+        // Selection chrome (timeline / links / actions) fills what the list
+        // reserved — fixed height so a late pass-diagram / SatNOGS link table
+        // does not grow the undocked popup.
         let detail_h = ui.available_height().max(48.0);
         egui::ScrollArea::vertical()
             .id_salt(if watching_only { "sat-watch-detail" } else { "sat-sat-detail" })
             .max_height(detail_h)
-            .auto_shrink([false, true])
+            .auto_shrink([false, false])
             .show_themed(ui, |ui| {
                 ui.add_space(6.0);
                 ui.separator();
@@ -2570,23 +2580,44 @@ impl SdroxideApp {
                     freqs.as_ref().map(|f| f.usable_links().cloned().collect()).unwrap_or_default();
                 if links.is_empty() {
                     ui.label(dim(
-                        "No frequencies on file for this one — add them in Settings ▸ TLE.",
+                        "No frequencies on file for this one — add them in Settings ▸ TLE, \
+                         or fetch SatNOGS transmitters there.",
                     ));
                     return;
                 }
                 win.link_idx = win.link_idx.min(links.len() - 1);
 
-                // Spread across the window like the list above, for the same reason.
-                let link_col_w = ((ui.available_width() - 3.0 * 14.0) / 4.0).max(70.0);
+                // Gutter for the detail ScrollArea's vertical bar — MODE sits on
+                // the right edge and otherwise paints under it (same idea as the
+                // WEFAX live chart fitting). Fixed column widths so a long LINK
+                // name cannot shove FM / SSTV / … under the bar.
+                let gut = ui.spacing().scroll.bar_width + 4.0;
+                let usable = (ui.available_width() - gut).max(200.0);
+                const LINK_GAP: f32 = 14.0;
+                let mode_w = 56.0_f32;
+                let freq_w = 88.0_f32;
+                let link_w = (usable - mode_w - 2.0 * freq_w - 3.0 * LINK_GAP).max(80.0);
+                let row_h = ui.spacing().interact_size.y.max(18.0);
+                ui.set_max_width(usable);
                 egui::Grid::new("sat-links")
                     .num_columns(4)
-                    .min_col_width(link_col_w)
-                    .spacing([14.0, 2.0])
+                    .spacing([LINK_GAP, 2.0])
                     .show(ui, |ui| {
-                        ui.label(dim("LINK"));
-                        ui.label(dim("DOWNLINK (MHz)"));
-                        ui.label(dim("UPLINK (MHz)"));
-                        ui.label(dim("MODE"));
+                        for (label, w) in [
+                            ("LINK", link_w),
+                            ("DOWNLINK (MHz)", freq_w),
+                            ("UPLINK (MHz)", freq_w),
+                            ("MODE", mode_w),
+                        ] {
+                            ui.allocate_ui_with_layout(
+                                egui::vec2(w, row_h),
+                                egui::Layout::left_to_right(egui::Align::Center),
+                                |ui| {
+                                    ui.set_min_width(w);
+                                    ui.add(egui::Label::new(dim(label)).truncate());
+                                },
+                            );
+                        }
                         ui.end_row();
                         for (i, l) in links.iter().enumerate() {
                             let sel = i == win.link_idx;
@@ -2597,33 +2628,55 @@ impl SdroxideApp {
                             if sel {
                                 label = label.color(theme::INK_ON_CYAN()).strong();
                             }
-                            let resp = ui.selectable_label(sel, label);
+                            // Left-aligned — `Button::selectable` / `add_sized` centres
+                            // the name in the wide LINK column.
+                            let resp = ui
+                                .allocate_ui_with_layout(
+                                    egui::vec2(link_w, row_h),
+                                    egui::Layout::left_to_right(egui::Align::Center),
+                                    |ui| {
+                                        ui.set_max_width(link_w);
+                                        ui.selectable_label(sel, label)
+                                    },
+                                )
+                                .inner;
                             if !l.note.is_empty() {
                                 resp.clone().on_hover_text(&l.note);
                             }
                             if resp.clicked() {
                                 win.link_idx = i;
                             }
-                            ui.label(
-                                RichText::new(
-                                    l.downlink.map_or_else(|| "—".into(), |b| b.to_string()),
+                            ui.add_sized(
+                                egui::vec2(freq_w, row_h),
+                                egui::Label::new(
+                                    RichText::new(
+                                        l.downlink.map_or_else(|| "—".into(), |b| b.to_string()),
+                                    )
+                                    .size(10.5)
+                                    .color(theme::GREEN()),
                                 )
-                                .size(10.5)
-                                .color(theme::GREEN()),
+                                .truncate(),
                             );
-                            ui.label(
-                                RichText::new(
-                                    l.uplink.map_or_else(|| "—".into(), |b| b.to_string()),
+                            ui.add_sized(
+                                egui::vec2(freq_w, row_h),
+                                egui::Label::new(
+                                    RichText::new(
+                                        l.uplink.map_or_else(|| "—".into(), |b| b.to_string()),
+                                    )
+                                    .size(10.5)
+                                    .color(theme::YELLOW()),
                                 )
-                                .size(10.5)
-                                .color(theme::YELLOW()),
+                                .truncate(),
                             );
                             let mode = if l.inverting {
                                 format!("{} · inv", l.mode)
                             } else {
                                 l.mode.clone()
                             };
-                            ui.label(RichText::new(mode).size(10.5));
+                            ui.add_sized(
+                                egui::vec2(mode_w, row_h),
+                                egui::Label::new(RichText::new(mode).size(10.5)).truncate(),
+                            );
                             ui.end_row();
                         }
                     });
@@ -2737,10 +2790,7 @@ impl SdroxideApp {
         self.sat_win.link_idx = 0;
         self.sat_win.search.clear();
         self.sat_win.scroll_selected_into_view = true;
-        let freqs = match self.sat_cfg.freqs_for(norad_id) {
-            Some(f) => Some(f.clone()),
-            None => sdroxide_solar::satfreq::builtin_for(norad_id).cloned(),
-        };
+        let freqs = sdroxide_solar::satfreq::for_norad(&self.sat_cfg, norad_id);
         let links: Vec<sdroxide_types::SatLink> =
             freqs.as_ref().map(|f| f.usable_links().cloned().collect()).unwrap_or_default();
         // Prefer the first link that can be worked both ways; a beacon-only

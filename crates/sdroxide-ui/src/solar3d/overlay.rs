@@ -1512,13 +1512,10 @@ fn pass_window(ui: &egui::Ui, st: &mut SolarUi, data: Option<&SolarData>, sim_no
                 }
             }
 
-            // The operator's own entry wins over the built-in table: they have
-            // either corrected it or added a satellite it never knew about.
-            let (freqs, mine) = match st.sat_cfg.freqs_for(id) {
-                Some(f) => (Some(f), true),
-                None => (sdroxide_solar::satfreq::builtin_for(id), false),
-            };
-            freq_table(ui, freqs, mine, &cache.name);
+            // Operator override → SatNOGS cache → built-in curated table.
+            let mine = st.sat_cfg.freqs_for(id).is_some();
+            let owned = sdroxide_solar::satfreq::for_norad(&st.sat_cfg, id);
+            freq_table(ui, owned.as_ref(), mine, &cache.name);
         });
     if !open {
         st.selected_sat = None;
@@ -1539,9 +1536,12 @@ fn freq_table(
     let Some(freqs) = freqs.filter(|f| f.usable_links().next().is_some()) else {
         ui.add_space(6.0);
         ui.label(
-            RichText::new("No frequencies on file for this one — add them in Settings ▸ TLE.")
-                .color(theme::LINE_LIT())
-                .size(10.0),
+            RichText::new(
+                "No frequencies on file for this one — add them in Settings ▸ TLE, or fetch \
+                 SatNOGS transmitters there.",
+            )
+            .color(theme::LINE_LIT())
+            .size(10.0),
         );
         return;
     };

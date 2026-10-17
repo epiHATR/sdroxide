@@ -30,6 +30,8 @@ pub mod meteor;
 pub mod planets;
 pub mod satellites;
 pub mod satfreq;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod satnogs;
 pub mod smallbody;
 pub mod swpc;
 pub mod timefmt;
@@ -57,6 +59,8 @@ pub use meteor::{ActiveShower, SHOWERS, Shower, active_at, radiant_altaz};
 pub use planets::{Moon, Planet, Surface};
 pub use satellites::{Observation, Pass, PassSearch, SatState, Satellite};
 pub use satfreq::{Passband, SatFreqs, SatLink};
+#[cfg(not(target_arch = "wasm32"))]
+pub use satnogs::Status as SatnogsTxStatus;
 pub use smallbody::{Class as SmallClass, SmallBody, Tail, Tails};
 pub use swpc::ActiveRegion;
 #[cfg(not(target_arch = "wasm32"))]
