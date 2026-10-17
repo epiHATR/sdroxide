@@ -66,18 +66,26 @@ pub fn show(
     cfg: Rs41Settings,
     max_h: f32,
 ) -> Option<String> {
-    let avail_w = ui.available_width();
-    if avail_w < MIN_HEIGHT {
+    // Fill the column the panel allocated (desktop, phone MAP pane, wasm).
+    // Use available height when the parent constrained it; otherwise `max_h`.
+    let avail = ui.available_size();
+    if avail.x < MIN_HEIGHT {
         return None;
     }
-    let h = max_h.min(avail_w).max(MIN_HEIGHT);
-    let (rect, resp) = ui.allocate_exact_size(vec2(avail_w, h), Sense::click_and_drag());
+    let h = if avail.y.is_finite() && avail.y > 0.0 && avail.y < 10_000.0 {
+        avail.y.max(MIN_HEIGHT)
+    } else {
+        max_h.max(MIN_HEIGHT)
+    };
+    let (rect, resp) = ui.allocate_exact_size(vec2(avail.x, h), Sense::click_and_drag());
     if !ui.is_rect_visible(rect) {
         return None;
     }
     let map = theme::map();
     let p = ui.painter_at(rect);
     p.rect_filled(rect, 0.0, map.sea);
+    // Frame so a tall map's empty sea is still readable as map (sea ≈ panel).
+    crate::chrome::paint_cut_border(&p, rect.shrink(0.5), map.frame, map.shell);
 
     let live: Vec<&Rs41Sonde> =
         sondes.iter().filter(|s| !s.pos_stale(now, cfg.drop_map_s)).collect();

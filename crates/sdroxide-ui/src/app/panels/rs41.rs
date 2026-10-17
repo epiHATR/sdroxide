@@ -28,12 +28,22 @@ impl SdroxideApp {
             }
         };
         let now = crate::time::now_unix();
-        let content_bottom = ui.cursor().top() + panel_h - 26.0;
+        // Prefer the parent’s remaining height (correct under wasm clip and
+        // angled-frame margins). Fall back to the panel_h fudge only when the
+        // parent left height unconstrained.
+        let body_bottom = {
+            let rem = ui.available_height();
+            if rem.is_finite() && rem > 0.0 && rem < 10_000.0 {
+                ui.cursor().top() + rem
+            } else {
+                ui.cursor().top() + panel_h - 26.0
+            }
+        };
 
         self.rs41_header(ui, cmds, &st);
         ui.add_space(3.0);
 
-        let avail_h = (content_bottom - ui.cursor().top()).max(80.0);
+        let avail_h = (body_bottom - ui.cursor().top()).max(80.0);
         let pane = self.phone_pane(ui, self.state.rx[0].mode);
         let full_w = ui.available_width();
 
@@ -57,7 +67,14 @@ impl SdroxideApp {
                 }
             }
             if pane.is_none_or(|p| p == 1) {
-                ui.vertical(|ui| self.rs41_map_pane(ui, &st, now, avail_h));
+                // Phone MAP pane: full width. Desktop/web: remaining column.
+                // Allocate the full column so the map can fill it exactly.
+                let map_w = if pane.is_some() { full_w } else { ui.available_width() };
+                ui.allocate_ui_with_layout(
+                    egui::vec2(map_w, avail_h),
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| self.rs41_map_pane(ui, &st, now, ui.available_size().y),
+                );
             }
         });
     }
