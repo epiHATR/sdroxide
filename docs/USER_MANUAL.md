@@ -8804,8 +8804,8 @@ region's allocation, and the rig declines anything it cannot do.
 The **RTL-SDR (USB)** interface drives an RTL2832U dongle directly, using
 sdroxide's own USB driver. There is no SoapySDR and no libusb involved, so this
 works in every build — including the standard Windows `.msi` and macOS `.dmg` —
-with nothing extra to install beyond access to the device itself (see the
-README's *RTL-SDR permissions*).
+with nothing extra to install beyond access to the device itself (Linux:
+`packaging/linux/60-sdroxide-rtlsdr.rules`; see [§15](#15-radio-specific-notes)).
 
 Supported tuners are the **R820T**, **R820T2** and **R828D**, which between them
 cover essentially every dongle still sold, including the RTL-SDR Blog V3 and V4.
@@ -9724,7 +9724,8 @@ The **Airspy HF+ (USB)** interface drives an Airspy HF+ **Dual**, **Discovery**
 or **Ranger** directly, using sdroxide's own USB driver. There is no SoapySDR, no
 libusb and no libairspyhf involved, so this works in every build — including the
 standard Windows `.msi` and macOS `.dmg` — with nothing to install beyond access
-to the device itself (see the README's *Airspy HF+ permissions*).
+to the device itself (Linux: `packaging/linux/60-sdroxide-airspyhf.rules`;
+see [§15](#15-radio-specific-notes)).
 
 Coverage is 0.5 kHz–31 MHz and 60–260 MHz on a Discovery or Ranger, from 9 kHz on
 a Dual, at up to 912 kSPS of complex baseband. Receive only — there is no
@@ -10215,8 +10216,8 @@ This is the only USB interface here that transmits, and the only one that is
 hardware has one signal path and switches it. Nothing you can configure changes
 that.
 
-**Permissions.** Linux needs the packaged udev rule — see "HackRF permissions"
-in the README. Windows normally needs nothing: a HackRF carries the Microsoft OS
+**Permissions.** Linux needs the packaged udev rule
+(`packaging/linux/60-sdroxide-hackrf.rules`). Windows normally needs nothing: a HackRF carries the Microsoft OS
 descriptors that ask for WinUSB by itself. macOS needs nothing.
 
 **Radio.** Rescan lists what is on the bus. The serial is matched on its
@@ -10366,8 +10367,8 @@ silicon, a different USB id, a different protocol and a different tuning range.
 They have separate interfaces, separate drivers and separate udev rules, and
 neither substitutes for the other.
 
-**Permissions.** Linux needs the packaged udev rule — see "Airspy R2 / Mini
-permissions" in the README, and note it is a different file from the HF+'s.
+**Permissions.** Linux needs the packaged udev rule
+(`packaging/linux/60-sdroxide-airspy.rules`) — a different file from the HF+'s.
 Windows wants WinUSB via Zadig or Airspy's own package. macOS needs nothing.
 
 **Receiver.** Rescan lists what is on the bus. An R2 and a Mini share the USB
@@ -10757,8 +10758,8 @@ and they are three separate devices to the computer:
 This one interface drives all three, so there is nothing to pair up and no
 second radio tab. An FDM-S1 or FDM-S2 has only the first of them.
 
-**Permissions.** Linux needs the packaged udev rule for the receive interface —
-see "ELAD permissions" in the README. The CAT port needs nothing installed; it
+**Permissions.** Linux needs the packaged udev rule for the receive interface
+(`packaging/linux/60-sdroxide-elad.rules`). The CAT port needs nothing installed; it
 is an ordinary `/dev/ttyUSB*`, so if that is what is refused the answer is the
 `dialout` group rather than the rule file. Windows needs the receive interface
 bound to WinUSB with [Zadig](https://zadig.akeo.ie/), which stops ELAD's own
@@ -11317,9 +11318,8 @@ comes through.
 > adds every retune. On Windows, run `sdroxide.exe` from `cmd` or PowerShell
 > rather than from Explorer, or the console goes nowhere.
 >
-> See "LimeSDR and LimeRFE permissions" in the README for the Linux udev rule —
-> the LimeSDR itself needs nothing from this project, because LimeSuite ships
-> its own rules.
+> Linux LimeRFE udev: `packaging/linux/60-sdroxide-limerfe.rules` — the LimeSDR
+> itself needs nothing from this project, because LimeSuite ships its own rules.
 
 #### 6.2.18 HydraSDR RFOne (USB)
 
@@ -11339,9 +11339,9 @@ Airspy takes four, and a receiver programmed by the wrong one tunes somewhere
 nobody asked for without saying so. sdroxide checks: pick the wrong interface
 for either radio and you are told the name of the right one.
 
-**Permissions.** Linux needs the packaged udev rule — see "HydraSDR RFOne
-permissions" in the README. Windows wants WinUSB via Zadig or HydraSDR's own
-package. macOS needs nothing.
+**Permissions.** Linux needs the packaged udev rule
+(`packaging/linux/60-sdroxide-hydrasdr.rules`). Windows wants WinUSB via Zadig or
+HydraSDR's own package. macOS needs nothing.
 
 **Receiver, and the shared USB id.** Rescan lists what is on the bus. Production
 boards enumerate as `38af:0001`; the prototypes came up on `1d50:60a1`, which is
