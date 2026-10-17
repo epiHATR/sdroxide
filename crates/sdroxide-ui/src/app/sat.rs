@@ -31,16 +31,33 @@ use crate::theme::ThemedScroll;
 pub(in crate::app) enum SatTab {
     #[default]
     Satellites,
+    /// Satellites the operator marked with WATCH — same picker as Satellites,
+    /// filtered to the persisted watch list.
+    Watching,
     /// Every upcoming pass of every workable satellite, in time order (#623).
     Passes,
     Qo100,
 }
 
-#[derive(Default)]
 pub(in crate::app) struct SatWinState {
     pub search: String,
-    /// Satellite whose detail/link pane is open, by catalogue number.
+    /// Selection on the SATELLITES tab — its own, so a pick there does not
+    /// drive the Watching timeline and vice versa.
     pub selected: Option<u64>,
+    /// Selection on the WATCHING tab.
+    pub watch_selected: Option<u64>,
+    /// Force-centre the SATELLITES list on the selected row next draw — set
+    /// when a pick arrives from PASSES (or the 3D lock). The list also keeps
+    /// the selection on-screen whenever it has drifted out of the viewport
+    /// (e.g. another bird's lock pane ate the height).
+    scroll_selected_into_view: bool,
+    /// Explicit vertical offset for the Satellites / Watching list — applied
+    /// once via [`ScrollArea::vertical_scroll_offset`]. Arrow keys use this
+    /// because `scroll_to_me` does not reliably bring rows below the fold into
+    /// view in this fixed-height list.
+    list_scroll_y: Option<f32>,
+    /// Same for the PASSES table.
+    passes_scroll_y: Option<f32>,
     /// Which of the selected satellite's published links is chosen.
     pub link_idx: usize,
     /// The lock we last asked the engine for — what the DOPPLER/ROTATOR
@@ -54,12 +71,90 @@ pub(in crate::app) struct SatWinState {
     /// single slot would rebuild itself twice a frame.
     lock_curve: Option<PassCurve>,
     pick_curve: Option<PassCurve>,
+    /// Multi-pass elevation timeline for the Watching tab's selected satellite.
+    watch_timeline: Option<WatchTimeline>,
+    /// Horizon for that timeline: 24 or 48 hours.
+    watch_span_h: u32,
+    /// Peak the operator clicked on the timeline (`max_el_unix`), keeping its
+    /// detail tooltip open until they click elsewhere or another peak.
+    watch_peak_pin: Option<i64>,
     passes: PassTable,
+    /// SATELLITES list column sort (click a heading).
+    list_sort: ListSort,
+    list_sort_asc: bool,
+}
+
+impl Default for SatWinState {
+    fn default() -> Self {
+        Self {
+            search: String::new(),
+            selected: None,
+            watch_selected: None,
+            scroll_selected_into_view: false,
+            list_scroll_y: None,
+            passes_scroll_y: None,
+            link_idx: 0,
+            sent: None,
+            list: None,
+            lock_curve: None,
+            pick_curve: None,
+            watch_timeline: None,
+            watch_span_h: 24,
+            watch_peak_pin: None,
+            passes: PassTable::default(),
+            // Name is stable while pass memos fill one-per-frame. Pass sort
+            // is operator-chosen — applying it at startup makes the list jump
+            // until every memo is ready.
+            list_sort: ListSort::Name,
+            list_sort_asc: true,
+        }
+    }
+}
+
+/// Drop search / column sort so a fresh list does not reshuffle as pass memos
+/// fill. Watching (in `SatConfig`) and the live lock (`sent` / engine track)
+/// are left alone.
+fn sat_reset_list_chrome(win: &mut SatWinState) {
+    win.search.clear();
+    win.list_sort = ListSort::Name;
+    win.list_sort_asc = true;
+    win.list_scroll_y = None;
+    win.scroll_selected_into_view = false;
+}
+
+impl SatWinState {
+    /// Drop the cached catalogue so the next draw rebuilds from a new TLE listing.
+    pub(in crate::app) fn invalidate_list(&mut self) {
+        self.list = None;
+    }
+}
+
+/// Column the SATELLITES list is ordered by.
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+enum ListSort {
+    /// Alphabetical — the load default; does not move as pass memos arrive.
+    #[default]
+    Name,
+    Norad,
+    /// Up-now first, then next AOS — chosen by clicking the PASS heading.
+    Pass,
+}
+
+/// Column the PASSES table is ordered by.
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+enum PassSort {
+    Name,
+    #[default]
+    Aos,
+    /// Countdown / "up now" — same key as AOS.
+    When,
+    Length,
+    Peak,
+    Az,
 }
 
 /// The PASSES page's table, filled a few satellites per frame so a long list
 /// never stalls the window and the browser build needs no thread.
-#[derive(Default)]
 struct PassTable {
     /// What it was computed for: the list (by its build time), the QTH, the
     /// window and the filters. Any change starts it over.
@@ -72,6 +167,25 @@ struct PassTable {
     span_h: u32,
     min_el: f64,
     all: bool,
+    sort: PassSort,
+    /// `true` = ascending (AOS soonest-first is the default).
+    sort_asc: bool,
+}
+
+impl Default for PassTable {
+    fn default() -> Self {
+        Self {
+            key: None,
+            from_unix: 0,
+            next: 0,
+            rows: Vec::new(),
+            span_h: 0,
+            min_el: 0.0,
+            all: false,
+            sort: PassSort::Aos,
+            sort_asc: true,
+        }
+    }
 }
 
 struct PassRow {
@@ -84,10 +198,13 @@ struct PassRow {
 /// passes within an hour, and the ones already over are dropped as they end.
 const PASS_TABLE_FRESH_S: i64 = 3600;
 
-/// The parsed satellite list, rebuilt when the station's satellite config
-/// changes or ages out (a TLE refresh rewrites the caches underneath it).
+/// The parsed satellite list — kept across tab changes and only rebuilt when
+/// the *catalogue* changes (pasted TLEs / subscriptions), not when Watching
+/// toggles or the panel is reopened.
 struct SatList {
     cfg: std::sync::Arc<sdroxide_types::SatConfig>,
+    /// Fingerprint of catalogue sources (excludes `watching`).
+    source_key: u64,
     built_unix: i64,
     entries: Vec<SatEntry>,
 }
@@ -104,14 +221,65 @@ struct SatEntry {
     pass: Option<(i64, PassMemo)>,
 }
 
+#[derive(Clone)]
 enum PassMemo {
     Pass(sdroxide_types::SatPass),
     Always,
     Never,
 }
 
-/// How long a pass memo (and the list itself) is trusted before recomputing.
+/// How long a *pass memo* is trusted before recomputing that one row.
+/// The catalogue itself is not aged out — see [`sat_ensure_list`].
 const MEMO_FRESH_S: i64 = 600;
+
+/// Catalogue identity: pasted TLEs + live subscription URLs/`only` filters +
+/// a fingerprint of the amalgamated listing (remote/wasm fill). Watching is
+/// deliberately omitted so a WATCH chip does not rebuild the list.
+fn sat_list_source_key(cfg: &sdroxide_types::SatConfig, listing: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    cfg.tle_text().hash(&mut h);
+    for sub in cfg.live_subs() {
+        sub.url.hash(&mut h);
+        sub.only.hash(&mut h);
+    }
+    listing.len().hash(&mut h);
+    listing.as_bytes().get(..64).hash(&mut h);
+    listing.as_bytes().get(listing.len().saturating_sub(64)..).hash(&mut h);
+    h.finish()
+}
+
+/// Keep / refresh the cached catalogue. No-op when the source key matches —
+/// tab switches and watch-list edits must not wipe rows or pass memos.
+fn sat_ensure_list(
+    win: &mut SatWinState,
+    cfg: &std::sync::Arc<sdroxide_types::SatConfig>,
+    listing: &str,
+    now: i64,
+) {
+    let key = sat_list_source_key(cfg, listing);
+    if let Some(list) = win.list.as_mut() {
+        if list.source_key == key {
+            // Keep the Arc current (watching / freqs may have changed) without
+            // rebuilding entries.
+            list.cfg = std::sync::Arc::clone(cfg);
+            return;
+        }
+    }
+    let prev = win.list.take();
+    let mut new = build_list(cfg, listing, now, key);
+    if let Some(old) = prev.as_ref() {
+        for e in &mut new.entries {
+            if let Some(prev_e) = old.entries.iter().find(|o| o.norad_id == e.norad_id) {
+                e.pass = prev_e.pass.clone();
+            }
+        }
+    }
+    win.list = Some(new);
+    // Fresh catalogue (first open or TLE/sub change) — clear search/sort.
+    // Watching and the live lock are not touched here.
+    sat_reset_list_chrome(win);
+}
 
 impl SatEntry {
     fn matches(&self, q: &str) -> bool {
@@ -121,7 +289,12 @@ impl SatEntry {
     }
 }
 
-fn build_list(cfg: &std::sync::Arc<sdroxide_types::SatConfig>, now: i64) -> SatList {
+fn build_list(
+    cfg: &std::sync::Arc<sdroxide_types::SatConfig>,
+    listing: &str,
+    now: i64,
+    source_key: u64,
+) -> SatList {
     let mut entries: Vec<SatEntry> = Vec::new();
     let add_text = |text: &str, entries: &mut Vec<SatEntry>| {
         for t in sdroxide_types::parse_tle_block(text) {
@@ -146,14 +319,18 @@ fn build_list(cfg: &std::sync::Arc<sdroxide_types::SatConfig>, now: i64) -> SatL
         }
     };
     add_text(&cfg.tle_text(), &mut entries);
-    // The subscription caches live on disk beside the engine — the browser
-    // client has neither, and leans on the engine to resolve elements instead.
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let cache = sdroxide_solar::cache::Cache::open();
-        for sub in cfg.live_subs() {
-            if let Some(text) = sdroxide_solar::tlesub::cached_text(&cache, sub) {
-                add_text(&text, &mut entries);
+    // Remote / wasm: engine-pushed amalgamated listing (pasted + subs). Native
+    // can also use it when present; otherwise fall back to the disk cache.
+    if !listing.is_empty() {
+        add_text(listing, &mut entries);
+    } else {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let cache = sdroxide_solar::cache::Cache::open();
+            for sub in cfg.live_subs() {
+                if let Some(text) = sdroxide_solar::tlesub::cached_text(&cache, sub) {
+                    add_text(&text, &mut entries);
+                }
             }
         }
     }
@@ -170,7 +347,12 @@ fn build_list(cfg: &std::sync::Arc<sdroxide_types::SatConfig>, now: i64) -> SatL
             });
         }
     }
-    SatList { cfg: std::sync::Arc::clone(cfg), built_unix: now, entries }
+    SatList {
+        cfg: std::sync::Arc::clone(cfg),
+        source_key,
+        built_unix: now,
+        entries,
+    }
 }
 
 /// How many points the elevation arc is sampled at. Far too many sgp4 runs to
@@ -183,6 +365,18 @@ const PASS_MARGIN_S: i64 = 60;
 /// picker draws for whatever satellite is selected.
 const DIAGRAM_H: f32 = 92.0;
 const DIAGRAM_H_SMALL: f32 = 76.0;
+/// Height of the Watching-tab multi-pass timeline.
+const TIMELINE_H: f32 = 110.0;
+/// Samples along each pass arc on the timeline (cheaper than a full diagram).
+const TIMELINE_SAMPLES: usize = 41;
+/// How long a built timeline is trusted before the next search.
+const TIMELINE_FRESH_S: i64 = 600;
+/// Horizons offered on the Watching timeline chips.
+const WATCH_SPANS_H: &[u32] = &[1, 3, 6, 12, 24, 48];
+
+fn normalize_watch_span_h(h: u32) -> u32 {
+    if WATCH_SPANS_H.contains(&h) { h } else { 24 }
+}
 
 /// One pass sampled into an elevation arc: the pass diagram's data, held
 /// across frames.
@@ -329,6 +523,115 @@ fn curve_for<'a>(
     slot.as_ref()
 }
 
+/// One pass on the Watching timeline: rise/set, peak, and elevation samples
+/// across the arc so the bump can be drawn on a shared 24/48 h axis.
+struct TimelinePass {
+    rise_unix: i64,
+    set_unix: i64,
+    max_el: f32,
+    max_el_unix: i64,
+    max_el_az: f32,
+    /// Elevations at [`TIMELINE_SAMPLES`] evenly spaced instants from rise to set.
+    pts: Vec<f32>,
+}
+
+enum TimelineKind {
+    Passes(Vec<TimelinePass>),
+    Always { el: f32 },
+    Never,
+}
+
+/// Cached multi-pass elevation timeline for one satellite over a fixed horizon.
+struct WatchTimeline {
+    norad_id: u64,
+    span_h: u32,
+    /// QTH rounded to 0.01° — tiny GPS jitter must not thrash the cache.
+    qth_key: (i32, i32),
+    built_unix: i64,
+    t0: i64,
+    t1: i64,
+    kind: TimelineKind,
+}
+
+impl WatchTimeline {
+    fn build(
+        norad_id: u64,
+        sat: &sdroxide_solar::Satellite,
+        lat: f64,
+        lon: f64,
+        span_h: u32,
+        now: i64,
+    ) -> WatchTimeline {
+        let span_h = normalize_watch_span_h(span_h);
+        let t0 = now;
+        let t1 = now + span_h as i64 * 3600;
+        let kind = match sat.next_passes(lat, lon, now as f64, (span_h as f64) * 3600.0, 48) {
+            sdroxide_solar::PassSearch::AlwaysVisible { elevation, .. } => {
+                TimelineKind::Always { el: elevation as f32 }
+            }
+            sdroxide_solar::PassSearch::NeverVisible => TimelineKind::Never,
+            sdroxide_solar::PassSearch::Passes(passes) => {
+                let mut out = Vec::with_capacity(passes.len());
+                for p in passes {
+                    let span = (p.set_unix - p.rise_unix).max(1) as f64;
+                    let mut pts = Vec::with_capacity(TIMELINE_SAMPLES);
+                    for i in 0..TIMELINE_SAMPLES {
+                        let t = p.rise_unix as f64
+                            + span * i as f64 / (TIMELINE_SAMPLES - 1) as f64;
+                        let el = sat
+                            .at(t)
+                            .map(|s| s.az_el_from(lat, lon).1 as f32)
+                            .unwrap_or(0.0);
+                        pts.push(el);
+                    }
+                    out.push(TimelinePass {
+                        rise_unix: p.rise_unix,
+                        set_unix: p.set_unix,
+                        max_el: p.max_el as f32,
+                        max_el_unix: p.max_el_unix,
+                        max_el_az: p.max_el_az as f32,
+                        pts,
+                    });
+                }
+                TimelineKind::Passes(out)
+            }
+        };
+        WatchTimeline {
+            norad_id,
+            span_h,
+            qth_key: ((lat * 100.0).round() as i32, (lon * 100.0).round() as i32),
+            built_unix: now,
+            t0,
+            t1,
+            kind,
+        }
+    }
+}
+
+/// Refresh `slot` when the satellite, span, QTH, or freshness window changes.
+fn timeline_for<'a>(
+    slot: &'a mut Option<WatchTimeline>,
+    norad_id: u64,
+    sat: &sdroxide_solar::Satellite,
+    lat: f64,
+    lon: f64,
+    span_h: u32,
+    now: i64,
+) -> &'a WatchTimeline {
+    let span_h = normalize_watch_span_h(span_h);
+    let qth_key = ((lat * 100.0).round() as i32, (lon * 100.0).round() as i32);
+    let fresh = slot.as_ref().is_some_and(|t| {
+        t.norad_id == norad_id
+            && t.span_h == span_h
+            && t.qth_key == qth_key
+            && now - t.built_unix < TIMELINE_FRESH_S
+    });
+    if !fresh {
+        *slot = Some(WatchTimeline::build(norad_id, sat, lat, lon, span_h, now));
+    }
+    slot.as_ref().expect("just built")
+}
+
 /// `12:03` — the clock on the diagram's axis, UTC like every other time here.
 fn hhmm(unix: i64) -> String {
     let (_, _, _, h, mi, _) = sdroxide_types::utc_ymd_hms(unix);
@@ -344,6 +647,26 @@ fn utc_and_local(unix: i64) -> String {
         format!("{} UTC", hhmm(unix))
     } else {
         format!("{} UTC ({} local)", hhmm(unix), hhmm(unix + offset))
+    }
+}
+
+/// `17 Oct 2026 13:08 UTC (14:08 local)` — date plus clocks for the Watching
+/// timeline scrubber and peak tips, where a bare hour alone is ambiguous across
+/// a multi-day window.
+fn utc_date_and_local(unix: i64) -> String {
+    let date = sdroxide_solar::timefmt::dmy(unix);
+    let offset = crate::time::local_offset_at(unix);
+    if offset == 0 {
+        format!("{date} {} UTC", hhmm(unix))
+    } else {
+        let local = unix + offset;
+        let local_date = sdroxide_solar::timefmt::dmy(local);
+        if local_date == date {
+            format!("{date} {} UTC ({} local)", hhmm(unix), hhmm(local))
+        } else {
+            // Near a day boundary the local calendar date can disagree.
+            format!("{date} {} UTC ({local_date} {} local)", hhmm(unix), hhmm(local))
+        }
     }
 }
 
@@ -567,6 +890,372 @@ fn pass_diagram(ui: &mut egui::Ui, curve: &PassCurve, now: i64, height: f32) {
     crate::chrome::paint_cut_border(&p, rect, theme::LINE_LIT(), theme::PANEL());
 }
 
+/// Peak hit target collected while painting the timeline, so the interactive
+/// layer can sit on top of the drawn arcs.
+struct TimelinePeakHit {
+    apex: egui::Pos2,
+    max_el_unix: i64,
+    tip: String,
+}
+
+fn peak_tip(pass: &TimelinePass) -> String {
+    format!(
+        "Peak {:.0}° {} at {}\nAOS {}\nLOS {}",
+        pass.max_el,
+        sdroxide_solar::satellites::compass(pass.max_el_az as f64),
+        utc_date_and_local(pass.max_el_unix),
+        utc_date_and_local(pass.rise_unix),
+        utc_date_and_local(pass.set_unix),
+    )
+}
+
+/// Multi-pass elevation timeline over the next 24 or 48 hours: every rise/set
+/// bump on one shared clock axis, with peak elevation and time at each apex.
+///
+/// Hovering the plot scrubs a UTC readout; clicking a peak pins its detail
+/// tooltip (click again or elsewhere on the plot to clear).
+fn pass_timeline(
+    ui: &mut egui::Ui,
+    tl: &WatchTimeline,
+    now: i64,
+    height: f32,
+    pinned_peak: &mut Option<i64>,
+) {
+    use eframe::egui::{Align2, Color32, FontId, Pos2, Rect, Sense, Shape, Stroke, epaint::Mesh};
+    use egui::{pos2, vec2};
+
+    let (rect, response) =
+        ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::click());
+    if !ui.is_rect_visible(rect) {
+        return;
+    }
+    let p = ui.painter_at(rect);
+    let font = FontId::proportional(8.5);
+    let dim = theme::CYAN_DIM();
+    let green = theme::GREEN();
+    let ghost = |c: Color32, a: u8| Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), a);
+
+    const HEAD_H: f32 = 13.0;
+    const GROUND_H: f32 = 17.0;
+    let plot = Rect::from_min_max(
+        pos2(rect.left() + 1.0, rect.top() + HEAD_H),
+        pos2(rect.right() - 1.0, rect.bottom() - 1.0),
+    );
+    let horizon_y = plot.bottom() - GROUND_H;
+    let sky_top = plot.top() + 1.0;
+    if plot.width() < 80.0 || horizon_y - sky_top < 20.0 {
+        return;
+    }
+
+    let span = (tl.t1 - tl.t0).max(1) as f64;
+    let frac = |unix: f64| ((unix - tl.t0 as f64) / span).clamp(0.0, 1.0);
+    let ex = |unix: f64| plot.left() + plot.width() * frac(unix) as f32;
+    let unix_at = |x: f32| {
+        let f = ((x - plot.left()) / plot.width()).clamp(0.0, 1.0) as f64;
+        tl.t0 as f64 + span * f
+    };
+
+    let peak_el = match &tl.kind {
+        TimelineKind::Passes(ps) => ps.iter().map(|p| p.max_el).fold(0.0f32, f32::max),
+        TimelineKind::Always { el } => *el,
+        TimelineKind::Never => 0.0,
+    };
+    let top_el = match peak_el {
+        e if e <= 12.0 => 15.0f32,
+        e if e <= 25.0 => 30.0,
+        e if e <= 40.0 => 45.0,
+        e if e <= 55.0 => 60.0,
+        _ => 90.0,
+    };
+    let ey = |el: f32| {
+        horizon_y - (el.max(0.0) / top_el).clamp(0.0, 1.0) * (horizon_y - sky_top)
+    };
+
+    // --- ground and sky ---------------------------------------------------
+    p.rect_filled(rect, 0.0, theme::INPUT_BG());
+    let mut sky = Mesh::default();
+    sky.colored_vertex(pos2(plot.left(), sky_top), Color32::TRANSPARENT);
+    sky.colored_vertex(pos2(plot.right(), sky_top), Color32::TRANSPARENT);
+    sky.colored_vertex(pos2(plot.right(), horizon_y), ghost(theme::CYAN(), 22));
+    sky.colored_vertex(pos2(plot.left(), horizon_y), ghost(theme::CYAN(), 22));
+    sky.add_triangle(0, 1, 2);
+    sky.add_triangle(0, 2, 3);
+    p.add(Shape::mesh(sky));
+    p.rect_filled(
+        Rect::from_min_max(pos2(plot.left(), horizon_y), pos2(plot.right(), plot.bottom())),
+        0.0,
+        theme::FILL(),
+    );
+
+    // --- elevation grid ---------------------------------------------------
+    let grid = ghost(theme::LINE_LIT(), 150);
+    for frac_el in [1.0f32, 2.0 / 3.0, 1.0 / 3.0] {
+        let (y, el) = (ey(top_el * frac_el), top_el * frac_el);
+        p.extend(Shape::dashed_line(
+            &[pos2(plot.left(), y), pos2(plot.right(), y)],
+            Stroke::new(1.0, grid),
+            3.0,
+            4.0,
+        ));
+        p.text(
+            pos2(plot.left() + 4.0, y + 1.0),
+            Align2::LEFT_TOP,
+            format!("{el:.0}°"),
+            font.clone(),
+            dim,
+        );
+    }
+
+    // Time ticks across the horizon — denser for short windows.
+    let step_s: i64 = match tl.span_h {
+        1 => 10 * 60,
+        3 => 30 * 60,
+        6 => 3600,
+        12 => 2 * 3600,
+        24 => 3 * 3600,
+        _ => 6 * 3600,
+    };
+    let mut tick = ((tl.t0 + step_s - 1) / step_s) * step_s;
+    while tick <= tl.t1 {
+        let x = ex(tick as f64);
+        p.extend(Shape::dashed_line(
+            &[pos2(x, sky_top), pos2(x, horizon_y)],
+            Stroke::new(1.0, ghost(theme::LINE_LIT(), 90)),
+            2.0,
+            5.0,
+        ));
+        let label = if step_s < 3600 {
+            hhmm(tick)
+        } else {
+            format!("{:02}", (tick / 3600) % 24)
+        };
+        p.text(
+            pos2(x, plot.bottom() - 1.0),
+            Align2::CENTER_BOTTOM,
+            label,
+            font.clone(),
+            dim,
+        );
+        tick += step_s;
+    }
+
+    p.line_segment(
+        [pos2(plot.left(), horizon_y), pos2(plot.right(), horizon_y)],
+        Stroke::new(1.2, theme::CYAN()),
+    );
+
+    let mut peak_hits: Vec<TimelinePeakHit> = Vec::new();
+    let caption_right = match &tl.kind {
+        TimelineKind::Never => {
+            p.text(
+                pos2(plot.center().x, (sky_top + horizon_y) * 0.5),
+                Align2::CENTER_CENTER,
+                "not visible from your QTH in this window",
+                font.clone(),
+                dim,
+            );
+            "0 passes".to_string()
+        }
+        TimelineKind::Always { el } => {
+            let y = ey(*el);
+            p.line_segment(
+                [pos2(plot.left(), y), pos2(plot.right(), y)],
+                Stroke::new(1.6, green),
+            );
+            p.text(
+                pos2(plot.center().x, y - 4.0),
+                Align2::CENTER_BOTTOM,
+                format!("always visible · {el:.0}°"),
+                font.clone(),
+                theme::TEXT_STRONG(),
+            );
+            "always up".to_string()
+        }
+        TimelineKind::Passes(passes) => {
+            // Drop a pin that no longer belongs to this window.
+            if pinned_peak.is_some_and(|k| !passes.iter().any(|p| p.max_el_unix == k)) {
+                *pinned_peak = None;
+            }
+            let mut label_xs: Vec<f32> = Vec::new();
+            for pass in passes {
+                if pass.pts.len() < 2 || pass.set_unix <= tl.t0 || pass.rise_unix >= tl.t1 {
+                    continue;
+                }
+                let n = pass.pts.len();
+                let span_p = (pass.set_unix - pass.rise_unix).max(1) as f64;
+                let line: Vec<Pos2> = pass
+                    .pts
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &el)| {
+                        let t = pass.rise_unix as f64 + span_p * i as f64 / (n - 1) as f64;
+                        pos2(ex(t), ey(el))
+                    })
+                    .collect();
+
+                let mut under = Mesh::default();
+                for i in 0..line.len() - 1 {
+                    let (a, b) = (line[i], line[i + 1]);
+                    let base = under.vertices.len() as u32;
+                    under.colored_vertex(pos2(a.x, a.y.min(horizon_y)), ghost(green, 70));
+                    under.colored_vertex(pos2(b.x, b.y.min(horizon_y)), ghost(green, 70));
+                    under.colored_vertex(pos2(b.x, horizon_y), ghost(green, 8));
+                    under.colored_vertex(pos2(a.x, horizon_y), ghost(green, 8));
+                    under.add_triangle(base, base + 1, base + 2);
+                    under.add_triangle(base, base + 2, base + 3);
+                }
+                p.add(Shape::mesh(under));
+                p.add(Shape::line(line, Stroke::new(1.5, green)));
+
+                let apex = pos2(ex(pass.max_el_unix as f64), ey(pass.max_el));
+                let pinned = *pinned_peak == Some(pass.max_el_unix);
+                p.circle_filled(apex, if pinned { 4.0 } else { 2.4 }, ghost(green, 220));
+                if pinned {
+                    p.circle_stroke(apex, 6.0, Stroke::new(1.2, theme::CYAN()));
+                }
+                peak_hits.push(TimelinePeakHit {
+                    apex,
+                    max_el_unix: pass.max_el_unix,
+                    tip: peak_tip(pass),
+                });
+
+                // Peak marker + label (skip when it would collide with a neighbour).
+                let crowded = label_xs.iter().any(|&x| (x - apex.x).abs() < 36.0);
+                if !crowded && apex.x > plot.left() + 8.0 && apex.x < plot.right() - 8.0 {
+                    let label = format!(
+                        "{:.0}° {} {}",
+                        pass.max_el,
+                        sdroxide_solar::satellites::compass(pass.max_el_az as f64),
+                        hhmm(pass.max_el_unix),
+                    );
+                    let (align, dy) = if apex.y - sky_top < 14.0 {
+                        (Align2::CENTER_TOP, 5.0)
+                    } else {
+                        (Align2::CENTER_BOTTOM, -4.0)
+                    };
+                    p.text(
+                        pos2(apex.x, apex.y + dy),
+                        align,
+                        label,
+                        font.clone(),
+                        theme::TEXT_STRONG(),
+                    );
+                    label_xs.push(apex.x);
+                }
+            }
+            format!("{} pass{}", passes.len(), if passes.len() == 1 { "" } else { "es" })
+        }
+    };
+
+    // --- now ---------------------------------------------------------------
+    if (tl.t0..=tl.t1).contains(&now) {
+        let pink = theme::PINK();
+        let x = ex(now as f64);
+        p.line_segment(
+            [pos2(x, sky_top), pos2(x, horizon_y)],
+            Stroke::new(1.4, pink),
+        );
+        p.add(Shape::convex_polygon(
+            vec![pos2(x - 3.5, plot.top()), pos2(x + 3.5, plot.top()), pos2(x, plot.top() + 5.0)],
+            pink,
+            Stroke::NONE,
+        ));
+        crate::repaint::after(ui.ctx(), std::time::Duration::from_secs(1));
+    }
+
+    // --- hover scrubber: UTC at the pointer --------------------------------
+    // Peak hit radius — shared by the scrubber exclusion and the interact layer.
+    const PEAK_HIT: f32 = 14.0;
+    let hover_pos = response.hover_pos();
+    let near_peak = hover_pos.is_some_and(|pos| {
+        peak_hits.iter().any(|h| h.apex.distance(pos) <= PEAK_HIT * 0.6)
+    });
+    if let Some(pos) = hover_pos {
+        if !near_peak
+            && plot.x_range().contains(pos.x)
+            && pos.y >= sky_top
+            && pos.y <= plot.bottom()
+        {
+            let unix = unix_at(pos.x).round() as i64;
+            let cyan = theme::CYAN();
+            p.line_segment(
+                [pos2(pos.x, sky_top), pos2(pos.x, horizon_y)],
+                Stroke::new(1.0, ghost(cyan, 180)),
+            );
+            // Scrubber readout: calendar date + UTC (and local when it differs).
+            let text = utc_date_and_local(unix);
+            let tw = crate::chrome::text_width(ui, &text, font.clone());
+            let lx = (pos.x - tw * 0.5).clamp(plot.left() + 2.0, plot.right() - tw - 2.0);
+            let label_r = Rect::from_min_size(pos2(lx - 3.0, sky_top + 2.0), vec2(tw + 6.0, 12.0));
+            p.rect_filled(label_r, 0.0, theme::PANEL().gamma_multiply(0.92));
+            p.text(
+                pos2(lx + tw * 0.5, sky_top + 3.0),
+                Align2::CENTER_TOP,
+                text,
+                font.clone(),
+                theme::TEXT_STRONG(),
+            );
+        }
+    }
+
+    p.text(
+        pos2(rect.left() + 7.0, rect.top() + 2.0),
+        Align2::LEFT_TOP,
+        format!("PASS TIMELINE · {} h", tl.span_h),
+        font.clone(),
+        dim,
+    );
+    p.text(
+        pos2(rect.right() - 13.0, rect.top() + 2.0),
+        Align2::RIGHT_TOP,
+        caption_right,
+        font.clone(),
+        dim,
+    );
+    crate::chrome::paint_cut_border(&p, rect, theme::LINE_LIT(), theme::PANEL());
+
+    // Peak hit targets — after the paint so they sit on top for hover/click.
+    let mut peak_clicked = false;
+    let mut pinned_resp: Option<(egui::Response, &str)> = None;
+    for (i, hit) in peak_hits.iter().enumerate() {
+        let hit_r = Rect::from_center_size(hit.apex, vec2(PEAK_HIT, PEAK_HIT));
+        let r = ui.interact(hit_r, ui.id().with(("tl-peak", tl.norad_id, i)), Sense::click());
+        r.clone().on_hover_text(&hit.tip);
+        if r.hovered() {
+            ui.painter().circle_stroke(hit.apex, 5.5, Stroke::new(1.2, theme::YELLOW()));
+        }
+        if r.clicked() {
+            peak_clicked = true;
+            if *pinned_peak == Some(hit.max_el_unix) {
+                *pinned_peak = None;
+            } else {
+                *pinned_peak = Some(hit.max_el_unix);
+            }
+        }
+        if *pinned_peak == Some(hit.max_el_unix) {
+            pinned_resp = Some((r, hit.tip.as_str()));
+        }
+    }
+
+    // Clicking empty plot clears a pinned peak tip.
+    if response.clicked() && !peak_clicked {
+        *pinned_peak = None;
+    }
+
+    // Dispose the pin when the pointer leaves the timeline or the window
+    // loses focus — a stuck tip after looking away is worse than re-clicking.
+    let over_timeline = ui.input(|i| i.pointer.hover_pos().is_some_and(|p| rect.contains(p)));
+    let window_focused = ui.input(|i| i.focused);
+    if pinned_peak.is_some() && (!over_timeline || !window_focused) {
+        *pinned_peak = None;
+        pinned_resp = None;
+    }
+
+    if let Some((r, tip)) = pinned_resp {
+        r.show_tooltip_text(tip);
+    }
+}
+
 /// The mode a link's published emission maps onto. Satellite SSB convention
 /// is USB on the downlink, whatever the band. An SSTV downlink is FM on V/UHF,
 /// and tuning it as plain NFM would leave the picture undecoded (#622).
@@ -608,6 +1297,243 @@ fn fmt_mhz(hz: f64) -> String {
 }
 
 /// "in 12 min" / "in 3 h 05 min" — the countdown side of `timefmt::age`.
+
+/// Paint truncated `text` left-aligned inside `rect` (no hit target of its own).
+fn sat_paint_cell_text(ui: &mut egui::Ui, rect: egui::Rect, text: RichText, fallback: egui::Color32) {
+    use egui::{FontSelection, WidgetText};
+    let galley = WidgetText::from(text).into_galley(
+        ui,
+        Some(egui::TextWrapMode::Truncate),
+        (rect.width() - 4.0).max(1.0),
+        FontSelection::Default,
+    );
+    let text_pos = egui::pos2(rect.left() + 2.0, rect.center().y - galley.size().y * 0.5);
+    ui.painter().galley(text_pos, galley, fallback);
+}
+
+/// Rise compass on the left edge, set on the right — fills the FROM → TO column
+/// instead of a single left-aligned `N → SE` string.
+fn sat_paint_az_stretch(
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    rise: &str,
+    set: &str,
+    color: egui::Color32,
+) {
+    use egui::{FontSelection, WidgetText};
+    let pad = 2.0;
+    let mid = "→";
+    let rise_g = WidgetText::from(RichText::new(rise).size(10.0).color(color)).into_galley(
+        ui,
+        Some(egui::TextWrapMode::Truncate),
+        (rect.width() * 0.4).max(8.0),
+        FontSelection::Default,
+    );
+    let set_g = WidgetText::from(RichText::new(set).size(10.0).color(color)).into_galley(
+        ui,
+        Some(egui::TextWrapMode::Truncate),
+        (rect.width() * 0.4).max(8.0),
+        FontSelection::Default,
+    );
+    let arrow_g = WidgetText::from(RichText::new(mid).size(10.0).color(color)).into_galley(
+        ui,
+        Some(egui::TextWrapMode::Extend),
+        rect.width(),
+        FontSelection::Default,
+    );
+    let cy = |g: &egui::Galley| rect.center().y - g.size().y * 0.5;
+    ui.painter().galley(egui::pos2(rect.left() + pad, cy(&rise_g)), rise_g, color);
+    ui.painter().galley(
+        egui::pos2(rect.right() - pad - set_g.size().x, cy(&set_g)),
+        set_g,
+        color,
+    );
+    ui.painter().galley(
+        egui::pos2(rect.center().x - arrow_g.size().x * 0.5, cy(&arrow_g)),
+        arrow_g,
+        color,
+    );
+}
+
+/// PASSES table column widths: LENGTH / PEAK stay narrow so AOS and IN can
+/// breathe; FROM → TO keeps a mid share for the stretch compass pair.
+fn pass_col_widths(avail: f32, gap: f32) -> [f32; 6] {
+    // name · aos · in · length · peak · az
+    const W: [f32; 6] = [1.35, 1.85, 1.35, 0.50, 0.42, 1.15];
+    let sum: f32 = W.iter().sum();
+    let inner = (avail - gap * 5.0).max(0.0);
+    let mut out = [0.0_f32; 6];
+    for (i, w) in W.iter().enumerate() {
+        out[i] = (inner * w / sum).max(if i == 3 || i == 4 { 28.0 } else { 40.0 });
+    }
+    out
+}
+
+/// Full-width row with per-column widths. `az_stretch` paints the last cell as
+/// rise‥set stretched across its slot (passes FROM → TO).
+fn sat_table_row_ws(
+    ui: &mut egui::Ui,
+    selected: bool,
+    col_ws: &[f32],
+    col_gap: f32,
+    cells: &[RichText],
+    az_stretch: Option<(&str, &str)>,
+) -> egui::Response {
+    let n = col_ws.len().max(1);
+    let row_h = ui.spacing().interact_size.y.max(18.0);
+    let row_w = (col_ws.iter().sum::<f32>() + col_gap * (n as f32 - 1.0)).max(ui.available_width());
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(row_w, row_h), egui::Sense::click());
+    let visuals = ui.style().interact_selectable(&resp, selected);
+    if selected {
+        ui.painter().rect_filled(rect, visuals.corner_radius, theme::CYAN());
+    } else if resp.hovered() || resp.highlighted() {
+        ui.painter().rect_filled(rect, visuals.corner_radius, visuals.bg_fill);
+    }
+    let ink = if selected { theme::INK_ON_CYAN() } else { visuals.text_color() };
+    let mut x = rect.left();
+    for (i, &col_w) in col_ws.iter().enumerate() {
+        let cell = egui::Rect::from_min_size(egui::pos2(x, rect.top()), egui::vec2(col_w, row_h));
+        let last = i + 1 == n;
+        if last {
+            if let Some((rise, set)) = az_stretch {
+                let color = if selected { theme::INK_ON_CYAN() } else { ink };
+                sat_paint_az_stretch(ui, cell, rise, set, color);
+                break;
+            }
+        }
+        if let Some(text) = cells.get(i) {
+            let text = if selected {
+                text.clone().color(theme::INK_ON_CYAN())
+            } else {
+                text.clone()
+            };
+            sat_paint_cell_text(ui, cell, text, visuals.text_color());
+        }
+        x += col_w + col_gap;
+    }
+    resp
+}
+
+/// ↑/↓ (and ←/→) while no text field is focused — steps the satellite list.
+/// Consumes the key so a focused panadapter binding does not also fire.
+fn sat_arrow_delta(ui: &egui::Ui) -> Option<isize> {
+    if ui.ctx().egui_wants_keyboard_input() {
+        return None;
+    }
+    ui.input_mut(|i| {
+        if i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown)
+            || i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowRight)
+        {
+            Some(1)
+        } else if i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp)
+            || i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowLeft)
+        {
+            Some(-1)
+        } else {
+            None
+        }
+    })
+}
+
+/// Next/previous id in `ids` (display order), wrapping at the ends. No current
+/// selection → first on ↓/→, last on ↑/←.
+fn sat_step_id(ids: &[u64], current: Option<u64>, delta: isize) -> Option<u64> {
+    if ids.is_empty() {
+        return None;
+    }
+    let n = ids.len() as isize;
+    let i = match current.and_then(|id| ids.iter().position(|&x| x == id)) {
+        Some(i) => (i as isize + delta).rem_euclid(n) as usize,
+        None if delta > 0 => 0,
+        None => ids.len() - 1,
+    };
+    Some(ids[i])
+}
+
+/// Height of one [`sat_table_row`] — matches its allocate.
+fn sat_table_row_h(ui: &egui::Ui) -> f32 {
+    ui.spacing().interact_size.y.max(18.0)
+}
+
+/// Scroll offset that centres row `idx` (0-based, under a one-row heading) in
+/// a viewport of height `view_h`.
+fn sat_scroll_y_for_index(ui: &egui::Ui, idx: usize, view_h: f32) -> f32 {
+    let row_h = sat_table_row_h(ui);
+    // Heading row + small gap under it (see the list builders).
+    let header_h = row_h + 4.0;
+    let y = header_h + idx as f32 * row_h;
+    (y - (view_h * 0.5 - row_h * 0.5)).max(0.0)
+}
+
+/// One full-width table row: a single highlight + click target spanning every
+/// column, with labels painted into fixed column slots.
+fn sat_table_row(
+    ui: &mut egui::Ui,
+    selected: bool,
+    col_w: f32,
+    col_gap: f32,
+    cells: &[RichText],
+) -> egui::Response {
+    let n = cells.len().max(1) as f32;
+    let row_h = ui.spacing().interact_size.y.max(18.0);
+    let row_w = (col_w * n + col_gap * (n - 1.0)).max(ui.available_width());
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(row_w, row_h), egui::Sense::click());
+    let visuals = ui.style().interact_selectable(&resp, selected);
+    // Selected = cyan fill + dark ink (never the same color). Hover uses the
+    // theme's weak fill so accent greens/yellows in the cells stay readable.
+    if selected {
+        ui.painter().rect_filled(rect, visuals.corner_radius, theme::CYAN());
+    } else if resp.hovered() || resp.highlighted() {
+        ui.painter().rect_filled(rect, visuals.corner_radius, visuals.bg_fill);
+    }
+    let mut x = rect.left();
+    for text in cells {
+        let cell = egui::Rect::from_min_size(egui::pos2(x, rect.top()), egui::vec2(col_w, row_h));
+        let text = if selected {
+            // `.color` overrides any green/yellow baked into the RichText so
+            // the glyphs cannot disappear into the cyan fill.
+            text.clone().color(theme::INK_ON_CYAN())
+        } else {
+            text.clone()
+        };
+        sat_paint_cell_text(ui, cell, text, visuals.text_color());
+        x += col_w + col_gap;
+    }
+    resp
+}
+
+/// Clickable sort heading; returns whether this column was clicked.
+/// `active` + `asc` drive the ▲/▼ marker on the current sort column.
+fn sat_sort_heading(
+    ui: &mut egui::Ui,
+    col_w: f32,
+    label: &str,
+    active: bool,
+    asc: bool,
+) -> bool {
+    let mark = if !active {
+        ""
+    } else if asc {
+        " ▲"
+    } else {
+        " ▼"
+    };
+    let text = RichText::new(format!("{label}{mark}"))
+        .size(9.5)
+        .color(if active { theme::CYAN() } else { theme::CYAN_DIM() });
+    let row_h = ui.spacing().interact_size.y.max(18.0);
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(col_w, row_h), egui::Sense::click());
+    if resp.hovered() {
+        ui.painter().rect_filled(
+            rect,
+            2.0,
+            ui.visuals().widgets.hovered.weak_bg_fill,
+        );
+    }
+    sat_paint_cell_text(ui, rect, text, theme::CYAN_DIM());
+    resp.on_hover_text("Click to sort").clicked()
+}
+
 fn in_words(s: i64) -> String {
     let s = s.max(0);
     if s < 60 {
@@ -696,9 +1622,18 @@ impl SdroxideApp {
         };
         let locked = self.sat_track.is_some();
         let hunting = self.state.qo100.enabled;
+        let watching_n = self.sat_cfg.watching.len();
         crate::chrome::tab_bar(ui, |ui, bar| {
             for (tab, label) in [
                 (SatTab::Satellites, live(locked, "SATELLITES")),
+                (
+                    SatTab::Watching,
+                    if watching_n > 0 {
+                        format!("WATCHING ({watching_n})")
+                    } else {
+                        "WATCHING".to_string()
+                    },
+                ),
                 (SatTab::Passes, "PASSES".to_string()),
                 (SatTab::Qo100, live(hunting, "QO-100")),
             ] {
@@ -707,12 +1642,12 @@ impl SdroxideApp {
                 }
             }
         });
-        // No separator: the strip's own baseline is the line between the tabs
-        // and the page they open.
-        ui.add_space(8.0);
+        // Extra air under the tab strip — especially noticeable when docked.
+        ui.add_space(14.0);
 
         match self.sat_tab {
-            SatTab::Satellites => self.sat_page(ui, win, cmds),
+            SatTab::Satellites => self.sat_page(ui, win, cmds, false),
+            SatTab::Watching => self.sat_page(ui, win, cmds, true),
             SatTab::Passes => self.sat_passes_page(ui, win),
             // Its own scroll area: the beacon page is a 130 pt waterfall plus a
             // grid plus the telemetry frame, which is taller than this window
@@ -726,37 +1661,42 @@ impl SdroxideApp {
     }
 
     /// The satellite page: the live lock, then the picker.
-    fn sat_page(&mut self, ui: &mut egui::Ui, win: &mut SatWinState, cmds: &mut Vec<Command>) {
-        // (Re)built here rather than down in the picker: the lock pane draws
-        // its pass diagram from the same element sets, and it runs first.
+    ///
+    /// `watching_only` filters the list to catalogue numbers on the persisted
+    /// watch list (Watching tab).
+    fn sat_page(
+        &mut self,
+        ui: &mut egui::Ui,
+        win: &mut SatWinState,
+        cmds: &mut Vec<Command>,
+        watching_only: bool,
+    ) {
+        // Catalogue is cached on `win.list` — only rebuilt when TLEs / subs
+        // change. Tab switches and Watching edits leave it alone.
         let now = crate::time::now_unix();
-        let stale = win.list.as_ref().is_none_or(|l| {
-            !std::sync::Arc::ptr_eq(&l.cfg, &self.sat_cfg) || now - l.built_unix > MEMO_FRESH_S
-        });
-        if stale {
-            win.list = Some(build_list(&self.sat_cfg, now));
-        }
+        sat_ensure_list(win, &self.sat_cfg, &self.sat_tle_listing, now);
         if let Some(track) = self.sat_track.clone() {
             self.sat_locked_pane(ui, win, cmds, &track);
             ui.add_space(8.0);
             ui.separator();
             ui.add_space(4.0);
         }
-        self.sat_picker(ui, win, cmds);
+        // No outer scroll here: the picker sizes its list from
+        // `available_height` so it fills this dock slot (and stops at the
+        // clip for other dock chips). Selection detail scrolls on its own.
+        self.sat_picker(ui, win, cmds, watching_only);
     }
 
     /// Every upcoming pass of every workable satellite over the next day or
-    /// two, soonest first (#623). A row selects the satellite on the
-    /// SATELLITES page, where its diagram, links and lock are.
+    /// two, soonest first (#623).
+    ///
+    /// A click selects that satellite (one at a time) and highlights every
+    /// pass it has in the table; a second click on the same bird opens it on
+    /// SATELLITES with the list scrolled to the row.
     fn sat_passes_page(&mut self, ui: &mut egui::Ui, win: &mut SatWinState) {
         let dim = |s: &str| RichText::new(s).size(9.5).color(theme::CYAN_DIM());
         let now = crate::time::now_unix();
-        let stale = win.list.as_ref().is_none_or(|l| {
-            !std::sync::Arc::ptr_eq(&l.cfg, &self.sat_cfg) || now - l.built_unix > MEMO_FRESH_S
-        });
-        if stale {
-            win.list = Some(build_list(&self.sat_cfg, now));
-        }
+        sat_ensure_list(win, &self.sat_cfg, &self.sat_tle_listing, now);
         let Some((lat, lon)) = sdroxide_types::grid_to_latlon(&self.my_grid()) else {
             ui.label(
                 RichText::new("Set your grid for passes (Settings ▸ General).")
@@ -769,24 +1709,28 @@ impl SdroxideApp {
             t.span_h = 24;
             t.min_el = 10.0;
         }
-        ui.horizontal_wrapped(|ui| {
+        // Top-aligned row only — `left_to_right(Align::Center)` would expand to
+        // the full dock height and park these controls in the vertical middle,
+        // leaving the pass table with no room below.
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 8.0;
             ui.label(dim("NEXT"));
             for h in [24u32, 48] {
                 if ui.selectable_label(t.span_h == h, format!("{h} h")).clicked() {
                     t.span_h = h;
                 }
             }
-            ui.add_space(8.0);
+            ui.add_space(16.0);
             ui.label(dim("PEAK ≥"));
             ui.add(egui::DragValue::new(&mut t.min_el).range(0.0..=60.0).speed(1.0).suffix("°"));
-            ui.add_space(8.0);
+            ui.add_space(16.0);
             crate::chrome::checkbox(ui, &mut t.all, "all satellites").on_hover_text(
                 "Off: only satellites with frequencies on file — the ones you can work — and \
                  any you pasted in yourself. On: every satellite in the list, which can be \
                  thousands with a subscription and takes a while to search.",
             );
         });
-        ui.add_space(4.0);
+        ui.add_space(12.0);
 
         let list = win.list.as_ref().expect("built above");
         let key = (
@@ -828,59 +1772,216 @@ impl SdroxideApp {
         if searching {
             ui.ctx().request_repaint();
         }
-        t.rows.sort_by_key(|r| r.pass.rise_unix);
+        let sort = t.sort;
+        let asc = t.sort_asc;
+        t.rows.sort_by(|a, b| {
+            let ord = match sort {
+                PassSort::Name => a.name.to_ascii_lowercase().cmp(&b.name.to_ascii_lowercase()),
+                PassSort::Aos | PassSort::When => a.pass.rise_unix.cmp(&b.pass.rise_unix),
+                PassSort::Length => {
+                    (a.pass.set_unix - a.pass.rise_unix).cmp(&(b.pass.set_unix - b.pass.rise_unix))
+                }
+                PassSort::Peak => a
+                    .pass
+                    .max_el
+                    .partial_cmp(&b.pass.max_el)
+                    .unwrap_or(std::cmp::Ordering::Equal),
+                PassSort::Az => a
+                    .pass
+                    .rise_az
+                    .partial_cmp(&b.pass.rise_az)
+                    .unwrap_or(std::cmp::Ordering::Equal),
+            };
+            if asc { ord } else { ord.reverse() }
+        });
 
-        let shown: Vec<&PassRow> = t.rows.iter().filter(|r| r.pass.set_unix > now).collect();
+        let shown_idx: Vec<usize> = t
+            .rows
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| r.pass.set_unix > now)
+            .map(|(i, _)| i)
+            .collect();
         if searching {
             ui.label(dim(&format!("searching… {} of {}", t.next, list.entries.len())));
-        } else if shown.is_empty() {
+        } else if shown_idx.is_empty() {
             ui.label(dim("No passes in this window. Lower the peak, or widen the window."));
         }
+        // Unique satellites in table order — arrows step between birds, not
+        // between every pass row of the same one.
+        let mut sat_ids: Vec<u64> = Vec::new();
+        for &i in &shown_idx {
+            let id = t.rows[i].norad_id;
+            if !sat_ids.contains(&id) {
+                sat_ids.push(id);
+            }
+        }
+        // First visible-row index per NORAD — arrows / clicks scroll to that.
+        let first_row_of: Vec<(u64, usize)> = {
+            let mut v = Vec::new();
+            for (row_i, &i) in shown_idx.iter().enumerate() {
+                let id = t.rows[i].norad_id;
+                if !v.iter().any(|(x, _)| *x == id) {
+                    v.push((id, row_i));
+                }
+            }
+            v
+        };
+        let mut arrow_scroll_row: Option<usize> = None;
+        if let Some(delta) = sat_arrow_delta(ui) {
+            if let Some(id) = sat_step_id(&sat_ids, win.selected, delta) {
+                win.selected = Some(id);
+                win.link_idx = 0;
+                if let Some(&(_, idx)) = first_row_of.iter().find(|(x, _)| *x == id) {
+                    arrow_scroll_row = Some(idx);
+                }
+            }
+        }
+
+        // One satellite at a time: every pass row of that NORAD paints selected.
+        let selected_id = win.selected;
+        let related_n = selected_id
+            .map(|id| shown_idx.iter().filter(|&&i| t.rows[i].norad_id == id).count())
+            .unwrap_or(0);
+        if let Some(id) = selected_id {
+            if related_n > 0 {
+                let name = t
+                    .rows
+                    .iter()
+                    .find(|r| r.norad_id == id)
+                    .map(|r| r.name.as_str())
+                    .unwrap_or("satellite")
+                    .to_string();
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 8.0;
+                    ui.label(dim(&format!(
+                        "{name} · {related_n} pass{} highlighted",
+                        if related_n == 1 { "" } else { "es" },
+                    )));
+                    if crate::chrome::chip(ui, false, "OPEN ON SATELLITES")
+                        .on_hover_text("Open this satellite on the SATELLITES tab")
+                        .clicked()
+                    {
+                        win.link_idx = 0;
+                        win.search.clear();
+                        win.scroll_selected_into_view = true;
+                        win.list_scroll_y = None;
+                        self.sat_tab = SatTab::Satellites;
+                    }
+                });
+                ui.add_space(2.0);
+            }
+        }
+
         let mut picked = None;
-        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-            egui::Grid::new("sat-passes").num_columns(6).spacing([12.0, 2.0]).striped(true).show(
-                ui,
-                |ui| {
-                    for h in ["SATELLITE", "AOS", "", "LENGTH", "PEAK", "FROM → TO"] {
-                        ui.label(dim(h));
+        let mut sort_click: Option<PassSort> = None;
+        let cur_sort = t.sort;
+        let cur_asc = t.sort_asc;
+        let passes_view_h = ui.available_height().max(80.0);
+        if let Some(idx) = arrow_scroll_row {
+            win.passes_scroll_y = Some(sat_scroll_y_for_index(ui, idx, passes_view_h));
+        }
+        let mut passes_scroll = egui::ScrollArea::vertical()
+            .id_salt("sat-passes-list")
+            .auto_shrink([false, false]);
+        if let Some(y) = win.passes_scroll_y.take() {
+            passes_scroll = passes_scroll.vertical_scroll_offset(y);
+        }
+        passes_scroll.show(ui, |ui| {
+            const COL_GAP: f32 = 10.0;
+            let col_ws = pass_col_widths(ui.available_width(), COL_GAP);
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = COL_GAP;
+                let heads = [
+                    ("SATELLITE", PassSort::Name),
+                    ("AOS", PassSort::Aos),
+                    ("IN", PassSort::When),
+                    ("LENGTH", PassSort::Length),
+                    ("PEAK", PassSort::Peak),
+                    ("FROM → TO", PassSort::Az),
+                ];
+                for (i, (label, col)) in heads.iter().enumerate() {
+                    if sat_sort_heading(ui, col_ws[i], label, cur_sort == *col, cur_asc) {
+                        sort_click = Some(*col);
                     }
-                    ui.end_row();
-                    for r in &shown {
-                        let p = &r.pass;
-                        let up = p.rise_unix <= now;
-                        let name = RichText::new(&r.name).size(11.0);
-                        let name = if up { name.color(theme::GREEN()).strong() } else { name };
-                        if ui.selectable_label(win.selected == Some(r.norad_id), name).clicked() {
-                            picked = Some(r.norad_id);
-                        }
-                        ui.label(RichText::new(utc_and_local(p.rise_unix)).size(10.0));
-                        let when = if up {
-                            RichText::new("● up now").color(theme::GREEN())
-                        } else {
-                            RichText::new(in_words(p.rise_unix - now))
-                        };
-                        ui.label(when.size(10.0));
-                        let len = p.set_unix - p.rise_unix;
-                        ui.label(RichText::new(format!("{}:{:02}", len / 60, len % 60)).size(10.0));
-                        let peak = RichText::new(format!("{:.0}°", p.max_el)).size(10.0);
-                        ui.label(if p.max_el >= 45.0 { peak.color(theme::GREEN()) } else { peak });
-                        ui.label(
-                            RichText::new(format!(
-                                "{} → {}",
-                                sdroxide_solar::satellites::compass(p.rise_az),
-                                sdroxide_solar::satellites::compass(p.set_az)
-                            ))
-                            .size(10.0),
-                        );
-                        ui.end_row();
+                }
+            });
+            ui.add_space(2.0);
+            for (row_i, &i) in shown_idx.iter().enumerate() {
+                let r = &t.rows[i];
+                let p = &r.pass;
+                let up = p.rise_unix <= now;
+                // Every pass of the selected satellite — not only the row clicked.
+                let selected = selected_id == Some(r.norad_id);
+                let name = {
+                    let n = RichText::new(&r.name).size(11.0);
+                    if up && !selected {
+                        n.color(theme::GREEN()).strong()
+                    } else {
+                        n.strong()
                     }
-                },
-            );
+                };
+                let when = if up {
+                    let w = RichText::new("● up now").size(10.0);
+                    if selected { w } else { w.color(theme::GREEN()) }
+                } else {
+                    RichText::new(in_words(p.rise_unix - now)).size(10.0)
+                };
+                let len = p.set_unix - p.rise_unix;
+                let peak = {
+                    let pk = RichText::new(format!("{:.0}°", p.max_el)).size(10.0);
+                    if !selected && p.max_el >= 45.0 {
+                        pk.color(theme::GREEN())
+                    } else {
+                        pk
+                    }
+                };
+                let rise_az = sdroxide_solar::satellites::compass(p.rise_az);
+                let set_az = sdroxide_solar::satellites::compass(p.set_az);
+                let cells = [
+                    name,
+                    RichText::new(utc_and_local(p.rise_unix)).size(10.0),
+                    when,
+                    RichText::new(format!("{}:{:02}", len / 60, len % 60)).size(10.0),
+                    peak,
+                ];
+                let resp = sat_table_row_ws(
+                    ui,
+                    selected,
+                    &col_ws,
+                    COL_GAP,
+                    &cells,
+                    Some((rise_az, set_az)),
+                );
+                if resp.clicked() {
+                    picked = Some((r.norad_id, row_i));
+                }
+            }
         });
-        if let Some(id) = picked {
-            win.selected = Some(id);
-            win.link_idx = 0;
-            self.sat_tab = SatTab::Satellites;
+        if let Some(col) = sort_click {
+            if t.sort == col {
+                t.sort_asc = !t.sort_asc;
+            } else {
+                t.sort = col;
+                t.sort_asc = matches!(col, PassSort::Name | PassSort::Aos | PassSort::When);
+            }
+        }
+        if let Some((id, row_i)) = picked {
+            if win.selected == Some(id) {
+                // Second click on the already-selected bird: open it on Satellites
+                // with the list scrolled to the highlighted row.
+                win.link_idx = 0;
+                win.search.clear();
+                win.scroll_selected_into_view = true;
+                win.list_scroll_y = None;
+                self.sat_tab = SatTab::Satellites;
+            } else {
+                // First click: select this satellite alone and highlight every
+                // pass it has in this table — stay here so the group is visible.
+                win.selected = Some(id);
+                win.link_idx = 0;
+                win.passes_scroll_y = Some(sat_scroll_y_for_index(ui, row_i, passes_view_h));
+            }
         }
     }
 
@@ -1088,15 +2189,39 @@ impl SdroxideApp {
     }
 
     /// The picker: every satellite the station tracks, searchable, with the
-    /// published links of the chosen one and the TUNE / LOCK actions.
-    fn sat_picker(&mut self, ui: &mut egui::Ui, win: &mut SatWinState, cmds: &mut Vec<Command>) {
+    /// published links of the chosen one and the TUNE / LOCK / WATCH actions.
+    ///
+    /// When `watching_only`, only catalogue numbers on the persisted watch list
+    /// are shown (Watching tab).
+    fn sat_picker(
+        &mut self,
+        ui: &mut egui::Ui,
+        win: &mut SatWinState,
+        cmds: &mut Vec<Command>,
+        watching_only: bool,
+    ) {
         let dim = |s: &str| RichText::new(s).size(9.5).color(theme::CYAN_DIM());
         let now = crate::time::now_unix();
         let qth = sdroxide_types::grid_to_latlon(&self.my_grid());
+        let watching = self.sat_cfg.watching.clone();
 
         let list = win.list.as_mut().expect("built in sat_body");
 
-        ui.horizontal(|ui| {
+        if watching_only && watching.is_empty() {
+            ui.label(
+                RichText::new(
+                    "No satellites on the watch list. Select one on SATELLITES and press WATCH.",
+                )
+                .size(10.5)
+                .color(theme::CYAN_DIM()),
+            );
+            return;
+        }
+
+        // `horizontal_top` — plain `horizontal` centres on the cross axis and
+        // expands to the full remaining dock height, which parks the picker
+        // (and the Watching timeline under a selection) in the middle.
+        ui.horizontal_top(|ui| {
             ui.label(RichText::new("🔍").size(11.0));
             crate::chrome::field(
                 ui,
@@ -1117,12 +2242,21 @@ impl SdroxideApp {
         });
         ui.add_space(4.0);
 
+        // The tab's selection always stays in the listing — a search string must
+        // not hide the row the detail pane is open on (and a Watching pick must
+        // still appear even if search no longer matches).
+        let keep_id = if watching_only { win.watch_selected } else { win.selected };
+        let in_scope = |e: &SatEntry| {
+            let listed = e.matches(&win.search) && (!watching_only || watching.contains(&e.norad_id));
+            listed || keep_id == Some(e.norad_id)
+        };
+
         // Fill at most one pass memo per frame — see the module note.
         if let Some((lat, lon)) = qth {
             if let Some(e) = list
                 .entries
                 .iter_mut()
-                .filter(|e| e.matches(&win.search) && e.sat.is_some())
+                .filter(|e| in_scope(e) && e.sat.is_some())
                 .find(|e| e.pass.as_ref().is_none_or(|(at, _)| now - at > MEMO_FRESH_S))
             {
                 let sat = e.sat.as_ref().expect("filtered above");
@@ -1146,13 +2280,13 @@ impl SdroxideApp {
             }
         }
 
-        // Displayed rows: what matches, sorted into operating order — up now
-        // first (highest first), then whoever rises next.
+        // Displayed rows: what matches, then ordered by the heading the
+        // operator last clicked (load default: name — stable while memos fill).
         let mut rows: Vec<(usize, Option<f64>, i64)> = list
             .entries
             .iter()
             .enumerate()
-            .filter(|(_, e)| e.matches(&win.search))
+            .filter(|(_, e)| in_scope(e))
             .map(|(i, e)| {
                 let el = match (&e.sat, qth) {
                     (Some(s), Some((lat, lon))) => {
@@ -1168,83 +2302,215 @@ impl SdroxideApp {
                 (i, el, rise)
             })
             .collect();
+        let list_asc = win.list_sort_asc;
+        // Pass sort keys off memos that arrive one per frame — applying it
+        // before every in-scope memo is ready would reshuffle the list on
+        // every paint. Hold Name until the fill catches up; the PASS heading
+        // still shows as selected so the operator's choice is visible.
+        let pass_memos_pending = win.list_sort == ListSort::Pass
+            && rows.iter().any(|(i, _, _)| {
+                list.entries[*i].sat.is_some() && list.entries[*i].pass.is_none()
+            });
+        let list_sort = if pass_memos_pending { ListSort::Name } else { win.list_sort };
         rows.sort_by(|a, b| {
-            let vis_a = a.1.unwrap_or(-90.0) > 0.0;
-            let vis_b = b.1.unwrap_or(-90.0) > 0.0;
-            vis_b
-                .cmp(&vis_a)
-                .then_with(|| {
-                    if vis_a && vis_b {
-                        b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
-                    } else {
-                        a.2.cmp(&b.2)
-                    }
-                })
-                .then_with(|| list.entries[a.0].name.cmp(&list.entries[b.0].name))
-        });
-
-        // Full width, not content width: the grid hugs its text otherwise and
-        // leaves half the window empty with the scrollbar in the middle.
-        egui::ScrollArea::vertical().max_height(190.0).auto_shrink([false, true]).show(ui, |ui| {
-            let col_w = ((ui.available_width() - 2.0 * 14.0) / 3.0).max(80.0);
-            egui::Grid::new("sat-list")
-                .num_columns(3)
-                .min_col_width(col_w)
-                .spacing([14.0, 2.0])
-                .striped(true)
-                .show(ui, |ui| {
-                    ui.label(dim("SATELLITE"));
-                    ui.label(dim("NORAD"));
-                    ui.label(dim("PASS"));
-                    ui.end_row();
-                    for (i, el, _) in &rows {
-                        let e = &list.entries[*i];
-                        let selected = win.selected == Some(e.norad_id);
-                        let name = RichText::new(&e.name).size(11.0);
-                        // A selected row sits on the cyan selection fill, and
-                        // egui keeps the label's own color there — so it has
-                        // to be the dark on-cyan ink explicitly, the same ink
-                        // the accent chips use. The accents are for
-                        // unselected rows alone.
-                        let name = match el {
-                            _ if selected => name.color(theme::INK_ON_CYAN()).strong(),
-                            Some(el) if *el > 0.0 => name.color(theme::GREEN()).strong(),
-                            _ => name,
-                        };
-                        if ui.selectable_label(selected, name).clicked() {
-                            win.selected = if selected { None } else { Some(e.norad_id) };
-                            win.link_idx = 0;
+            let ord = match list_sort {
+                ListSort::Name => list.entries[a.0]
+                    .name
+                    .to_ascii_lowercase()
+                    .cmp(&list.entries[b.0].name.to_ascii_lowercase()),
+                ListSort::Norad => list.entries[a.0].norad_id.cmp(&list.entries[b.0].norad_id),
+                ListSort::Pass => {
+                    let vis_a = a.1.unwrap_or(-90.0) > 0.0;
+                    let vis_b = b.1.unwrap_or(-90.0) > 0.0;
+                    vis_b.cmp(&vis_a).then_with(|| {
+                        if vis_a && vis_b {
+                            b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+                        } else {
+                            a.2.cmp(&b.2)
                         }
-                        ui.label(RichText::new(e.norad_id.to_string()).size(10.0));
-                        let pass = match (el, &e.pass, &e.sat) {
-                            (Some(el), _, _) if *el > 0.0 => {
-                                RichText::new(format!("● up now, {el:.0}°")).color(theme::GREEN())
-                            }
-                            (_, Some((_, PassMemo::Pass(p))), _) => {
-                                RichText::new(in_words(p.rise_unix - now))
-                            }
-                            (_, Some((_, PassMemo::Always)), _) => {
-                                RichText::new("always visible").color(theme::GREEN())
-                            }
-                            (_, Some((_, PassMemo::Never)), _) => {
-                                RichText::new("not from here").color(theme::CYAN_DIM())
-                            }
-                            (_, None, None) => RichText::new("no elements").color(theme::YELLOW()),
-                            (_, None, Some(_)) => RichText::new("…"),
-                        };
-                        ui.label(pass.size(10.0));
-                        ui.end_row();
-                    }
-                });
+                    })
+                }
+            };
+            let ord = ord.then_with(|| list.entries[a.0].name.cmp(&list.entries[b.0].name));
+            if list_asc { ord } else { ord.reverse() }
         });
 
-        let Some(id) = win.selected else {
+        // Arrow keys walk the visible list (Satellites / Watching).
+        // Height: shrink to content when the list is short; grow into the
+        // remaining dock-slot height when there are hundreds of rows — never
+        // past `available_height`, so sibling dock chips keep their space.
+        const LIST_MIN_H: f32 = 80.0;
+        let row_ids: Vec<u64> = rows.iter().map(|(i, _, _)| list.entries[*i].norad_id).collect();
+        let tab_sel = if watching_only { win.watch_selected } else { win.selected };
+        let detail_open = tab_sel.is_some_and(|id| row_ids.contains(&id));
+        // Leave a usable strip for timeline / links / the "pick one" hint so
+        // the list does not eat the whole slot when a selection is open.
+        let detail_reserve = if detail_open {
+            if watching_only {
+                TIMELINE_H + 120.0
+            } else {
+                DIAGRAM_H_SMALL + 140.0
+            }
+        } else {
+            28.0
+        };
+        let row_h = sat_table_row_h(ui);
+        let list_content_h = row_h + 4.0 + rows.len() as f32 * row_h;
+        // Viewport = remaining dock height (capped). Content taller than this
+        // scrolls inside the ScrollArea — do not set max_height to content_h
+        // or the list expands past the slot and scrolling dies.
+        let list_budget = (ui.available_height() - detail_reserve).max(LIST_MIN_H);
+        let list_overflows = list_content_h > list_budget + 0.5;
+        let list_view_h = if list_overflows { list_budget } else { list_content_h };
+        if let Some(delta) = sat_arrow_delta(ui) {
+            let cur = if watching_only { win.watch_selected } else { win.selected };
+            if let Some(id) = sat_step_id(&row_ids, cur, delta) {
+                if watching_only {
+                    win.watch_selected = Some(id);
+                    win.watch_peak_pin = None;
+                } else {
+                    win.selected = Some(id);
+                }
+                if let Some(idx) = row_ids.iter().position(|&x| x == id) {
+                    win.list_scroll_y = Some(sat_scroll_y_for_index(ui, idx, list_view_h));
+                }
+                win.scroll_selected_into_view = false;
+                win.link_idx = 0;
+            }
+        }
+        // A jump that set the flag without an offset (PASSES / 3D) — resolve now.
+        if win.scroll_selected_into_view {
+            let id = if watching_only { win.watch_selected } else { win.selected };
+            if let Some(idx) = id.and_then(|id| row_ids.iter().position(|&x| x == id)) {
+                win.list_scroll_y = Some(sat_scroll_y_for_index(ui, idx, list_view_h));
+            }
+            win.scroll_selected_into_view = false;
+        }
+
+        let mut sort_click: Option<ListSort> = None;
+        let mut list_scroll = egui::ScrollArea::vertical()
+            .id_salt(if watching_only { "sat-watch-list" } else { "sat-list" })
+            .max_height(list_view_h)
+            // Overflowing lists keep a fixed viewport so the bar can scroll;
+            // short lists shrink to their rows.
+            .auto_shrink([false, !list_overflows]);
+        if let Some(y) = win.list_scroll_y.take() {
+            list_scroll = list_scroll.vertical_scroll_offset(y);
+        }
+        list_scroll.show(ui, |ui| {
+            const COLS: usize = 3;
+            const COL_GAP: f32 = 14.0;
+            let col_w =
+                ((ui.available_width() - COL_GAP * (COLS as f32 - 1.0)) / COLS as f32).max(80.0);
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = COL_GAP;
+                for (label, col) in [
+                    ("SATELLITE", ListSort::Name),
+                    ("NORAD", ListSort::Norad),
+                    ("PASS", ListSort::Pass),
+                ] {
+                    // Highlight the operator's choice even while Pass sort is
+                    // held at Name until memos finish filling.
+                    if sat_sort_heading(ui, col_w, label, win.list_sort == col, list_asc) {
+                        sort_click = Some(col);
+                    }
+                }
+            });
+            ui.add_space(2.0);
+            for (row_i, (i, el, _)) in rows.iter().enumerate() {
+                let e = &list.entries[*i];
+                let selected = if watching_only {
+                    win.watch_selected == Some(e.norad_id)
+                } else {
+                    win.selected == Some(e.norad_id)
+                };
+                let name = {
+                    let n = RichText::new(&e.name).size(11.0);
+                    match el {
+                        Some(el) if *el > 0.0 && !selected => n.color(theme::GREEN()).strong(),
+                        _ => n.strong(),
+                    }
+                };
+                let pass = match (el, &e.pass, &e.sat) {
+                    (Some(el), _, _) if *el > 0.0 => {
+                        let t = RichText::new(format!("● up now, {el:.0}°"));
+                        if selected { t } else { t.color(theme::GREEN()) }
+                    }
+                    (_, Some((_, PassMemo::Pass(p))), _) => RichText::new(in_words(p.rise_unix - now)),
+                    (_, Some((_, PassMemo::Always)), _) => {
+                        let t = RichText::new("always visible");
+                        if selected { t } else { t.color(theme::GREEN()) }
+                    }
+                    (_, Some((_, PassMemo::Never)), _) => {
+                        let t = RichText::new("not from here");
+                        if selected { t } else { t.color(theme::CYAN_DIM()) }
+                    }
+                    (_, None, None) => {
+                        let t = RichText::new("no elements");
+                        if selected { t } else { t.color(theme::YELLOW()) }
+                    }
+                    (_, None, Some(_)) => RichText::new("…"),
+                }
+                .size(10.0);
+                let norad = RichText::new(e.norad_id.to_string()).size(10.0);
+                let cells = [name, norad, pass];
+                let resp = sat_table_row(ui, selected, col_w, COL_GAP, &cells);
+                // Do not force-scroll every frame when the highlight is off-
+                // screen — that fights the operator's wheel / drag. Arrow keys
+                // and clicks set `list_scroll_y` explicitly.
+                if resp.clicked() {
+                    if watching_only {
+                        win.watch_selected = if selected { None } else { Some(e.norad_id) };
+                        win.watch_peak_pin = None;
+                    } else {
+                        win.selected = if selected { None } else { Some(e.norad_id) };
+                    }
+                    if !selected {
+                        win.list_scroll_y = Some(sat_scroll_y_for_index(ui, row_i, list_view_h));
+                    }
+                    win.link_idx = 0;
+                }
+            }
+        });
+        if let Some(col) = sort_click {
+            if win.list_sort == col {
+                win.list_sort_asc = !win.list_sort_asc;
+            } else {
+                win.list_sort = col;
+                win.list_sort_asc = true;
+            }
+        }
+
+        // Detail / graphs belong only to a satellite that is selected *and*
+        // still visible in this tab's list — a Satellites pick must not open
+        // the Watching timeline, and a filtered-out row keeps no peak diagram.
+        let tab_selected = if watching_only {
+            win.watch_selected
+        } else {
+            win.selected
+        };
+        let Some(id) = tab_selected.filter(|&id| {
+            rows.iter().any(|(i, _, _)| list.entries[*i].norad_id == id)
+        }) else {
             ui.add_space(4.0);
-            ui.label(dim("Pick a satellite to see its links and lock on."));
+            ui.label(dim(if watching_only {
+                "Pick a watched satellite to see its timeline, links and lock on."
+            } else {
+                "Pick a satellite to see its links and lock on."
+            }));
             return;
         };
+        // Drop a stale Watching pick that was unwatched while this tab was away.
+        if watching_only && !self.sat_cfg.is_watching(id) {
+            win.watch_selected = None;
+            return;
+        }
         let Some(entry_idx) = list.entries.iter().position(|e| e.norad_id == id) else {
-            win.selected = None;
+            if watching_only {
+                win.watch_selected = None;
+            } else {
+                win.selected = None;
+            }
             return;
         };
 
@@ -1254,6 +2520,14 @@ impl SdroxideApp {
             Some(f) => Some(f.clone()),
             None => sdroxide_solar::satfreq::builtin_for(id).cloned(),
         };
+        // Selection chrome (timeline / links / actions) scrolls in whatever
+        // height the list left — keeps the whole page inside this dock slot.
+        let detail_h = ui.available_height().max(48.0);
+        egui::ScrollArea::vertical()
+            .id_salt(if watching_only { "sat-watch-detail" } else { "sat-sat-detail" })
+            .max_height(detail_h)
+            .auto_shrink([false, true])
+            .show_themed(ui, |ui| {
         ui.add_space(6.0);
         ui.separator();
         ui.add_space(4.0);
@@ -1262,8 +2536,58 @@ impl SdroxideApp {
         // showing this one's. Ahead of the links on purpose: *when* it can be
         // worked comes before *how*, and a satellite with no frequencies on
         // file returns below this point without ever reaching the links.
+        //
+        // On the Watching tab the operator wants the whole day (or two): a
+        // multi-pass timeline with peak elevation and time on each bump, plus
+        // 24 h / 48 h chips — instead of the single next-pass profile.
         let locked_here = self.sat_track.as_ref().is_some_and(|t| t.norad_id == id);
-        if !locked_here {
+        if watching_only {
+            if qth.is_none() {
+                ui.label(
+                    RichText::new("Set your grid to see the pass timeline (Settings ▸ General).")
+                        .size(9.5)
+                        .color(theme::YELLOW()),
+                );
+                ui.add_space(4.0);
+            } else if list.entries[entry_idx].sat.is_none() {
+                ui.label(dim("No elements for this satellite — the timeline needs a TLE."));
+                ui.add_space(4.0);
+            } else if let Some((lat, lon)) = qth {
+                // Top-aligned — `left_to_right(Align::Center)` expands to the
+                // remaining height and centres this strip mid-panel.
+                ui.horizontal_top(|ui| {
+                    ui.spacing_mut().item_spacing.x = 4.0;
+                    ui.label(dim("WATCHING"));
+                    for &h in WATCH_SPANS_H {
+                        if crate::chrome::chip(ui, win.watch_span_h == h, format!("{h}h"))
+                            .clicked()
+                        {
+                            win.watch_span_h = h;
+                            win.watch_peak_pin = None;
+                        }
+                    }
+                });
+                ui.add_space(4.0);
+                let sat = list.entries[entry_idx].sat.as_ref().expect("checked above");
+                let span_h = win.watch_span_h;
+                timeline_for(&mut win.watch_timeline, id, sat, lat, lon, span_h, now);
+                let tl = win.watch_timeline.as_ref().expect("just built");
+                pass_timeline(ui, tl, now, TIMELINE_H, &mut win.watch_peak_pin);
+                if let TimelineKind::Passes(passes) = &tl.kind {
+                    if let Some(next) = passes.iter().find(|p| p.max_el_unix >= now) {
+                        ui.add_space(2.0);
+                        ui.label(dim(&format!(
+                            "Next peak {:.0}° {} · AOS {} · LOS {}",
+                            next.max_el,
+                            utc_date_and_local(next.max_el_unix),
+                            utc_date_and_local(next.rise_unix),
+                            utc_date_and_local(next.set_unix),
+                        )));
+                    }
+                }
+                ui.add_space(6.0);
+            }
+        } else if !locked_here {
             let e = &list.entries[entry_idx];
             if let (Some(sat), Some((_, PassMemo::Pass(pass))), Some((lat, lon))) =
                 (e.sat.as_ref(), e.pass.as_ref(), qth)
@@ -1333,7 +2657,8 @@ impl SdroxideApp {
         }
         ui.add_space(6.0);
 
-        ui.horizontal(|ui| {
+        let watching_here = self.sat_cfg.is_watching(id);
+        ui.horizontal_top(|ui| {
             if crate::chrome::chip(ui, false, "TUNE")
                 .on_hover_text("Set the dial and mode to this link — no lock, no correction")
                 .clicked()
@@ -1349,12 +2674,14 @@ impl SdroxideApp {
                     mode: mode_for_link(link),
                 });
             }
+            // Green fill needs [`theme::INK_ON_BRIGHT`], not the cyan-chip ink —
+            // several themes' greens are mid-bright and wash out dark `INK_ON_CYAN`.
             if crate::chrome::chip_accent(
                 ui,
                 locked_here,
-                RichText::new(if locked_here { " LOCKED " } else { " LOCK ON " }).strong(),
+                if locked_here { " LOCKED " } else { " LOCK ON " },
                 theme::GREEN(),
-                theme::INK_ON_CYAN(),
+                theme::INK_ON_BRIGHT(),
             )
             .on_hover_text(
                 "Track this satellite: Doppler correction on RX and TX, transponder-mapped \
@@ -1381,7 +2708,43 @@ impl SdroxideApp {
                 cmds.push(Command::SetSatLock(Some(Box::new(cfg.clone()))));
                 win.sent = Some(cfg);
             }
+            if crate::chrome::chip(
+                ui,
+                watching_here,
+                if watching_here { "WATCHING" } else { "WATCH" },
+            )
+            .on_hover_text(if watching_here {
+                "Remove this satellite from the Watching tab"
+            } else {
+                "Add this satellite to the Watching tab"
+            })
+            .clicked()
+            {
+                let watch = !watching_here;
+                self.sat_toggle_watching(id, watch, cmds);
+                if !watch && win.watch_selected == Some(id) {
+                    win.watch_selected = None;
+                    win.watch_peak_pin = None;
+                    win.watch_timeline = None;
+                }
+            }
         });
+            }); // selection detail ScrollArea
+    }
+
+    /// Persist a watch-list change the same way Settings writes satellite
+    /// config — through `SetSatConfig`, so the engine keeps it across restarts.
+    fn sat_toggle_watching(&mut self, norad_id: u64, watch: bool, cmds: &mut Vec<Command>) {
+        if !self.sat_cfg_seeded {
+            return;
+        }
+        let mut edit = (*self.sat_cfg).clone();
+        if !edit.set_watching(norad_id, watch) {
+            return;
+        }
+        self.sat_cfg_edit = edit.clone();
+        self.sat_cfg = std::sync::Arc::new(edit.clone());
+        cmds.push(Command::SetSatConfig(edit));
     }
 
     /// Lock on from outside the window — the 3D view's LOCK button lands
@@ -1391,8 +2754,11 @@ impl SdroxideApp {
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(in crate::app) fn sat_lock_request(&mut self, norad_id: u64, cmds: &mut Vec<Command>) {
         self.show_sat = true;
+        self.sat_tab = SatTab::Satellites;
         self.sat_win.selected = Some(norad_id);
         self.sat_win.link_idx = 0;
+        self.sat_win.search.clear();
+        self.sat_win.scroll_selected_into_view = true;
         let freqs = match self.sat_cfg.freqs_for(norad_id) {
             Some(f) => Some(f.clone()),
             None => sdroxide_solar::satfreq::builtin_for(norad_id).cloned(),

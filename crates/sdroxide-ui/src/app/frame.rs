@@ -1176,6 +1176,10 @@ impl eframe::App for SdroxideApp {
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         eframe::set_value(storage, &self.view_key, &self.view);
+        // System dock column: which overlays are pinned, collapse, weights and
+        // width — per radio, like the view, so a docked SAT comes back on
+        // reopen instead of as a floating window.
+        eframe::set_value(storage, &self.system_dock_key, &self.system_dock_snapshot());
         // Per-browser remote seat (mode/dial/RX). Written by every remote tab
         // for its own radio id — not gated on station_writer.
         if self.seat_persist_ready && self.ctrl.engine_is_remote() {
@@ -1729,6 +1733,14 @@ impl SdroxideApp {
                     }
                 }
                 RadioEvent::TleSubStatus(s) => self.on_tle_sub_status(s),
+                RadioEvent::SatTleListing(text) => {
+                    if self.sat_tle_listing != text {
+                        self.sat_tle_listing = text;
+                        // Force the SAT picker to rebuild rows with the new
+                        // elements (source_key includes a listing fingerprint).
+                        self.sat_win.invalidate_list();
+                    }
+                }
                 RadioEvent::SatTrack(t) => self.sat_track = t.map(|t| *t),
                 RadioEvent::RotatorStatus { connected, az_deg, el_deg, error } => {
                     self.rotator_status = Some((connected, az_deg, el_deg, error));

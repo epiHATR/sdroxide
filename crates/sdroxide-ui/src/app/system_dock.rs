@@ -15,6 +15,32 @@ use super::{SdroxideApp, SystemWasOpen};
 #[derive(Clone, Copy)]
 struct DraggedSystemDock(SystemDock);
 
+#[cfg(test)]
+mod persist_id_tests {
+    use super::SystemDock;
+
+    #[test]
+    fn every_dock_kind_round_trips_through_its_persist_id() {
+        for kind in [
+            SystemDock::Logbook,
+            SystemDock::Spots,
+            SystemDock::Awards,
+            SystemDock::Bands,
+            SystemDock::Sat,
+            SystemDock::Ism,
+            SystemDock::PublicSdrs,
+            SystemDock::Mail,
+            SystemDock::Memories,
+            SystemDock::Scanner,
+            SystemDock::Grid,
+            SystemDock::Settings,
+        ] {
+            assert_eq!(SystemDock::from_persist_id(kind.persist_id()), Some(kind));
+        }
+        assert_eq!(SystemDock::from_persist_id("nope"), None);
+    }
+}
+
 /// Which System-strip overlay is snapped into the right panel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(in crate::app) enum SystemDock {
@@ -48,6 +74,43 @@ impl SystemDock {
             Self::Grid => "GRID TRACKER",
             Self::Settings => "SETTINGS",
         }
+    }
+
+    /// Stable id for the dock snapshot on disk — not the title string, so a
+    /// renamed overlay still restores.
+    pub(in crate::app) fn persist_id(self) -> &'static str {
+        match self {
+            Self::Logbook => "logbook",
+            Self::Spots => "spots",
+            Self::Awards => "awards",
+            Self::Bands => "bands",
+            Self::Sat => "sat",
+            Self::Ism => "ism",
+            Self::PublicSdrs => "public_sdrs",
+            Self::Mail => "mail",
+            Self::Memories => "memories",
+            Self::Scanner => "scanner",
+            Self::Grid => "grid",
+            Self::Settings => "settings",
+        }
+    }
+
+    pub(in crate::app) fn from_persist_id(id: &str) -> Option<Self> {
+        Some(match id {
+            "logbook" => Self::Logbook,
+            "spots" => Self::Spots,
+            "awards" => Self::Awards,
+            "bands" => Self::Bands,
+            "sat" => Self::Sat,
+            "ism" => Self::Ism,
+            "public_sdrs" => Self::PublicSdrs,
+            "mail" => Self::Mail,
+            "memories" => Self::Memories,
+            "scanner" => Self::Scanner,
+            "grid" => Self::Grid,
+            "settings" => Self::Settings,
+            _ => return None,
+        })
     }
 
     fn open_flag(self, app: &SdroxideApp) -> bool {
@@ -125,8 +188,81 @@ const SYSTEM_DOCK_ROW_HANDLE_H: f32 = 7.0;
 const SYSTEM_DOCK_SEP_H: f32 = 6.0;
 /// Expanded slot floor: three header heights (header + body + grip).
 const SYSTEM_DOCK_SLOT_MIN_H: f32 = SYSTEM_DOCK_COLLAPSED_H * 3.0;
+/// With two or more *expanded* overlays, no single slot may take more than
+/// this fraction of the dock column. One expanded item ignores the cap and
+/// fills the leftover height (collapsed headers still keep their strip).
+const SYSTEM_DOCK_SLOT_MAX_FRACTION: f32 = 0.5;
 
 impl SdroxideApp {
+    /// Snapshot of the dock column for persistence (order, collapse, weights,
+    /// width fraction). Open flags are implied: every entry in `order` is open.
+    pub(in crate::app) fn system_dock_snapshot(&self) -> crate::app::persist::SystemDockSnapshot {
+        crate::app::persist::SystemDockSnapshot {
+            order: self.system_dock.iter().map(|k| k.persist_id().to_string()).collect(),
+            collapsed: self
+                .system_dock_collapsed
+                .iter()
+                .filter(|k| self.system_dock.contains(k))
+                .map(|k| k.persist_id().to_string())
+                .collect(),
+            weights: self
+                .system_dock_weights
+                .iter()
+                .filter(|(k, _)| self.system_dock.contains(k))
+                .map(|(k, w)| (k.persist_id().to_string(), *w))
+                .collect(),
+            fraction: self.system_dock_fraction.clamp(0.15, SYSTEM_DOCK_MAX_FRACTION),
+        }
+    }
+
+    /// Restore a previously saved dock column and re-open each pinned overlay.
+    pub(in crate::app) fn apply_system_dock_snapshot(
+        &mut self,
+        snap: &crate::app::persist::SystemDockSnapshot,
+    ) {
+        let mut order = Vec::new();
+        for id in &snap.order {
+            let Some(kind) = SystemDock::from_persist_id(id) else { continue };
+            if order.contains(&kind) {
+                continue;
+            }
+            order.push(kind);
+            kind.set_open(self, true);
+        }
+        let mut collapsed = std::collections::HashSet::new();
+        for id in &snap.collapsed {
+            if let Some(kind) = SystemDock::from_persist_id(id) {
+                if order.contains(&kind) {
+                    collapsed.insert(kind);
+                }
+            }
+        }
+        let mut weights = HashMap::new();
+        for (id, w) in &snap.weights {
+            if let Some(kind) = SystemDock::from_persist_id(id) {
+                if order.contains(&kind) {
+                    weights.insert(kind, (*w).max(0.05));
+                }
+            }
+        }
+        // Any docked overlay missing a weight gets the mean so restore does not
+        // leave a 1 px stub next to absolute pixel weights from a prior drag.
+        if !order.is_empty() {
+            let mean = if weights.is_empty() {
+                1.0
+            } else {
+                weights.values().sum::<f32>() / weights.len() as f32
+            };
+            for &kind in &order {
+                weights.entry(kind).or_insert(mean.max(1.0));
+            }
+        }
+        self.system_dock = order;
+        self.system_dock_collapsed = collapsed;
+        self.system_dock_weights = weights;
+        self.system_dock_fraction = snap.fraction.clamp(0.15, SYSTEM_DOCK_MAX_FRACTION);
+    }
+
     /// Whether this overlay is snapped into the right panel (expanded or collapsed).
     ///
     /// Collapsed items still count as docked so their floating window stays
@@ -207,25 +343,53 @@ impl SdroxideApp {
             .max(SYSTEM_DOCK_COLLAPSED_H)
     }
 
-    /// Split `body_pool` across expanded overlays by weight, honoring `body_min`
-    /// whenever the pool is large enough.
+    /// Chrome inside one expanded slot: header + separator + row grip.
+    fn system_dock_expand_chrome() -> f32 {
+        SYSTEM_DOCK_COLLAPSED_H + SYSTEM_DOCK_SEP_H + SYSTEM_DOCK_ROW_HANDLE_H
+    }
+
+    /// Per-body ceiling when several overlays are expanded: each slot ≤ half
+    /// the column, so the body max is half the column minus that slot's chrome.
+    fn system_dock_body_cap(col_h: f32, n_expanded: usize) -> Option<f32> {
+        if n_expanded <= 1 {
+            return None;
+        }
+        let slot_max = (col_h * SYSTEM_DOCK_SLOT_MAX_FRACTION).max(0.0);
+        Some((slot_max - Self::system_dock_expand_chrome()).max(Self::system_dock_body_min()))
+    }
+
+    /// Split `body_pool` across expanded overlays.
+    ///
+    /// - **One** expanded item → takes the whole pool (full remaining column).
+    /// - **Two or more** → share by weight, each capped at half the dock
+    ///   column ([`SYSTEM_DOCK_SLOT_MAX_FRACTION`]), then redistribute leftover
+    ///   to slots still under the cap so the column stays filled when possible.
     fn system_dock_body_heights(
         &self,
         expanded: &[SystemDock],
         body_pool: f32,
         body_min: f32,
+        body_cap: Option<f32>,
     ) -> HashMap<SystemDock, f32> {
         let mut out = HashMap::new();
         let n = expanded.len();
         if n == 0 || body_pool <= 0.0 {
             return out;
         }
+
+        // Single expanded overlay: fill the column (minus collapsed strips).
+        if n == 1 {
+            out.insert(expanded[0], body_pool.max(0.0));
+            return out;
+        }
+
         let n_f = n as f32;
+        let cap = body_cap.unwrap_or(body_pool).max(body_min);
         // When the column cannot fit every min, share the pool evenly.
         if body_pool < body_min * n_f {
             let each = body_pool / n_f;
             for &k in expanded {
-                out.insert(k, each);
+                out.insert(k, each.min(cap));
             }
             return out;
         }
@@ -235,8 +399,9 @@ impl SdroxideApp {
         let mut heights: Vec<(SystemDock, f32)> = expanded
             .iter()
             .map(|&k| {
-                let h = body_pool * (self.system_dock_weight(k) / weight_sum);
-                (k, h)
+                // Ideal = weight share of the pool, then clamp to [min, cap].
+                let ideal = body_pool * (self.system_dock_weight(k) / weight_sum);
+                (k, ideal.clamp(body_min, cap))
             })
             .collect();
 
@@ -263,16 +428,28 @@ impl SdroxideApp {
             }
         }
 
-        // Exact fill — float error or donor shortfall leaves a remainder.
-        let used: f32 = heights.iter().map(|(_, h)| *h).sum();
-        let rem = body_pool - used;
-        if rem.abs() > 0.25 {
-            if let Some((_, h)) = heights
-                .iter_mut()
-                .filter(|(_, h)| *h + rem >= body_min)
-                .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
-            {
-                *h += rem;
+        // Cap may leave unused pool — grow slots still under the ceiling.
+        let mut guard = 0;
+        while guard < 8 {
+            guard += 1;
+            let used: f32 = heights.iter().map(|(_, h)| *h).sum();
+            let rem = body_pool - used;
+            if rem <= 0.25 {
+                break;
+            }
+            let room: Vec<usize> = heights
+                .iter()
+                .enumerate()
+                .filter(|(_, (_, h))| *h + 0.25 < cap)
+                .map(|(i, _)| i)
+                .collect();
+            if room.is_empty() {
+                break;
+            }
+            let room_w: f32 = room.iter().map(|&i| self.system_dock_weight(heights[i].0)).sum::<f32>().max(0.05);
+            for i in room {
+                let share = rem * (self.system_dock_weight(heights[i].0) / room_w);
+                heights[i].1 = (heights[i].1 + share).min(cap);
             }
         }
 
@@ -429,8 +606,9 @@ impl SdroxideApp {
         let expanded: Vec<SystemDock> =
             docked.iter().copied().filter(|k| !collapsed.contains(k)).collect();
         let body_min = Self::system_dock_body_min();
-        // Chrome inside an expanded slot: header + separator + row grip.
-        let expand_chrome = SYSTEM_DOCK_COLLAPSED_H + SYSTEM_DOCK_SEP_H + SYSTEM_DOCK_ROW_HANDLE_H;
+        let expand_chrome = Self::system_dock_expand_chrome();
+        // Captured for the post-panel drag clamp (50% of column when n ≥ 2).
+        let mut layout_col_h = 0.0_f32;
 
         // Handle sits inside the panel on the inner (main-facing) edge — egui's
         // own Panel resize separator is a plain line, not the three-dash chrome
@@ -471,6 +649,7 @@ impl SdroxideApp {
                                     let gap = 4.0;
                                     let gaps = gap * (n.saturating_sub(1) as f32);
                                     let col_h = ui.available_height().max(0.0);
+                                    layout_col_h = col_h;
                                     let avail_w = ui.available_width();
                                     let n_expanded = expanded.len();
                                     let n_collapsed = n - n_expanded;
@@ -481,10 +660,13 @@ impl SdroxideApp {
                                         - collapsed_h
                                         - expand_chrome * n_expanded as f32)
                                         .max(0.0);
+                                    let body_cap =
+                                        Self::system_dock_body_cap(col_h, n_expanded);
                                     let body_heights = self.system_dock_body_heights(
                                         &expanded,
                                         body_pool,
                                         body_min,
+                                        body_cap,
                                     );
 
                                     for (i, kind) in docked.iter().copied().enumerate() {
@@ -828,12 +1010,22 @@ impl SdroxideApp {
                     self.system_dock_weights.insert(*k, rect.height().max(0.05));
                 }
                 // Trade body pixels 1:1 — same feel as digi / waterfall splits.
+                // Keep each side under the multi-item 50% column cap.
                 let ha = body_rects.get(&a).map(|r| r.height()).unwrap_or(body_min);
                 let hb = body_rects.get(&b).map(|r| r.height()).unwrap_or(body_min);
                 let pair_px = (ha + hb).max(1.0);
-                let lo = body_min.min(pair_px * 0.5);
-                let new_ha = (ha + dy).clamp(lo, pair_px - lo);
-                let new_hb = pair_px - new_ha;
+                let cap = Self::system_dock_body_cap(layout_col_h, expanded.len())
+                    .unwrap_or(pair_px)
+                    .min(pair_px - body_min);
+                let lo = body_min.min(cap);
+                let new_ha = (ha + dy).clamp(lo, cap);
+                let new_hb = (pair_px - new_ha).clamp(lo, cap);
+                // If the pair no longer sums (both at cap), keep the drag side.
+                let new_hb = if (new_ha + new_hb - pair_px).abs() > 0.5 {
+                    pair_px - new_ha
+                } else {
+                    new_hb
+                };
                 self.system_dock_weights.insert(a, new_ha.max(0.05));
                 self.system_dock_weights.insert(b, new_hb.max(0.05));
             }

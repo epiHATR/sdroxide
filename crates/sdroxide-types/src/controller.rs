@@ -413,6 +413,10 @@ pub enum RadioEvent {
         id: u64,
         pcm: Vec<f32>,
     },
+    /// Amalgamated TLE listing (pasted + subscription caches) for remote /
+    /// wasm SAT pickers that have no disk cache. Emitted with station config
+    /// and after a TLE refresh. Appended last, for the usual reason.
+    SatTleListing(String),
 }
 
 /// Snapshot of the frontend's switchable sound devices (native clients).

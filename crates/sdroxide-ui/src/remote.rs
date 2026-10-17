@@ -486,6 +486,9 @@ impl RemoteController {
             }
             ServerMsg::StationConfig(c) => self.pending.push_back(RadioEvent::StationConfig(c)),
             ServerMsg::TleSubStatus(s) => self.pending.push_back(RadioEvent::TleSubStatus(s)),
+            ServerMsg::SatTleListing(text) => {
+                self.pending.push_back(RadioEvent::SatTleListing(text))
+            }
             ServerMsg::SatTrack(t) => self.pending.push_back(RadioEvent::SatTrack(t)),
             ServerMsg::RotatorStatus { connected, az_deg, el_deg, error } => self
                 .pending

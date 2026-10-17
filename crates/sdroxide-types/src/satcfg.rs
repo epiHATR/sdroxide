@@ -590,6 +590,11 @@ pub struct SatConfig {
     /// existed *and* to one where the operator has deliberately removed them.
     /// This way they arrive exactly once, and unsubscribing sticks.
     pub seeded: bool,
+    /// Catalogue numbers the operator is watching — the SAT window's Watching
+    /// tab. Order is the order they were added; duplicates are not stored.
+    /// Trailing field: wire peers must bump `sdroxide-proto::PROTO_VERSION`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub watching: Vec<u64>,
 }
 
 impl SatConfig {
@@ -632,6 +637,26 @@ impl SatConfig {
     /// with an empty list.
     pub fn prune(&mut self) {
         self.freqs.retain(|f| !f.links.is_empty());
+    }
+
+    /// True when this catalogue number is on the operator's watch list.
+    pub fn is_watching(&self, norad_id: u64) -> bool {
+        self.watching.contains(&norad_id)
+    }
+
+    /// Add or remove a satellite from the watch list. Returns whether the list
+    /// changed.
+    pub fn set_watching(&mut self, norad_id: u64, watch: bool) -> bool {
+        let has = self.watching.contains(&norad_id);
+        if watch == has {
+            return false;
+        }
+        if watch {
+            self.watching.push(norad_id);
+        } else {
+            self.watching.retain(|&id| id != norad_id);
+        }
+        true
     }
 
     /// Catalogue numbers of the enabled pasted element sets — the ones that
@@ -914,6 +939,21 @@ ISS (ZARYA)
     }
 
     #[test]
+    fn watching_adds_and_removes_without_duplicates() {
+        let mut cfg = SatConfig::default();
+        assert!(!cfg.is_watching(25544));
+        assert!(cfg.set_watching(25544, true));
+        assert!(cfg.is_watching(25544));
+        assert!(!cfg.set_watching(25544, true), "second add is a no-op");
+        assert_eq!(cfg.watching, vec![25544]);
+        assert!(cfg.set_watching(25544, false));
+        assert!(cfg.watching.is_empty());
+        // An old file without the field still loads with an empty list.
+        let old: SatConfig = serde_json::from_str(r#"{"seeded":true}"#).expect("loads");
+        assert!(old.watching.is_empty());
+    }
+
+    #[test]
     fn a_fresh_config_is_seeded_with_the_amateur_satellites_and_the_iss() {
         let mut cfg = SatConfig::default();
         assert!(cfg.subs.is_empty() && !cfg.seeded);
@@ -968,6 +1008,7 @@ ISS (ZARYA)
             subs: vec![TleSubscription::new("Weather", CELESTRAK_GROUPS[2].url)],
             freqs: Vec::new(),
             seeded: true,
+            watching: Vec::new(),
         };
         cfg.subs[0].only = vec![25338, 33591];
         cfg.freqs_for_mut(25544, "ISS").links.push(

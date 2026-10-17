@@ -12482,6 +12482,16 @@ impl Engine {
     fn emit_tle_sub_status(&self) {
         let status = sdroxide_solar::tlesub::status_all(&self.sat_cfg.subs);
         let _ = self.event_tx.send(RadioEvent::TleSubStatus(status));
+        self.emit_sat_tle_listing();
+    }
+
+    /// Amalgamated element listing for remote / wasm SAT pickers (no disk cache).
+    fn emit_sat_tle_listing(&self) {
+        let text = sdroxide_solar::tlesub::amalgamated_text(
+            &self.sat_cfg.tle_text(),
+            &self.sat_cfg.subs,
+        );
+        let _ = self.event_tx.send(RadioEvent::SatTleListing(text));
     }
 
     /// Re-fetch every enabled TLE subscription, off the engine thread.
@@ -12516,6 +12526,7 @@ impl Engine {
             }
         };
         let _ = self.event_tx.send(RadioEvent::TleSubStatus(status));
+        self.emit_sat_tle_listing();
     }
 
     // ── Satellite lock ──────────────────────────────────────────────────────

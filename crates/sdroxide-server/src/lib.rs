@@ -234,6 +234,8 @@ pub(crate) struct Latest {
     /// What each TLE subscription's cached listing holds, alongside the config
     /// it annotates.
     pub tle_subs: Vec<sdroxide_types::TleSubStatus>,
+    /// Amalgamated TLE text for remote SAT pickers — replayed on connect.
+    pub sat_tle_listing: Option<String>,
     /// The satellite lock's latest status. Replayed on connect because a lock
     /// is a *condition*: a client attaching mid-pass has to see it now, not at
     /// the next half-second tick — and above all must not offer to start a
@@ -1615,6 +1617,10 @@ fn handle_event(shared: &Shared, ev: RadioEvent) {
             RadioEvent::TleSubStatus(s) => {
                 latest.tle_subs = s.clone();
                 Some(ServerMsg::TleSubStatus(s))
+            }
+            RadioEvent::SatTleListing(text) => {
+                latest.sat_tle_listing = Some(text.clone());
+                Some(ServerMsg::SatTleListing(text))
             }
             RadioEvent::RadioConfig(c) => {
                 latest.radio = Some(c.clone());

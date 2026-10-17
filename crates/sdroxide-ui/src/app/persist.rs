@@ -125,6 +125,57 @@ mod remote_seat_tests {
     }
 }
 
+// ── System-strip dock column (eframe storage, per radio like the view) ───────
+
+/// What was pinned into the right-hand System dock when the session last
+/// saved — order, collapse, body-weight shares, and column width fraction.
+///
+/// Restored on open so a docked SAT / SETTINGS / … column comes back instead of
+/// every overlay starting as a floating window again. Floating window geometry
+/// itself is egui's memory (`persist_egui_memory`); this is only the dock.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SystemDockSnapshot {
+    /// Docked overlays, top → bottom, as stable persist-id strings.
+    pub order: Vec<String>,
+    /// Subset of `order` that were collapsed to a header strip.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub collapsed: Vec<String>,
+    /// Relative body shares `(persist_id, weight)` for expanded slots.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub weights: Vec<(String, f32)>,
+    /// Fraction of the main content width the dock column took.
+    pub fraction: f32,
+}
+
+impl Default for SystemDockSnapshot {
+    fn default() -> Self {
+        Self {
+            order: Vec::new(),
+            collapsed: Vec::new(),
+            weights: Vec::new(),
+            fraction: 0.35,
+        }
+    }
+}
+
+pub(in crate::app) fn system_dock_key(radio_id: u32) -> String {
+    if radio_id == 0 {
+        "system_dock".into()
+    } else {
+        format!("system_dock:{radio_id}")
+    }
+}
+
+pub(in crate::app) fn load_system_dock(
+    storage: Option<&dyn eframe::Storage>,
+    radio_id: u32,
+) -> SystemDockSnapshot {
+    storage
+        .and_then(|s| eframe::get_value(s, &system_dock_key(radio_id)))
+        .unwrap_or_default()
+}
+
 // ── Logbook persistence (native: config-dir JSON; wasm: eframe storage) ──────
 #[cfg(not(target_arch = "wasm32"))]
 pub(in crate::app) fn load_qso_log(_storage: Option<&dyn eframe::Storage>) -> Vec<QsoRecord> {

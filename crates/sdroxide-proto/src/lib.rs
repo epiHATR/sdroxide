@@ -1563,7 +1563,14 @@ use sdroxide_types::{
 /// `DetachListener` / `ListenerSet*` (server rewrites per-session dial
 /// commands). Wire break only if an old peer must reject new commands cleanly;
 /// `RadioState` layout is unchanged (listener dial is overlaid per session).
-pub const PROTO_VERSION: u16 = 183;
+///
+/// v184: `SatConfig.watching` — catalogue numbers on the SAT Watching tab.
+/// Trailing field on the postcard layout of `SetSatConfig` / `StationConfig`.
+///
+/// v185: `ServerMsg::SatTleListing` / `RadioEvent::SatTleListing` — amalgamated
+/// pasted+subscription TLE text so a wasm SAT picker can show pass times
+/// (browser has no host disk cache).
+pub const PROTO_VERSION: u16 = 185;
 const VERSION_BYTE: u8 = 0x12;
 
 #[derive(Debug, thiserror::Error)]
@@ -2027,6 +2034,11 @@ pub enum ServerMsg {
     ///
     /// Appended last, for the usual reason.
     Rs41Status(Box<sdroxide_types::Rs41Status>),
+    /// Amalgamated TLE listing for the remote SAT picker — pasted sets plus
+    /// every enabled subscription's cached text. Cached and replayed on
+    /// connect so the browser does not sit on "no elements" until the next
+    /// refresh. Appended last, for the usual reason.
+    SatTleListing(String),
 }
 
 /// One radio in a station's roster, as a client sees it.
@@ -2423,6 +2435,7 @@ mod tests {
                 vec![SatLink::down("APT", "FM", Passband::at(137.1))],
             )],
             seeded: true,
+            watching: vec![43_017],
         };
         let msgs = [
             ServerMsg::StationConfig(Box::new(StationConfig { sat: sat.clone(), ..no_station() })),

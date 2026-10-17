@@ -1037,6 +1037,10 @@ pub struct SdroxideApp {
     /// are fetched — and cached — on the machine the engine runs on, which is
     /// the only one a browser client can reach.
     sat_cfg: std::sync::Arc<sdroxide_types::SatConfig>,
+    /// Amalgamated TLE listing from the engine (pasted + subscription caches).
+    /// Native SAT pickers can read the disk cache directly; remote / wasm
+    /// clients fill rows from this instead.
+    sat_tle_listing: String,
     /// The settings dialog's working copy, its transient state, and what each
     /// subscription's last fetch did.
     sat_cfg_edit: sdroxide_types::SatConfig,
@@ -1122,6 +1126,8 @@ pub struct SdroxideApp {
     /// radio 0 — so a single-radio install keeps its saved layout — and
     /// `"view:<id>"` for every other radio.
     view_key: String,
+    /// Sibling of [`Self::view_key`] for the System dock column snapshot.
+    system_dock_key: String,
     /// Multi-radio: another tab may append to the logbook file between this
     /// copy's reads, so re-read it before appending. False when this is the
     /// only instance, where the copy in memory is always current.
@@ -1361,9 +1367,11 @@ impl SdroxideApp {
         // Radio 0 keeps the historical key, so an existing installation keeps
         // its saved layout.
         let view_key = if radio_id == 0 { "view".to_string() } else { format!("view:{radio_id}") };
+        let system_dock_key = persist::system_dock_key(radio_id);
         let mut view: ViewState =
             storage.and_then(|s| eframe::get_value(s, &view_key)).unwrap_or_default();
         view.migrate();
+        let dock_snap = persist::load_system_dock(storage, radio_id);
         // Copied out before `view` is moved into the struct below.
         #[cfg(not(target_arch = "wasm32"))]
         let solar3d_view = view.solar3d;
@@ -1372,7 +1380,7 @@ impl SdroxideApp {
         let remote = ctrl.engine_is_remote();
         let seat_restore =
             if remote { persist::load_remote_seat(storage, radio_id) } else { None };
-        SdroxideApp {
+        let mut app = SdroxideApp {
             ctrl,
             display_class,
             wf_row_scale: 1.0,
@@ -1705,6 +1713,7 @@ impl SdroxideApp {
             #[cfg(not(target_arch = "wasm32"))]
             solar: crate::solar3d::Solar3d::new(wgpu_render_state, solar3d_view),
             sat_cfg: Default::default(),
+            sat_tle_listing: String::new(),
             sat_cfg_edit: Default::default(),
             sat_cfg_seeded: false,
             sat_track: None,
@@ -1736,6 +1745,7 @@ impl SdroxideApp {
             focused: true,
             station_writer,
             view_key,
+            system_dock_key,
             shared_log: false,
             radio_id,
             radio_roster: Vec::new(),
@@ -1744,7 +1754,9 @@ impl SdroxideApp {
             can_add_radio: false,
             radio_tab_requests: Vec::new(),
             radio_name_edit: None,
-        }
+        };
+        app.apply_system_dock_snapshot(&dock_snap);
+        app
     }
 
     /// Set the focus flag without side effects — used while a multi-radio

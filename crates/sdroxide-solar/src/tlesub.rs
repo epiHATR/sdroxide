@@ -63,6 +63,28 @@ pub fn cached_text(cache: &Cache, sub: &TleSubscription) -> Option<String> {
     cache.read_string(&cache_name(&sub.url))
 }
 
+/// Pasted sets plus every enabled subscription's cached listing, as one
+/// three-line element block — what a remote / wasm SAT picker needs because it
+/// has no disk cache of its own.
+///
+/// Pasted text goes first so duplicates keep the operator's copy (same rule as
+/// the solar feed's browser relay).
+pub fn amalgamated_text(pasted: &str, subs: &[TleSubscription]) -> String {
+    let cache = Cache::open();
+    let mut out = String::new();
+    if !pasted.trim().is_empty() {
+        out.push_str(pasted.trim_end());
+        out.push('\n');
+    }
+    for sub in subs.iter().filter(|s| s.enabled && s.is_valid()) {
+        if let Some(text) = cached_text(&cache, sub) {
+            out.push_str(text.trim_end());
+            out.push('\n');
+        }
+    }
+    out
+}
+
 /// Status of a subscription from the cache alone, so the settings dialog can
 /// report on one without opening a socket.
 pub fn cached_status(cache: &Cache, sub: &TleSubscription) -> SubStatus {

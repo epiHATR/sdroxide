@@ -163,6 +163,7 @@ async fn run_session(
         notice,
         station,
         tle_subs,
+        sat_tle_listing,
         sat_track,
         radio,
         rds,
@@ -190,6 +191,7 @@ async fn run_session(
             latest.notice.clone(),
             latest.station.clone(),
             latest.tle_subs.clone(),
+            latest.sat_tle_listing.clone(),
             latest.sat_track.clone(),
             latest.radio.clone(),
             latest.rds.clone(),
@@ -265,6 +267,9 @@ async fn run_session(
     if let Some(s) = station {
         let _ = socket.send(msg(&ServerMsg::StationConfig(s))).await;
         let _ = socket.send(msg(&ServerMsg::TleSubStatus(tle_subs))).await;
+    }
+    if let Some(text) = sat_tle_listing {
+        let _ = socket.send(msg(&ServerMsg::SatTleListing(text))).await;
     }
     if let Some(r) = radio {
         let _ = socket.send(msg(&ServerMsg::RadioConfig(r))).await;
