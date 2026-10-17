@@ -153,6 +153,7 @@ sdroxide-deepcw = { path = "crates/sdroxide-deepcw" }
 sdroxide-ism = { path = "crates/sdroxide-ism" }
 sdroxide-aprs = { path = "crates/sdroxide-aprs" }
 sdroxide-adsb = { path = "crates/sdroxide-adsb" }
+sdroxide-meshtastic = { path = "crates/sdroxide-meshtastic" }
 sdroxide-vdl2 = { path = "crates/sdroxide-vdl2" }
 sdroxide-ais = { path = "crates/sdroxide-ais" }
 sdroxide-rs41 = { path = "crates/sdroxide-rs41" }

@@ -172,6 +172,13 @@ pub struct ViewState {
     /// chat log, FT8's is a map and a station card.
     #[serde(default = "js8_split_default")]
     pub js8_split_fraction: f32,
+    /// Fraction of the Meshtastic panel's width given to MESSAGES; the rest is
+    /// the NODES/MAP tab column. User-draggable.
+    #[serde(default = "meshtastic_split_default")]
+    pub meshtastic_split_fraction: f32,
+    /// Right-hand Meshtastic tab: `0` = NODES, `1` = MAP.
+    #[serde(default)]
+    pub meshtastic_side_tab: u8,
     /// Fraction of the ADS-B panel's width given to the aircraft list; the rest
     /// is the map. User-draggable.
     #[serde(default = "adsb_split_default")]
@@ -578,6 +585,8 @@ impl Default for ViewState {
             digi_panel_fraction: 0.46,
             digi_split_fraction: 0.52,
             js8_split_fraction: js8_split_default(),
+            meshtastic_split_fraction: meshtastic_split_default(),
+            meshtastic_side_tab: 0,
             adsb_split_fraction: adsb_split_default(),
             adsb_card_fraction: adsb_card_default(),
             ais_split_fraction: ais_split_default(),
@@ -767,6 +776,12 @@ fn prop_map_mode_default() -> u8 {
 fn prop_map_band_default() -> u8 {
     sdroxide_types::Band::ALL.iter().position(|b| *b == sdroxide_types::Band::M20).unwrap_or(0)
         as u8
+}
+
+/// Default for [`ViewState::meshtastic_split_fraction`] — messages take a bit
+/// more than half; NODES/MAP share the rest.
+fn meshtastic_split_default() -> f32 {
+    0.55
 }
 
 /// Default for [`ViewState::adsb_split_fraction`]. Enough for the aircraft

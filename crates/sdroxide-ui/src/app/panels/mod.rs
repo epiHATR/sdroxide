@@ -102,7 +102,7 @@ pub(in crate::app) fn panel_panes(mode: Mode) -> &'static [&'static str] {
         Mode::Rs41 => &["SONDES", "MAP"],
         // Three, for the reason APRS has three: who is on the mesh, what they
         // said, and where they are.
-        Mode::Meshtastic => &["NODES", "MESSAGES", "MAP"],
+        Mode::Meshtastic => &["MESSAGES", "NODES", "MAP"],
         Mode::Wefax => &["CHART", "SAVED"],
         Mode::Navtex => &["MESSAGES", "READING"],
         Mode::RfPaint => &["TEXT", "IMAGE"],

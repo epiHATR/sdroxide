@@ -230,17 +230,71 @@ fn long_fast_center_hz(freq_start_mhz: f64, freq_end_mhz: f64) -> f64 {
     freq_mhz * 1e6
 }
 
+/// How the decoder expands a channel PSK (Meshtastic firmware rules).
+///
+/// Append-only for postcard.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[repr(u8)]
+pub enum MeshtasticPskKind {
+    /// Public default LongFast key (`0x01` shorthand).
+    #[default]
+    Default = 0,
+    /// `simpleN` — default key with last byte replaced by `N` (`1`..=`10`).
+    Simple = 1,
+    /// Explicit 16-byte AES-128 key (bytes in [`MeshtasticSettings::psk_bytes`]).
+    Key16 = 2,
+    /// Explicit 32-byte AES-256 key.
+    Key32 = 3,
+}
+
+/// Target DDC lane rate for LongFast listen (Hz) — matches OpenWebRX+ / lorarx
+/// (`ifRate` 1 Msps). Must be ≥ modem BW; 1 Msps gives headroom for SF11/250k.
+pub const MESHTASTIC_LANE_RATE_HZ: f64 = 1_000_000.0;
+/// Minimum front-end sample rate that can feed the Meshtastic DDC usefully.
+pub const MESHTASTIC_MIN_RATE_HZ: f64 = 1_000_000.0;
+
 /// Persisted Meshtastic listen settings on [`crate::RadioState`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MeshtasticSettings {
     /// Region / frequency plan.
     #[serde(default)]
     pub region: MeshtasticRegion,
+    /// Which PSK expansion to use.
+    #[serde(default)]
+    pub psk_kind: MeshtasticPskKind,
+    /// For [`MeshtasticPskKind::Simple`]: `1`..=`10` (UI `simple1`…`simple10`).
+    #[serde(default = "default_simple_n")]
+    pub psk_simple: u8,
+    /// Raw key bytes for Key16 / Key32 (unused bytes zero). Appended last.
+    #[serde(default)]
+    pub psk_bytes: [u8; 32],
+}
+
+fn default_simple_n() -> u8 {
+    1
 }
 
 impl Default for MeshtasticSettings {
     fn default() -> Self {
-        Self { region: MeshtasticRegion::Eu868 }
+        Self {
+            region: MeshtasticRegion::Eu868,
+            psk_kind: MeshtasticPskKind::Default,
+            psk_simple: 1,
+            psk_bytes: [0; 32],
+        }
+    }
+}
+
+impl MeshtasticSettings {
+    /// Clamp operator values into a legal range.
+    pub fn sane(mut self) -> Self {
+        if self.psk_simple < 1 {
+            self.psk_simple = 1;
+        }
+        if self.psk_simple > 10 {
+            self.psk_simple = 10;
+        }
+        self
     }
 }
 

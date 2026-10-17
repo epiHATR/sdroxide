@@ -1,0 +1,30 @@
+[package]
+name = "sdroxide-meshtastic"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# Native-only: LoRa PHY + Meshtastic packet decode. Not linked by the wasm
+# client — it runs in the engine off a dedicated DDC of the raw I/Q. Types the
+# panel draws live in `sdroxide-types`.
+#
+# Soft-LoRa LongFast and the mesh header / AES-CTR / portnum layer are written
+# from Semtech public PHY docs and Meshtastic firmware constants (Channels /
+# CryptoEngine / PacketHeader). No GPL SDRangel or gr-lora code.
+
+[dependencies]
+sdroxide-types.workspace = true
+sdroxide-dsp.workspace = true
+num-complex.workspace = true
+crossbeam-channel.workspace = true
+tracing.workspace = true
+rustfft.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+base64 = "0.22"
+aes = "0.8"
+ctr = "0.9"
+cipher = "0.4"
+
+[dev-dependencies]
+hex-literal = "0.4"

@@ -82,8 +82,9 @@ mod wspr;
 
 pub use access::{AUTH_BUSY, AUTH_REFUSED, AuthPhase, RemoteAccess, RemoteServer, is_auth_busy};
 pub use meshtastic::{
-    MESHTASTIC_ASIA433_HZ, MESHTASTIC_EU868_HZ, MESHTASTIC_US915_HZ, MeshtasticMessage,
-    MeshtasticNode, MeshtasticRegion, MeshtasticSettings, MeshtasticStatus,
+    MESHTASTIC_ASIA433_HZ, MESHTASTIC_EU868_HZ, MESHTASTIC_LANE_RATE_HZ, MESHTASTIC_MIN_RATE_HZ,
+    MESHTASTIC_US915_HZ, MeshtasticMessage, MeshtasticNode, MeshtasticPskKind, MeshtasticRegion,
+    MeshtasticSettings, MeshtasticStatus,
 };
 pub use adsb::{
     ADSB_DROP_LIST_S, ADSB_DROP_MAP_S, ADSB_FREQ_HZ, ADSB_GOOD_RATE_HZ, ADSB_HISTORY_POINTS,

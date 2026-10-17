@@ -1779,6 +1779,15 @@ pub fn save_rs41_config(cfg: &sdroxide_types::Rs41Settings) -> Result<(), Config
     save_json("rs41.json", cfg)
 }
 
+/// Meshtastic listen preferences (region + channel PSK).
+pub fn load_meshtastic_config() -> sdroxide_types::MeshtasticSettings {
+    load_json::<sdroxide_types::MeshtasticSettings>("meshtastic.json").sane()
+}
+
+pub fn save_meshtastic_config(cfg: &sdroxide_types::MeshtasticSettings) -> Result<(), ConfigError> {
+    save_json("meshtastic.json", cfg)
+}
+
 pub fn load_vdl2_config() -> sdroxide_types::Vdl2Settings {
     load_json::<sdroxide_types::Vdl2Settings>("vdl2.json").sane()
 }

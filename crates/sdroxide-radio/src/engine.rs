@@ -15,6 +15,7 @@ use tracing::{debug, info, trace, warn};
 
 use sdroxide_adsb::{AdsbAction, AdsbController};
 use sdroxide_ais::{AisAction, AisController};
+use sdroxide_meshtastic::{MeshtasticAction, MeshtasticController};
 use sdroxide_config::BandStacks;
 use sdroxide_digi::{
     AcarsController, AprsController, AtChatController, CwController, DigiAction, DigiController,
@@ -2845,10 +2846,13 @@ struct Engine {
     /// Last `last_at` uploaded to SondeHub per serial, so a status tick does
     /// not re-post the same package.
     rs41_uploaded: std::collections::HashMap<String, i64>,
-    /// Meshtastic RX scaffolding: node / message tables the LoRa modem will
-    /// fill. Status is emitted while the mode is selected so the panel paints.
-    meshtastic_nodes: Vec<sdroxide_types::MeshtasticNode>,
-    meshtastic_messages: Vec<sdroxide_types::MeshtasticMessage>,
+    /// Meshtastic LongFast lane: ~1 Msps DDC + `lorarx` PHY + mesh tracker.
+    /// Present while the mode is Meshtastic and the front end can feed the window.
+    meshtastic_ddc: Option<Ddc>,
+    meshtastic: Option<MeshtasticController>,
+    meshtastic_buf: Vec<Complex32>,
+    meshtastic_center_hz: f64,
+    meshtastic_in_rate: f64,
     /// Fingerprint of the last status sent, so a quiet mode does not flood the
     /// event channel every poll tick.
     meshtastic_last_fp: u64,
@@ -3736,6 +3740,10 @@ fn engine_thread(
     // 0.0 that `TxState::default()` would give it.
     state.tx.swr_guard = engine_cfg.swr_guard;
     state.tx.swr_limit = engine_cfg.swr_limit.clamp(SWR_LIMIT_MIN, SWR_LIMIT_MAX);
+    // Before the initial-mode park below: MESH parks on `region.center_hz()`,
+    // and that must be the persisted region (e.g. SG_923 @ 917.875), not the
+    // Eu868 default that `RadioState::default()` still holds here.
+    state.meshtastic = sdroxide_config::load_meshtastic_config();
     if let Some(mode) = engine_cfg.initial_mode {
         for rx in &mut state.rx {
             *rx = RxState::with_mode(mode);
@@ -4280,8 +4288,11 @@ fn engine_thread(
         rs41_cfg,
         rs41_idle_sent: None,
         rs41_uploaded: std::collections::HashMap::new(),
-        meshtastic_nodes: Vec::new(),
-        meshtastic_messages: Vec::new(),
+        meshtastic_ddc: None,
+        meshtastic: None,
+        meshtastic_buf: Vec::new(),
+        meshtastic_center_hz: 0.0,
+        meshtastic_in_rate: 0.0,
         meshtastic_last_fp: 0,
         qo100_ddc: None,
         qo100: None,
@@ -4432,6 +4443,7 @@ fn engine_thread(
         engine.sync_vdl2(); // ...and the datalink lane, likewise
         engine.sync_ais(); // ...and the shipping lane, likewise
         engine.sync_rs41(); // ...and the radiosonde lane, likewise
+        engine.sync_meshtastic(); // ...and the mesh lane, likewise
         engine.sync_qo100(); // a no-op today: `qo100_cfg` starts disabled and is never loaded
         engine.sync_hfdl(); // a no-op today: `hfdl_cfg` starts disabled too
     }
@@ -5606,6 +5618,15 @@ impl Engine {
                 c.on_rx_iq(&self.rs41_buf);
             }
         }
+        // ...and the Meshtastic LongFast `lorarx` PHY from a ~1 Msps lane on
+        // the dial (2× the 250 kHz modem bandwidth).
+        if let Some(ddc) = self.meshtastic_ddc.as_mut() {
+            self.meshtastic_buf.clear();
+            ddc.process(iq, &mut self.meshtastic_buf);
+            if let Some(c) = self.meshtastic.as_ref() {
+                c.on_rx_iq(&self.meshtastic_buf);
+            }
+        }
         // Feed TCI clients: the same clean tap the digital decoders use (so
         // muting or turning down sdroxide can't silence somebody's decoder),
         // resampled to the 48 kHz TCI mandates.
@@ -6105,6 +6126,7 @@ impl Engine {
                 self.sync_vdl2_window();
                 self.sync_ais_window();
                 self.sync_rs41_window();
+                self.sync_meshtastic_window();
                 self.sync_qo100_window();
                 self.sync_hfdl_window();
                 self.update_tuning();
@@ -6365,6 +6387,8 @@ impl Engine {
         // The RS41 window follows the dial: the sonde being copied is wherever
         // the operator parked the VFO inside 400–406 MHz.
         self.sync_rs41_window();
+        // Meshtastic likewise follows the dial inside the region's LoRa band.
+        self.sync_meshtastic_window();
         // The QO-100 window, unlike the ISM one, *does* follow the hardware
         // centre — its one target frequency never moves, so re-seating the
         // mixer is all a retune ever needs.
@@ -9267,9 +9291,11 @@ impl Engine {
                     self.emit_digi_status();
                 }
                 if self.state.rx[0].mode.is_meshtastic() {
-                    self.meshtastic_messages.clear();
+                    if let Some(c) = self.meshtastic.as_ref() {
+                        c.clear_messages();
+                    }
+                    // Next worker status tick (~500 ms) carries the empty log.
                     self.meshtastic_last_fp = 0;
-                    self.emit_meshtastic_status();
                 }
             }
             DigiTxActive(on) => {
@@ -9463,7 +9489,14 @@ impl Engine {
 
             // Meshtastic region / listen settings.
             SetMeshtasticConfig(cfg) => {
+                let cfg = cfg.sane();
                 self.state.meshtastic = cfg;
+                if let Err(e) = sdroxide_config::save_meshtastic_config(&cfg) {
+                    warn!("saving Meshtastic config: {e}");
+                }
+                if let Some(c) = self.meshtastic.as_ref() {
+                    c.set_config(cfg);
+                }
                 if self.state.rx[0].mode.is_meshtastic() {
                     let hz = cfg.region.center_hz();
                     if self.caps.may_rx_hz(hz) {
@@ -9481,6 +9514,13 @@ impl Engine {
                         // after the operator switches back.
                         self.clear_notice();
                     }
+                    self.sync_meshtastic();
+                } else {
+                    self.log_meshtastic_settings(
+                        "config-while-not-mesh",
+                        false,
+                        Some("mode is not MESH"),
+                    );
                 }
                 // Force a fresh status so the panel's region readout flips now.
                 self.meshtastic_last_fp = 0;
@@ -11938,11 +11978,116 @@ impl Engine {
         }
     }
 
-    /// Emit a Meshtastic status snapshot while the mode is selected.
-    ///
-    /// First ship is RX scaffolding: the dial parks on a region centre and the
-    /// panel paints an empty node / message table. The LoRa modem lane will
-    /// fill `meshtastic_nodes` / `meshtastic_messages` later.
+    /// Start or stop the Meshtastic LongFast lane to match mode + front end.
+    fn sync_meshtastic(&mut self) {
+        let mode_mesh = self.state.rx[0].mode.is_meshtastic();
+        let unavailable = self.meshtastic_unavailable_now();
+        let want = mode_mesh && !self.audio_mode && unavailable.is_none();
+        self.log_meshtastic_settings("sync", want, unavailable.as_deref());
+        match (want, self.meshtastic.is_some()) {
+            (true, false) => {
+                let (ddc, center) = self.build_meshtastic_window();
+                let out_rate = ddc.out_rate();
+                let c = MeshtasticController::new(center, out_rate, self.state.meshtastic);
+                self.meshtastic = Some(c);
+                self.meshtastic_ddc = Some(ddc);
+                self.meshtastic_center_hz = center;
+                info!(
+                    rate = out_rate,
+                    center_mhz = center / 1e6,
+                    region = %self.state.meshtastic.region.label(),
+                    "Meshtastic LongFast decoder started"
+                );
+            }
+            (false, true) => {
+                self.meshtastic = None;
+                self.meshtastic_ddc = None;
+                self.meshtastic_buf.clear();
+                info!(
+                    mode_mesh,
+                    why = unavailable.as_deref().unwrap_or("mode left MESH"),
+                    "Meshtastic LongFast decoder stopped"
+                );
+            }
+            (true, true) => self.sync_meshtastic_window(),
+            _ => {}
+        }
+    }
+
+    /// One-line snapshot of what MESH is listening for (region / dial / PSK).
+    fn log_meshtastic_settings(&self, why: &str, lane_want: bool, unavailable: Option<&str>) {
+        let cfg = self.state.meshtastic;
+        let dial = self.state.active_freq_hz();
+        let centre = cfg.region.center_hz();
+        let psk = match cfg.psk_kind {
+            sdroxide_types::MeshtasticPskKind::Default => "default".to_string(),
+            sdroxide_types::MeshtasticPskKind::Simple => format!("simple{}", cfg.psk_simple),
+            sdroxide_types::MeshtasticPskKind::Key16 => "aes128-hex".into(),
+            sdroxide_types::MeshtasticPskKind::Key32 => "aes256-hex".into(),
+        };
+        info!(
+            why,
+            mode = ?self.state.rx[0].mode,
+            region = %cfg.region.label(),
+            region_default_mhz = centre / 1e6,
+            dial_mhz = dial / 1e6,
+            lo_mhz = self.state.center_hz / 1e6,
+            sample_rate = self.state.sample_rate,
+            psk = %psk,
+            lane_running = self.meshtastic.is_some(),
+            lane_want,
+            unavailable,
+            "Meshtastic settings"
+        );
+    }
+
+    fn build_meshtastic_window(&mut self) -> (Ddc, f64) {
+        let lane = sdroxide_types::MESHTASTIC_LANE_RATE_HZ;
+        let mut ddc = Ddc::new(self.state.sample_rate, lane);
+        let center = self.state.active_freq_hz();
+        ddc.set_offset_hz(center - self.state.center_hz);
+        self.meshtastic_in_rate = self.state.sample_rate;
+        (ddc, center)
+    }
+
+    fn sync_meshtastic_window(&mut self) {
+        if self.meshtastic_ddc.is_none() {
+            return;
+        }
+        let rebuild = (self.state.sample_rate - self.meshtastic_in_rate).abs() >= 1.0;
+        if rebuild {
+            let (ddc, center) = self.build_meshtastic_window();
+            let rate = ddc.out_rate();
+            self.meshtastic_ddc = Some(ddc);
+            self.meshtastic_center_hz = center;
+            if let Some(d) = self.meshtastic.as_ref() {
+                d.set_window(center, rate);
+            }
+            info!(rate, center, "Meshtastic window rebuilt");
+            return;
+        }
+        let center = self.state.active_freq_hz();
+        let Some(ddc) = self.meshtastic_ddc.as_mut() else {
+            return;
+        };
+        ddc.set_offset_hz(center - self.state.center_hz);
+        if (center - self.meshtastic_center_hz).abs() < 1.0 {
+            return;
+        }
+        info!(
+            from_mhz = self.meshtastic_center_hz / 1e6,
+            to_mhz = center / 1e6,
+            region = %self.state.meshtastic.region.label(),
+            "Meshtastic dial retune"
+        );
+        self.meshtastic_center_hz = center;
+        let rate = ddc.out_rate();
+        if let Some(d) = self.meshtastic.as_ref() {
+            d.set_window(center, rate);
+        }
+    }
+
+    /// Drain worker status (~2 Hz) and overlay engine-side unavailable reasons.
     fn poll_meshtastic(&mut self) {
         if !self.state.rx[0].mode.is_meshtastic() {
             if self.meshtastic_last_fp != 0 {
@@ -11956,7 +12101,23 @@ impl Engine {
             }
             return;
         }
-        self.emit_meshtastic_status();
+        let unavailable = self.meshtastic_unavailable_now();
+        if let Some(c) = self.meshtastic.as_ref() {
+            while let Some(MeshtasticAction::Status(mut st)) = c.poll() {
+                // Engine reasons (dial/rate) win; else keep worker's (e.g. missing lorarx).
+                st.unavailable = match (unavailable.clone(), st.unavailable.take()) {
+                    (Some(e), _) => Some(e),
+                    (None, Some(w)) => Some(w),
+                    (None, None) => None,
+                };
+                st.listening = st.unavailable.is_none();
+                st.region = self.state.meshtastic.region;
+                self.meshtastic_last_fp = meshtastic_status_fp(&st);
+                let _ = self.event_tx.send(RadioEvent::MeshtasticStatus(st));
+            }
+        } else {
+            self.emit_meshtastic_status();
+        }
     }
 
     fn emit_meshtastic_status(&mut self) {
@@ -11965,37 +12126,28 @@ impl Engine {
         let centre = region.center_hz();
         let unavailable = self.meshtastic_unavailable(region, dial, centre);
         let st = sdroxide_types::MeshtasticStatus {
-            nodes: self.meshtastic_nodes.clone(),
-            messages: self.meshtastic_messages.clone(),
+            nodes: Vec::new(),
+            messages: Vec::new(),
             region,
             listening: self.state.rx[0].mode.is_meshtastic() && unavailable.is_none(),
-            // LongFast defaults — shown until a real modem reports otherwise.
             sf: Some(11),
             bw_hz: Some(250_000),
             cr: Some(5),
             channel_name: "LongFast".into(),
-            last_snr_db: self.meshtastic_messages.last().and_then(|m| m.snr_db),
+            last_snr_db: None,
             unavailable,
         };
-        // Cheap fingerprint: lengths + region + listening + whether a warning
-        // is up. Dial-in-band changes must refresh so switching to a reachable
-        // profile clears the hazard line.
-        let fp = {
-            let mut h = 0u64;
-            h = h.wrapping_mul(31).wrapping_add(st.nodes.len() as u64);
-            h = h.wrapping_mul(31).wrapping_add(st.messages.len() as u64);
-            h = h.wrapping_mul(31).wrapping_add(st.region as u64);
-            h = h.wrapping_mul(31).wrapping_add(u64::from(st.listening));
-            h = h.wrapping_mul(31).wrapping_add(u64::from(region.contains_hz(dial)));
-            h = h.wrapping_mul(31).wrapping_add(u64::from(self.caps.may_rx_hz(centre)));
-            h = h.wrapping_mul(31).wrapping_add(st.unavailable.as_ref().map(|s| s.len()).unwrap_or(0) as u64);
-            h
-        };
+        let fp = meshtastic_status_fp(&st);
         if fp == self.meshtastic_last_fp {
             return;
         }
         self.meshtastic_last_fp = fp;
         let _ = self.event_tx.send(RadioEvent::MeshtasticStatus(Box::new(st)));
+    }
+
+    fn meshtastic_unavailable_now(&self) -> Option<String> {
+        let region = self.state.meshtastic.region;
+        self.meshtastic_unavailable(region, self.state.active_freq_hz(), region.center_hz())
     }
 
     /// Why Meshtastic cannot listen at the current dial / region, if it cannot.
@@ -12009,6 +12161,18 @@ impl Engine {
         dial_hz: f64,
         centre_hz: f64,
     ) -> Option<String> {
+        if self.audio_mode {
+            return Some(
+                "Meshtastic needs I/Q — open a wideband receiver, not an audio mode".into(),
+            );
+        }
+        if self.state.sample_rate + 1.0 < sdroxide_types::MESHTASTIC_MIN_RATE_HZ {
+            return Some(format!(
+                "sample rate {:.0} kHz is below the {:.0} kHz LongFast lane needs",
+                self.state.sample_rate / 1e3,
+                sdroxide_types::MESHTASTIC_MIN_RATE_HZ / 1e3
+            ));
+        }
         if !self.caps.may_rx_hz(centre_hz) {
             let (lo, hi) = region.band_mhz();
             return Some(format!(
@@ -13911,6 +14075,7 @@ impl Engine {
             self.sync_vdl2();
             self.sync_ais();
             self.sync_rs41();
+            self.sync_meshtastic();
             self.emit_digi_status();
             // A wider channel needs a wider berth from the LO: switching a
             // narrow mode that was happily sitting 30 kHz off the LO into WFM
@@ -15790,6 +15955,9 @@ impl Engine {
         self.rs41_ddc = None;
         self.rs41 = None;
         self.rs41_buf.clear();
+        self.meshtastic_ddc = None;
+        self.meshtastic = None;
+        self.meshtastic_buf.clear();
         // Dropped outright rather than left to `sync_tci_iq`'s own comparison:
         // two device rates can snap to the same client rate, and it would then
         // keep a decimation chain built for the rate we have just left.
@@ -15803,6 +15971,7 @@ impl Engine {
         self.sync_vdl2();
         self.sync_ais();
         self.sync_rs41();
+        self.sync_meshtastic();
         self.sync_qo100();
         self.sync_audio_tap();
         self.sync_tci_iq();
@@ -16185,6 +16354,7 @@ impl Engine {
             self.sync_vdl2();
             self.sync_ais();
             self.sync_rs41();
+            self.sync_meshtastic();
             self.sync_qo100();
             self.sync_hfdl();
         }
@@ -18319,6 +18489,7 @@ impl Engine {
                 self.sync_vdl2_window();
                 self.sync_ais_window();
                 self.sync_rs41_window();
+                self.sync_meshtastic_window();
                 self.sync_qo100_window();
                 self.sync_hfdl_window();
                 true
@@ -18364,6 +18535,23 @@ impl Engine {
 /// this radio can come to where the operator was, and on the common cause — a
 /// converter switched on or off under a running radio — it is a short step from
 /// where they wanted to be.
+/// Cheap fingerprint so a quiet Meshtastic mode does not flood the event bus
+/// when the panel is only waiting on an unavailable reason to clear.
+fn meshtastic_status_fp(st: &sdroxide_types::MeshtasticStatus) -> u64 {
+    let mut h = 0u64;
+    h = h.wrapping_mul(31).wrapping_add(st.nodes.len() as u64);
+    h = h.wrapping_mul(31).wrapping_add(st.messages.len() as u64);
+    h = h.wrapping_mul(31).wrapping_add(st.region as u64);
+    h = h.wrapping_mul(31).wrapping_add(u64::from(st.listening));
+    h = h
+        .wrapping_mul(31)
+        .wrapping_add(st.unavailable.as_ref().map(|s| s.len()).unwrap_or(0) as u64);
+    if let Some(snr) = st.last_snr_db {
+        h = h.wrapping_mul(31).wrapping_add(snr.to_bits() as u64);
+    }
+    h
+}
+
 fn nearest_rx_hz(caps: &DeviceCaps, hz: f64) -> Option<f64> {
     if caps.may_rx_hz(hz) {
         return None;

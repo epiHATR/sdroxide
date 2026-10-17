@@ -1579,7 +1579,12 @@ use sdroxide_types::{
 /// v187: `MeshtasticRegion` expanded (append-only) with the Meshtastic
 /// commercial region set — SG_923, JP, ANZ, MY_919, … — LongFast default
 /// centres match firmware slot hashing.
-pub const PROTO_VERSION: u16 = 187;
+///
+/// v188: `MeshtasticSettings` gains channel PSK (`psk_kind` / `psk_simple` /
+/// `psk_bytes`) for LongFast AES-CTR; native soft-demod fills status.
+/// `SatConfig::watching` always serializes (empty included) so postcard
+/// layout of `StationConfig` stays aligned.
+pub const PROTO_VERSION: u16 = 188;
 const VERSION_BYTE: u8 = 0x12;
 
 #[derive(Debug, thiserror::Error)]

@@ -593,7 +593,11 @@ pub struct SatConfig {
     /// Catalogue numbers the operator is watching — the SAT window's Watching
     /// tab. Order is the order they were added; duplicates are not stored.
     /// Trailing field: wire peers must bump `sdroxide-proto::PROTO_VERSION`.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    ///
+    /// Always serialized (even when empty): postcard has no field names, so
+    /// `skip_serializing_if` would drop the trailing vec and the next
+    /// `StationConfig` field would be read as `watching`.
+    #[serde(default)]
     pub watching: Vec<u64>,
 }
 
