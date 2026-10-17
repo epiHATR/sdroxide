@@ -46,49 +46,47 @@ impl SdroxideApp {
         let pane = self.phone_pane(ui, self.state.rx[0].mode);
         let full_w = ui.available_width();
 
-        ui.horizontal_top(|ui| {
-            match pane {
-                Some(0) => {
-                    ui.allocate_ui_with_layout(
-                        egui::vec2(full_w, avail_h),
-                        egui::Layout::top_down(egui::Align::Min),
-                        |ui| self.meshtastic_message_pane(ui, cmds, &st, avail_h),
-                    );
+        ui.horizontal_top(|ui| match pane {
+            Some(0) => {
+                ui.allocate_ui_with_layout(
+                    egui::vec2(full_w, avail_h),
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| self.meshtastic_message_pane(ui, cmds, &st, avail_h),
+                );
+            }
+            Some(1) => {
+                ui.allocate_ui_with_layout(
+                    egui::vec2(full_w, avail_h),
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| self.meshtastic_node_list(ui, &st, now, avail_h),
+                );
+            }
+            Some(2) | Some(_) => {
+                ui.allocate_ui_with_layout(
+                    egui::vec2(full_w, avail_h),
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| self.meshtastic_map_pane(ui, &st, now, avail_h),
+                );
+            }
+            None => {
+                const HANDLE_W: f32 = 7.0;
+                let msg_w = (full_w * self.view.meshtastic_split_fraction)
+                    .clamp(200.0, (full_w - HANDLE_W - 180.0).max(200.0));
+                ui.allocate_ui_with_layout(
+                    egui::vec2(msg_w, avail_h),
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| self.meshtastic_message_pane(ui, cmds, &st, avail_h),
+                );
+                let hh = crate::chrome::split_handle(ui, egui::vec2(HANDLE_W, avail_h), None);
+                if hh.dragged() {
+                    self.view.meshtastic_split_fraction =
+                        ((msg_w + hh.drag_delta().x) / full_w.max(1.0)).clamp(0.25, 0.85);
                 }
-                Some(1) => {
-                    ui.allocate_ui_with_layout(
-                        egui::vec2(full_w, avail_h),
-                        egui::Layout::top_down(egui::Align::Min),
-                        |ui| self.meshtastic_node_list(ui, &st, now, avail_h),
-                    );
-                }
-                Some(2) | Some(_) => {
-                    ui.allocate_ui_with_layout(
-                        egui::vec2(full_w, avail_h),
-                        egui::Layout::top_down(egui::Align::Min),
-                        |ui| self.meshtastic_map_pane(ui, &st, now, avail_h),
-                    );
-                }
-                None => {
-                    const HANDLE_W: f32 = 7.0;
-                    let msg_w = (full_w * self.view.meshtastic_split_fraction)
-                        .clamp(200.0, (full_w - HANDLE_W - 180.0).max(200.0));
-                    ui.allocate_ui_with_layout(
-                        egui::vec2(msg_w, avail_h),
-                        egui::Layout::top_down(egui::Align::Min),
-                        |ui| self.meshtastic_message_pane(ui, cmds, &st, avail_h),
-                    );
-                    let hh = crate::chrome::split_handle(ui, egui::vec2(HANDLE_W, avail_h), None);
-                    if hh.dragged() {
-                        self.view.meshtastic_split_fraction =
-                            ((msg_w + hh.drag_delta().x) / full_w.max(1.0)).clamp(0.25, 0.85);
-                    }
-                    ui.allocate_ui_with_layout(
-                        egui::vec2(ui.available_width().max(160.0), avail_h),
-                        egui::Layout::top_down(egui::Align::Min),
-                        |ui| self.meshtastic_side_column(ui, cmds, &st, now, avail_h),
-                    );
-                }
+                ui.allocate_ui_with_layout(
+                    egui::vec2(ui.available_width().max(160.0), avail_h),
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| self.meshtastic_side_column(ui, cmds, &st, now, avail_h),
+                );
             }
         });
     }
@@ -141,11 +139,7 @@ impl SdroxideApp {
 
             let mut pick = region;
             egui::ComboBox::from_id_salt("mesh-region-header")
-                .selected_text(format!(
-                    "{}  {:.3} MHz",
-                    region.label(),
-                    region.center_hz() / 1e6
-                ))
+                .selected_text(format!("{}  {:.3} MHz", region.label(), region.center_hz() / 1e6))
                 .width(168.0)
                 .show_ui(ui, |ui| {
                     for r in MeshtasticRegion::ALL {
@@ -154,20 +148,14 @@ impl SdroxideApp {
                             r,
                             format!("{} — {}", r.label(), r.description()),
                         )
-                        .on_hover_text(format!(
-                            "LongFast centre {:.3} MHz",
-                            r.center_hz() / 1e6
-                        ));
+                        .on_hover_text(format!("LongFast centre {:.3} MHz", r.center_hz() / 1e6));
                     }
                 });
             if pick != region {
                 let mut cfg = self.state.meshtastic;
                 cfg.region = pick;
                 cmds.push(Command::SetMeshtasticConfig(cfg));
-                cmds.push(Command::SetVfo {
-                    vfo: self.state.active_vfo,
-                    hz: pick.center_hz(),
-                });
+                cmds.push(Command::SetVfo { vfo: self.state.active_vfo, hz: pick.center_hz() });
             }
 
             ui.separator();
@@ -221,10 +209,7 @@ impl SdroxideApp {
                     && self.caps.as_ref().is_none_or(|c| c.may_rx_hz(centre))
                     && crate::chrome::chip(ui, false, format!("TUNE {:.3}", centre / 1e6)).clicked()
                 {
-                    cmds.push(Command::SetVfo {
-                        vfo: self.state.active_vfo,
-                        hz: centre,
-                    });
+                    cmds.push(Command::SetVfo { vfo: self.state.active_vfo, hz: centre });
                 }
             });
         }
@@ -268,14 +253,9 @@ impl SdroxideApp {
         rows.sort_by(|a, b| b.last_heard_unix.cmp(&a.last_heard_unix));
 
         let selected = self.meshtastic_map.selected.clone();
-        let selected_node = selected
-            .as_ref()
-            .and_then(|id| st.nodes.iter().find(|n| &n.id == id));
-        let header_h = if self.phone_pane(ui, self.state.rx[0].mode).is_some() {
-            22.0
-        } else {
-            0.0
-        };
+        let selected_node = selected.as_ref().and_then(|id| st.nodes.iter().find(|n| &n.id == id));
+        let header_h =
+            if self.phone_pane(ui, self.state.rx[0].mode).is_some() { 22.0 } else { 0.0 };
         let body_h = (avail_h - header_h).max(48.0);
 
         if let Some(n) = selected_node {
@@ -331,18 +311,21 @@ impl SdroxideApp {
             });
     }
 
-    fn meshtastic_node_card(&mut self, ui: &mut egui::Ui, n: &MeshtasticNode, now: i64, card_h: f32) {
+    fn meshtastic_node_card(
+        &mut self,
+        ui: &mut egui::Ui,
+        n: &MeshtasticNode,
+        now: i64,
+        card_h: f32,
+    ) {
         egui::ScrollArea::vertical()
             .id_salt("meshtastic-card")
             .max_height(card_h)
             .auto_shrink([false, false])
             .show_themed(ui, |ui| {
                 ui.set_min_width(ui.available_width());
-                let title = if !n.short_name.is_empty() {
-                    n.short_name.as_str()
-                } else {
-                    n.id.as_str()
-                };
+                let title =
+                    if !n.short_name.is_empty() { n.short_name.as_str() } else { n.id.as_str() };
                 ui.label(RichText::new(title).strong().size(13.0).color(theme::CYAN()));
                 if !n.long_name.is_empty() {
                     ui.label(RichText::new(&n.long_name).size(10.5).weak());
@@ -367,10 +350,9 @@ impl SdroxideApp {
                     ),
                     ("Id", Some(n.id.clone())),
                 ];
-                egui::Grid::new("meshtastic-card-grid")
-                    .num_columns(4)
-                    .spacing([8.0, 3.0])
-                    .show(ui, |ui| {
+                egui::Grid::new("meshtastic-card-grid").num_columns(4).spacing([8.0, 3.0]).show(
+                    ui,
+                    |ui| {
                         for chunk in fields.chunks(2) {
                             for (key, val) in chunk {
                                 ui.label(RichText::new(*key).size(10.0).weak());
@@ -386,7 +368,8 @@ impl SdroxideApp {
                             }
                             ui.end_row();
                         }
-                    });
+                    },
+                );
             });
     }
 
@@ -530,25 +513,14 @@ impl SdroxideApp {
                     ui.add(egui::Slider::new(&mut cfg.psk_simple, 1..=10).text("N"));
                     ui.end_row();
                 }
-                if matches!(
-                    cfg.psk_kind,
-                    MeshtasticPskKind::Key16 | MeshtasticPskKind::Key32
-                ) {
+                if matches!(cfg.psk_kind, MeshtasticPskKind::Key16 | MeshtasticPskKind::Key32) {
                     ui.label("Key (hex)");
-                    let want = if cfg.psk_kind == MeshtasticPskKind::Key16 {
-                        16
-                    } else {
-                        32
-                    };
+                    let want = if cfg.psk_kind == MeshtasticPskKind::Key16 { 16 } else { 32 };
                     let mut hex = bytes_to_hex(&cfg.psk_bytes[..want]);
                     let edit = ui.add(
                         egui::TextEdit::singleline(&mut hex)
                             .desired_width(260.0)
-                            .hint_text(if want == 16 {
-                                "32 hex chars"
-                            } else {
-                                "64 hex chars"
-                            }),
+                            .hint_text(if want == 16 { "32 hex chars" } else { "64 hex chars" }),
                     );
                     if edit.changed()
                         && let Some(raw) = parse_hex_key(&hex, want)
@@ -605,9 +577,13 @@ fn parse_hex_key(s: &str, want: usize) -> Option<Vec<u8>> {
 }
 
 fn slot(ui: &mut egui::Ui, w: f32, text: &str, color: egui::Color32) {
-    ui.allocate_ui_with_layout(egui::vec2(w, 16.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-        ui.label(RichText::new(text).size(10.5).color(color));
-    });
+    ui.allocate_ui_with_layout(
+        egui::vec2(w, 16.0),
+        egui::Layout::left_to_right(egui::Align::Center),
+        |ui| {
+            ui.label(RichText::new(text).size(10.5).color(color));
+        },
+    );
 }
 
 /// Placeholder centered in an empty pane.
@@ -623,11 +599,7 @@ fn empty_center(ui: &mut egui::Ui, size: egui::Vec2, text: &str) {
 }
 
 fn meshtastic_node_row(ui: &mut egui::Ui, n: &MeshtasticNode, now: i64, selected: bool) -> bool {
-    let name = if !n.short_name.is_empty() {
-        n.short_name.as_str()
-    } else {
-        n.id.as_str()
-    };
+    let name = if !n.short_name.is_empty() { n.short_name.as_str() } else { n.id.as_str() };
     let age = fmt_age(now - n.last_heard_unix);
     let snr = n.snr_db.map(|s| format!("{s:.0}")).unwrap_or_else(|| "—".into());
     let hops = n.hops.map(|h| format!("{h}")).unwrap_or_else(|| "—".into());
@@ -635,7 +607,8 @@ fn meshtastic_node_row(ui: &mut egui::Ui, n: &MeshtasticNode, now: i64, selected
     let line = format!("{name:<8}  {age:>5}  SNR {snr:>3}  hop {hops}  {bat}");
     let ink = if selected { theme::CYAN() } else { theme::gray(180) };
     let resp = ui.add(
-        egui::Label::new(RichText::new(line).monospace().size(11.0).color(ink)).sense(egui::Sense::click()),
+        egui::Label::new(RichText::new(line).monospace().size(11.0).color(ink))
+            .sense(egui::Sense::click()),
     );
     resp.clicked()
 }

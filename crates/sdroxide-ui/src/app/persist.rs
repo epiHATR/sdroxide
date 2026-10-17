@@ -45,11 +45,7 @@ impl RemoteSeatSnapshot {
 }
 
 pub(in crate::app) fn remote_seat_key(radio_id: u32) -> String {
-    if radio_id == 0 {
-        "remote_seat".into()
-    } else {
-        format!("remote_seat:{radio_id}")
-    }
+    if radio_id == 0 { "remote_seat".into() } else { format!("remote_seat:{radio_id}") }
 }
 
 /// Load a seat snapshot for a remote tab. Native remote uses eframe storage;
@@ -115,13 +111,13 @@ mod remote_seat_tests {
 
     #[test]
     fn restore_puts_mode_before_the_dial() {
-        let snap = RemoteSeatSnapshot {
-            freq_hz: 98_500_000.0,
-            rx: RxState::with_mode(Mode::Wfm),
-        };
+        let snap = RemoteSeatSnapshot { freq_hz: 98_500_000.0, rx: RxState::with_mode(Mode::Wfm) };
         let cmds = snap.restore_commands();
         assert!(matches!(cmds[0], Command::SetMode { mode: Mode::Wfm, .. }));
-        assert!(cmds.iter().any(|c| matches!(c, Command::SetVfo { hz, .. } if (*hz - 98.5e6).abs() < 1.0)));
+        assert!(
+            cmds.iter()
+                .any(|c| matches!(c, Command::SetVfo { hz, .. } if (*hz - 98.5e6).abs() < 1.0))
+        );
     }
 }
 
@@ -150,30 +146,19 @@ pub struct SystemDockSnapshot {
 
 impl Default for SystemDockSnapshot {
     fn default() -> Self {
-        Self {
-            order: Vec::new(),
-            collapsed: Vec::new(),
-            weights: Vec::new(),
-            fraction: 0.35,
-        }
+        Self { order: Vec::new(), collapsed: Vec::new(), weights: Vec::new(), fraction: 0.35 }
     }
 }
 
 pub(in crate::app) fn system_dock_key(radio_id: u32) -> String {
-    if radio_id == 0 {
-        "system_dock".into()
-    } else {
-        format!("system_dock:{radio_id}")
-    }
+    if radio_id == 0 { "system_dock".into() } else { format!("system_dock:{radio_id}") }
 }
 
 pub(in crate::app) fn load_system_dock(
     storage: Option<&dyn eframe::Storage>,
     radio_id: u32,
 ) -> SystemDockSnapshot {
-    storage
-        .and_then(|s| eframe::get_value(s, &system_dock_key(radio_id)))
-        .unwrap_or_default()
+    storage.and_then(|s| eframe::get_value(s, &system_dock_key(radio_id))).unwrap_or_default()
 }
 
 // ── Logbook persistence (native: config-dir JSON; wasm: eframe storage) ──────

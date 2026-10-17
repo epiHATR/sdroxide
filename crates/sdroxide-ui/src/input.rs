@@ -252,6 +252,22 @@ pub(crate) fn apply_action(
                 state.rx[0].filter_hi = hi;
                 cmds.push(Command::SetFilter { rx, lo, hi });
             }
+            FilterLo => {
+                let r = &state.rx[0];
+                let max = r.mode.max_filter_hz();
+                let hi = r.filter_hi;
+                let lo = (r.filter_lo + delta).clamp(-max, hi - MIN_FILTER_HZ);
+                state.rx[0].filter_lo = lo;
+                cmds.push(Command::SetFilter { rx, lo, hi });
+            }
+            FilterHi => {
+                let r = &state.rx[0];
+                let max = r.mode.max_filter_hz();
+                let lo = r.filter_lo;
+                let hi = (r.filter_hi + delta).clamp(lo + MIN_FILTER_HZ, max);
+                state.rx[0].filter_hi = hi;
+                cmds.push(Command::SetFilter { rx, lo, hi });
+            }
             ManualGain => {
                 let cur = state.rx[0].manual_gain_db;
                 let db = target.unwrap_or(cur + delta).clamp(0.0, MAX_MANUAL_GAIN_DB);
@@ -471,6 +487,14 @@ fn chord_matches(m: eframe::egui::Modifiers, c: &KeyChord) -> bool {
     m.alt == c.alt && m.shift == c.shift && m.command == c.ctrl && m.ctrl == (c.ctrl && !m.mac_cmd)
 }
 
+/// True when every required held key for this chord is currently down.
+fn chord_with_held(i: &eframe::egui::InputState, c: &KeyChord) -> bool {
+    if c.with.is_empty() {
+        return true;
+    }
+    eframe::egui::Key::from_name(&c.with).is_some_and(|k| i.key_down(k))
+}
+
 fn egui_button(b: MouseButton) -> eframe::egui::PointerButton {
     use eframe::egui::PointerButton;
     match b {
@@ -509,6 +533,10 @@ pub struct InputRuntime {
     /// (a step change, say) doesn't tear the connection down.
     #[cfg(not(target_arch = "wasm32"))]
     midi_sent: sdroxide_midi::MidiConfig,
+    /// When set, plain arrow bindings (tune, …) are skipped this frame so a
+    /// focused panel — the SATELLITE list — can walk its own rows. Hold `[` /
+    /// `]` still reaches filter-edge chords.
+    pub suppress_arrows: bool,
 }
 
 impl InputRuntime {
@@ -544,6 +572,7 @@ impl InputRuntime {
             midi,
             #[cfg(not(target_arch = "wasm32"))]
             midi_sent,
+            suppress_arrows: false,
         }
     }
 
@@ -650,6 +679,11 @@ impl InputRuntime {
                         ctrl: m.command,
                         shift: m.shift,
                         alt: m.alt,
+                        // Capture records a single press; a held companion
+                        // key is only set by the shipped defaults (or by
+                        // editing the saved file). Clearing it here stops a
+                        // rebind from silently keeping a stale `with`.
+                        with: String::new(),
                     };
                 }
             }
@@ -721,11 +755,46 @@ impl InputRuntime {
         }
         let mut fired: Vec<Fire> = Vec::new();
         ctx.input(|i| {
+            // When a held-key chord is live (e.g. `[` + ArrowLeft for the low
+            // edge), the plain binding on the same trigger key must not also
+            // fire — otherwise holding `[` and tapping ← would both nudge the
+            // filter *and* retune the VFO.
+            let mut overridden: Vec<&str> = Vec::new();
+            for b in &self.cfg.keys {
+                if !b.enabled
+                    || b.chord.is_empty()
+                    || b.chord.with.is_empty()
+                    || !chord_matches(modifiers, &b.chord)
+                    || !chord_with_held(i, &b.chord)
+                {
+                    continue;
+                }
+                overridden.push(b.chord.key.as_str());
+            }
             for (ix, b) in self.cfg.keys.iter().enumerate() {
                 if !b.enabled || b.chord.is_empty() || !chord_matches(modifiers, &b.chord) {
                     continue;
                 }
+                if !chord_with_held(i, &b.chord) {
+                    continue;
+                }
+                if b.chord.with.is_empty() && overridden.iter().any(|k| *k == b.chord.key) {
+                    continue;
+                }
                 let Some(key) = Key::from_name(&b.chord.key) else { continue };
+                // A focused SAT list owns the plain arrows; filter-edge chords
+                // (`[` / `]` held) still fire so the passband stays reachable.
+                if self.suppress_arrows
+                    && matches!(
+                        key,
+                        Key::ArrowLeft | Key::ArrowRight | Key::ArrowUp | Key::ArrowDown
+                    )
+                    && b.chord.with.is_empty()
+                    && !i.key_down(Key::OpenBracket)
+                    && !i.key_down(Key::CloseBracket)
+                {
+                    continue;
+                }
                 let src = HeldSource::Key(ix);
                 match b.action.kind() {
                     ActionKind::Continuous => {
@@ -1445,6 +1514,41 @@ mod tests {
             );
         }
         assert!(state.rx[0].filter_hi - state.rx[0].filter_lo >= MIN_FILTER_HZ - 0.001);
+    }
+
+    #[test]
+    fn filter_lo_nudge_keeps_minimum_width() {
+        let mut state = RadioState::default();
+        state.rx[0] = sdroxide_types::RxState::with_mode(Mode::Usb);
+        let before = state.rx[0].filter_lo;
+        let hi = state.rx[0].filter_hi;
+        let mut view = ViewState::default();
+        let mut flags = [false; 6];
+        let mut speech_acts = Vec::new();
+        let mut ui = sink(&mut view, &mut flags, &mut speech_acts);
+        let mut cmds = Vec::new();
+        apply_action(
+            Action::FilterLo,
+            ActionInput::Delta { d: 50.0, step: 50.0 },
+            ButtonMode::Momentary,
+            &mut state,
+            &mut ui,
+            &mut cmds,
+        );
+        assert_eq!(state.rx[0].filter_lo, before + 50.0);
+        assert_eq!(state.rx[0].filter_hi, hi);
+        for _ in 0..200 {
+            apply_action(
+                Action::FilterLo,
+                ActionInput::Delta { d: 500.0, step: 50.0 },
+                ButtonMode::Momentary,
+                &mut state,
+                &mut ui,
+                &mut cmds,
+            );
+        }
+        assert!((state.rx[0].filter_hi - state.rx[0].filter_lo - MIN_FILTER_HZ).abs() < 0.001);
+        assert_eq!(state.rx[0].filter_hi, hi);
     }
 
     #[test]

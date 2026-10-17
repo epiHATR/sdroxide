@@ -1163,7 +1163,6 @@ pub enum Command {
     // One shared IQ capture; each web/remote session may own a software DDC
     // ("listener") with its own dial, mode and filter inside that passband.
     // The hardware LO (`center_hz`) stays shared. Appended for postcard.
-
     /// Open a per-session receive chain. `id` is the server's session id.
     /// No-op on CAT/audio-mode rigs (no shared IQ span to slice).
     AttachListener {

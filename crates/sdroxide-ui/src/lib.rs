@@ -33,6 +33,7 @@ mod input;
 pub mod layout;
 mod login;
 mod login_globe;
+mod meshtastic_map;
 /// Multi-radio shell: one window, one radio per tab. Native-only — the
 /// browser client drives a single (remote) radio.
 mod multi;
@@ -42,7 +43,6 @@ mod remote;
 /// Asking egui for the next frame at the rate actually asked for.
 pub mod repaint;
 mod rf_paint;
-mod meshtastic_map;
 mod rs41_map;
 /// Solar-system 3D view. A second OS window natively, a second browser tab on
 /// the web; the sole consumer of depth/MSAA/vertex buffers either way.

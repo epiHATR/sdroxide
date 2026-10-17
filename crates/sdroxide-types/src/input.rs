@@ -31,6 +31,10 @@ pub enum Action {
     Squelch,
     FilterWidth,
     FilterShift,
+    /// Move the low passband edge (Hz relative to the VFO).
+    FilterLo,
+    /// Move the high passband edge (Hz relative to the VFO).
+    FilterHi,
     AgcMaxGain,
     /// Fixed audio gain, in effect while the AGC is off.
     ManualGain,
@@ -133,10 +137,9 @@ impl Action {
         use Action::*;
         match self {
             Tune | RitOffset | XitOffset | Volume | SubVolume | Squelch | FilterWidth
-            | FilterShift | AgcMaxGain | ManualGain | TxDrive | TuneDrive | MicGain
-            | DigiAudioFreq | SpectrumZoom | SpectrumPan | SpectrumFloorDb | SpectrumCeilDb => {
-                ActionKind::Continuous
-            }
+            | FilterShift | FilterLo | FilterHi | AgcMaxGain | ManualGain | TxDrive | TuneDrive
+            | MicGain | DigiAudioFreq | SpectrumZoom | SpectrumPan | SpectrumFloorDb
+            | SpectrumCeilDb => ActionKind::Continuous,
             _ => ActionKind::Momentary,
         }
     }
@@ -148,9 +151,11 @@ impl Action {
             Tune | RitOffset | XitOffset | RitEnable | XitEnable | RitClear | XitClear
             | VfoSelect(_) | VfoToggle | SwapVfos | CopyAtoB | Split | BandUp | BandDown
             | BandSelect(_) | MemoryRecall(_) => "Tuning",
-            Volume | SubVolume | Squelch | FilterWidth | FilterShift | AgcMaxGain | ManualGain
-            | Mute | NoiseBlanker | NoiseReductionCycle | AutoNotch | Binaural | AgcCycle
-            | SubRx | ModeNext | ModePrev | ModeSelect(_) | RecordToggle => "Receive",
+            Volume | SubVolume | Squelch | FilterWidth | FilterShift | FilterLo | FilterHi
+            | AgcMaxGain | ManualGain | Mute | NoiseBlanker | NoiseReductionCycle | AutoNotch
+            | Binaural | AgcCycle | SubRx | ModeNext | ModePrev | ModeSelect(_) | RecordToggle => {
+                "Receive"
+            }
             Ptt | TuneCarrier | TxDrive | TuneDrive | MicGain | DigiAudioFreq | AbortTx
             | CwStraight | VoicePlay(_) | VoiceStop | ToneBurst => "Transmit",
             SpectrumZoom | SpectrumPan | SpectrumFloorDb | SpectrumCeilDb | FitSpan | ZoomIn
@@ -174,6 +179,8 @@ impl Action {
             Squelch => "Squelch",
             FilterWidth => "Filter width",
             FilterShift => "Filter shift",
+            FilterLo => "Filter low edge",
+            FilterHi => "Filter high edge",
             AgcMaxGain => "AGC max gain",
             ManualGain => "Manual gain (AGC off)",
             TxDrive => "TX drive",
@@ -243,7 +250,7 @@ impl Action {
         match self {
             Tune => 100.0,
             RitOffset | XitOffset | DigiAudioFreq => 10.0,
-            FilterWidth | FilterShift => 50.0,
+            FilterWidth | FilterShift | FilterLo | FilterHi => 50.0,
             Volume | SubVolume | TxDrive | TuneDrive | MicGain => 0.02,
             Squelch | AgcMaxGain | ManualGain | SpectrumFloorDb | SpectrumCeilDb => 1.0,
             SpectrumZoom => 0.05,
@@ -265,6 +272,8 @@ impl Action {
             Squelch,
             FilterWidth,
             FilterShift,
+            FilterLo,
+            FilterHi,
             AgcMaxGain,
             ManualGain,
             TxDrive,
@@ -411,6 +420,10 @@ impl ButtonMode {
 /// type stays free of any egui dependency and round-trips through
 /// `egui::Key::from_name`. `ctrl` means Ctrl, or ⌘ on macOS — one binding works
 /// on every platform.
+///
+/// `with` is an optional second key that must already be held (also an egui
+/// name). Used for combinations the modifier bits cannot express — hold `[`
+/// and tap an arrow to nudge a filter edge, for example. Empty means none.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct KeyChord {
@@ -418,6 +431,7 @@ pub struct KeyChord {
     pub ctrl: bool,
     pub shift: bool,
     pub alt: bool,
+    pub with: String,
 }
 
 impl KeyChord {
@@ -429,11 +443,16 @@ impl KeyChord {
         KeyChord { key: key.to_string(), shift: true, ..KeyChord::default() }
     }
 
+    /// `held` must be down when `key` is pressed (e.g. `[` + ArrowRight).
+    pub fn with_held(held: &str, key: &str) -> Self {
+        KeyChord { key: key.to_string(), with: held.to_string(), ..KeyChord::default() }
+    }
+
     pub fn is_empty(&self) -> bool {
         self.key.is_empty()
     }
 
-    /// Human-readable form, e.g. `Shift+ArrowRight`.
+    /// Human-readable form, e.g. `Shift+ArrowRight` or `[+ArrowLeft`.
     pub fn label(&self) -> String {
         if self.key.is_empty() {
             return "—".to_string();
@@ -448,8 +467,21 @@ impl KeyChord {
         if self.shift {
             s.push_str("Shift+");
         }
-        s.push_str(&self.key);
+        if !self.with.is_empty() {
+            s.push_str(chord_key_glyph(&self.with));
+            s.push('+');
+        }
+        s.push_str(chord_key_glyph(&self.key));
         s
+    }
+}
+
+/// Compact glyph for a few keys that look better as symbols in chord labels.
+fn chord_key_glyph(name: &str) -> &str {
+    match name {
+        "OpenBracket" => "[",
+        "CloseBracket" => "]",
+        other => other,
     }
 }
 
@@ -484,6 +516,19 @@ impl KeyBinding {
         KeyBinding {
             chord,
             action: Action::Tune,
+            value,
+            tuning: BindingTuning::with_step(step),
+            button: ButtonMode::Momentary,
+            enabled: true,
+        }
+    }
+
+    /// A continuous action nudged by a key press (and auto-repeat). `value` is
+    /// the signed detent count; the binding's step converts that into units.
+    fn continuous(chord: KeyChord, action: Action, value: f32, step: f32) -> Self {
+        KeyBinding {
+            chord,
+            action,
             value,
             tuning: BindingTuning::with_step(step),
             button: ButtonMode::Momentary,
@@ -542,6 +587,32 @@ impl KeyBinding {
             KeyBinding::toggle(KeyChord::plain("N"), Action::NoiseBlanker),
             KeyBinding::toggle(KeyChord::plain("F"), Action::FitSpan),
             KeyBinding::toggle(KeyChord::plain("V"), Action::WaterfallFlip),
+            // Passband edges: hold `[` / `]` and tap ← / → (Shift+bracket is
+            // unreliable across layouts; a held key is not).
+            KeyBinding::continuous(
+                KeyChord::with_held("OpenBracket", "ArrowLeft"),
+                Action::FilterLo,
+                -1.0,
+                50.0,
+            ),
+            KeyBinding::continuous(
+                KeyChord::with_held("OpenBracket", "ArrowRight"),
+                Action::FilterLo,
+                1.0,
+                50.0,
+            ),
+            KeyBinding::continuous(
+                KeyChord::with_held("CloseBracket", "ArrowLeft"),
+                Action::FilterHi,
+                -1.0,
+                50.0,
+            ),
+            KeyBinding::continuous(
+                KeyChord::with_held("CloseBracket", "ArrowRight"),
+                Action::FilterHi,
+                1.0,
+                50.0,
+            ),
             // The CW straight key keeps its historical Space bar, now as a
             // binding so any key can be chosen instead (the space bar's travel
             // is long for keying). Only armed by the CW panel's KEY toggle, so
@@ -920,7 +991,7 @@ impl InputSettings {
     /// The current shipped-defaults generation. Bumped whenever a release adds
     /// a *new* default binding — see [`Self::migrate`] for why that is not
     /// free.
-    pub const SCHEMA: u32 = 1;
+    pub const SCHEMA: u32 = 3;
 
     /// Bindings introduced at each schema step, so a saved file picks up a new
     /// action's default instead of silently losing the key.
@@ -936,8 +1007,16 @@ impl InputSettings {
     /// Only ever *adds*, and only where the operator has no binding for that
     /// action at all — a binding they moved, disabled or deleted after the
     /// migration ran is theirs, and the stamped `schema` is what stops this
-    /// putting it back.
-    const ADDED: &'static [(u32, Action)] = &[(1, Action::CwStraight)];
+    /// putting it back. When an action ships with several chords (filter
+    /// edges), every shipped binding for it is added together.
+    const ADDED: &'static [(u32, Action)] =
+        &[(1, Action::CwStraight), (2, Action::FilterLo), (2, Action::FilterHi)];
+
+    /// Actions whose *shipped* chords changed at this schema. Legacy chords for
+    /// the action are dropped and the current defaults are installed, so a
+    /// broken default (Shift+bracket) does not linger after the upgrade.
+    const REPLACED: &'static [(u32, Action)] =
+        &[(3, Action::FilterLo), (3, Action::FilterHi)];
 
     /// Bring a loaded file up to [`Self::SCHEMA`], reporting whether it had to
     /// be touched — and so whether it is worth writing back. The stamp is
@@ -952,12 +1031,36 @@ impl InputSettings {
             if self.schema >= at || self.keys.iter().any(|b| b.action == action) {
                 continue;
             }
-            if let Some(b) = shipped.iter().find(|b| b.action == action) {
+            for b in shipped.iter().filter(|b| b.action == action) {
                 self.keys.push(b.clone());
+            }
+        }
+        for &(at, action) in Self::REPLACED {
+            if self.schema >= at {
+                continue;
+            }
+            // Drop only the previous shipped chords (bracket alone / Shift+
+            // bracket). A custom binding the operator chose is kept.
+            self.keys.retain(|b| !(b.action == action && Self::is_legacy_filter_edge(b)));
+            if !self.keys.iter().any(|b| b.action == action) {
+                for b in shipped.iter().filter(|b| b.action == action) {
+                    self.keys.push(b.clone());
+                }
             }
         }
         self.schema = Self::SCHEMA;
         true
+    }
+
+    /// Schema-2 filter-edge defaults: the trigger key was `[` / `]` itself.
+    fn is_legacy_filter_edge(b: &KeyBinding) -> bool {
+        if !b.chord.with.is_empty() {
+            return false;
+        }
+        matches!(
+            (b.action, b.chord.key.as_str()),
+            (Action::FilterLo, "OpenBracket") | (Action::FilterHi, "CloseBracket")
+        )
     }
 }
 
@@ -1114,8 +1217,98 @@ mod tests {
         assert_eq!(find("M").action, Action::Mute);
         assert_eq!(find("N").action, Action::NoiseBlanker);
         assert_eq!(find("F").action, Action::FitSpan);
+        assert_eq!(find("[+ArrowLeft").action, Action::FilterLo);
+        assert_eq!(find("[+ArrowLeft").value, -1.0);
+        assert_eq!(find("[+ArrowRight").action, Action::FilterLo);
+        assert_eq!(find("[+ArrowRight").value, 1.0);
+        assert_eq!(find("]+ArrowLeft").action, Action::FilterHi);
+        assert_eq!(find("]+ArrowRight").value, 1.0);
         // PTT must never ship bound.
         assert!(!d.iter().any(|b| b.action == Action::Ptt));
+    }
+
+    /// Schema 2+ installs both chords for each filter-edge action, not just the
+    /// first shipped binding.
+    #[test]
+    fn filter_edge_migration_adds_every_shipped_chord() {
+        let mut old = InputSettings {
+            keys: KeyBinding::defaults()
+                .into_iter()
+                .filter(|b| b.action != Action::FilterLo && b.action != Action::FilterHi)
+                .collect(),
+            schema: 1,
+            ..InputSettings::default()
+        };
+        assert!(old.migrate());
+        let lo: Vec<_> = old.keys.iter().filter(|b| b.action == Action::FilterLo).collect();
+        let hi: Vec<_> = old.keys.iter().filter(|b| b.action == Action::FilterHi).collect();
+        assert_eq!(lo.len(), 2);
+        assert_eq!(hi.len(), 2);
+        assert!(lo.iter().any(|b| {
+            b.chord == KeyChord::with_held("OpenBracket", "ArrowLeft") && b.value < 0.0
+        }));
+        assert!(lo.iter().any(|b| {
+            b.chord == KeyChord::with_held("OpenBracket", "ArrowRight") && b.value > 0.0
+        }));
+        assert_eq!(old.schema, InputSettings::SCHEMA);
+    }
+
+    /// Schema 3 replaces the unreliable Shift+bracket defaults with hold-
+    /// bracket + arrow, without wiping a custom binding the operator chose.
+    #[test]
+    fn filter_edge_migration_replaces_legacy_bracket_chords() {
+        let mut old = InputSettings {
+            keys: {
+                let mut v: Vec<_> = KeyBinding::defaults()
+                    .into_iter()
+                    .filter(|b| b.action != Action::FilterLo && b.action != Action::FilterHi)
+                    .collect();
+                v.push(KeyBinding::continuous(
+                    KeyChord::plain("OpenBracket"),
+                    Action::FilterLo,
+                    -1.0,
+                    50.0,
+                ));
+                v.push(KeyBinding::continuous(
+                    KeyChord::shift("OpenBracket"),
+                    Action::FilterLo,
+                    1.0,
+                    50.0,
+                ));
+                v.push(KeyBinding::continuous(
+                    KeyChord::plain("CloseBracket"),
+                    Action::FilterHi,
+                    -1.0,
+                    50.0,
+                ));
+                v.push(KeyBinding::continuous(
+                    KeyChord::shift("CloseBracket"),
+                    Action::FilterHi,
+                    1.0,
+                    50.0,
+                ));
+                // Operator rebound FilterLo onto a letter — that stays.
+                v.push(KeyBinding::continuous(
+                    KeyChord::plain("Z"),
+                    Action::FilterLo,
+                    1.0,
+                    50.0,
+                ));
+                v
+            },
+            schema: 2,
+            ..InputSettings::default()
+        };
+        assert!(old.migrate());
+        let lo: Vec<_> = old.keys.iter().filter(|b| b.action == Action::FilterLo).collect();
+        assert!(lo.iter().all(|b| b.chord.key != "OpenBracket" || !b.chord.with.is_empty()));
+        assert!(lo.iter().any(|b| b.chord == KeyChord::plain("Z")));
+        // Custom Z kept the action occupied, so the arrow pair is not forced in.
+        assert!(!lo.iter().any(|b| b.chord.with == "OpenBracket"));
+        let hi: Vec<_> = old.keys.iter().filter(|b| b.action == Action::FilterHi).collect();
+        assert_eq!(hi.len(), 2);
+        assert!(hi.iter().any(|b| b.chord.with == "CloseBracket"));
+        assert_eq!(old.schema, 3);
     }
 
     /// The keypad plays slot 1 on "1" … slot 10 on "0", and every slot has

@@ -215,9 +215,7 @@ fn menu_bar(
                 } else {
                     "Set your grid square in Settings to zoom here".into()
                 };
-                if chrome::chip(ui, false, "My QTH")
-                    .on_hover_text(qth_tip)
-                    .clicked()
+                if chrome::chip(ui, false, "My QTH").on_hover_text(qth_tip).clicked()
                     && let Some(qth) = st.qth
                 {
                     let b = super::scene::bodies(st, wall + st.sim_offset_s);

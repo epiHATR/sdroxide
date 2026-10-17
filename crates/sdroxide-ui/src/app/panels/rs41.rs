@@ -235,69 +235,69 @@ impl SdroxideApp {
             .max_height(card_h)
             .auto_shrink([false, false])
             .show(ui, |ui| {
-            ui.set_min_width(ui.available_width());
-            ui.label(RichText::new(&s.serial).strong().size(13.0).color(theme::CYAN()));
-            let kind_line = match &s.subtype {
-                Some(st) if !st.is_empty() => format!("{} ({st})", s.kind.label()),
-                _ => s.kind.label().to_string(),
-            };
-            ui.label(
-                RichText::new(format!(
-                    "{kind_line} · {:.3} MHz · {} · RSSI {:.0} dBFS",
-                    s.frequency_hz / 1e6,
-                    fmt_age(now - s.last_at),
-                    s.rssi_dbfs
-                ))
-                .size(10.5)
-                .weak(),
-            );
-            // Two side-by-side key/value columns (four cells per row).
-            let fields: [(&str, Option<String>); 12] = [
-                ("Type", Some(kind_line)),
-                ("Altitude", s.altitude_m.map(|a| format!("{a:.0} m"))),
-                ("Ascent", s.ascent_rate_mps.map(|a| format!("{a:+.1} m/s"))),
-                ("Speed", s.vel_h_mps.map(|v| format!("{v:.1} m/s"))),
-                ("Heading", s.heading_deg.map(|h| format!("{h:.0}°"))),
-                ("Temp", s.temperature_c.map(|t| format!("{t:.1} °C"))),
-                ("Humidity", s.humidity_pct.map(|h| format!("{h:.0} %"))),
-                ("Pressure", s.pressure_hpa.map(|p| format!("{p:.1} hPa"))),
-                ("Battery", s.battery_v.map(|b| format!("{b:.2} V"))),
-                ("Sats", s.sats.map(|n| format!("{n}"))),
-                (
-                    "Position",
-                    match (s.lat, s.lon) {
-                        (Some(lat), Some(lon)) => Some(format!("{lat:.5}, {lon:.5}")),
-                        _ => None,
-                    },
-                ),
-                (
-                    "Frames",
-                    Some(format!(
-                        "{}{}",
-                        s.frames,
-                        s.frame.map(|f| format!(" (#{f})")).unwrap_or_default()
-                    )),
-                ),
-            ];
-            const COL_GAP: f32 = 14.0;
-            let col_w = ((ui.available_width() - 3.0 * COL_GAP) / 4.0).max(48.0);
-            egui::Grid::new("rs41-card-grid")
-                .num_columns(4)
-                .min_col_width(col_w)
-                .spacing([COL_GAP, 1.0])
-                .show(ui, |ui| {
-                    for pair in fields.chunks(2) {
-                        for (key, val) in pair {
-                            kv(ui, key, val.as_deref());
+                ui.set_min_width(ui.available_width());
+                ui.label(RichText::new(&s.serial).strong().size(13.0).color(theme::CYAN()));
+                let kind_line = match &s.subtype {
+                    Some(st) if !st.is_empty() => format!("{} ({st})", s.kind.label()),
+                    _ => s.kind.label().to_string(),
+                };
+                ui.label(
+                    RichText::new(format!(
+                        "{kind_line} · {:.3} MHz · {} · RSSI {:.0} dBFS",
+                        s.frequency_hz / 1e6,
+                        fmt_age(now - s.last_at),
+                        s.rssi_dbfs
+                    ))
+                    .size(10.5)
+                    .weak(),
+                );
+                // Two side-by-side key/value columns (four cells per row).
+                let fields: [(&str, Option<String>); 12] = [
+                    ("Type", Some(kind_line)),
+                    ("Altitude", s.altitude_m.map(|a| format!("{a:.0} m"))),
+                    ("Ascent", s.ascent_rate_mps.map(|a| format!("{a:+.1} m/s"))),
+                    ("Speed", s.vel_h_mps.map(|v| format!("{v:.1} m/s"))),
+                    ("Heading", s.heading_deg.map(|h| format!("{h:.0}°"))),
+                    ("Temp", s.temperature_c.map(|t| format!("{t:.1} °C"))),
+                    ("Humidity", s.humidity_pct.map(|h| format!("{h:.0} %"))),
+                    ("Pressure", s.pressure_hpa.map(|p| format!("{p:.1} hPa"))),
+                    ("Battery", s.battery_v.map(|b| format!("{b:.2} V"))),
+                    ("Sats", s.sats.map(|n| format!("{n}"))),
+                    (
+                        "Position",
+                        match (s.lat, s.lon) {
+                            (Some(lat), Some(lon)) => Some(format!("{lat:.5}, {lon:.5}")),
+                            _ => None,
+                        },
+                    ),
+                    (
+                        "Frames",
+                        Some(format!(
+                            "{}{}",
+                            s.frames,
+                            s.frame.map(|f| format!(" (#{f})")).unwrap_or_default()
+                        )),
+                    ),
+                ];
+                const COL_GAP: f32 = 14.0;
+                let col_w = ((ui.available_width() - 3.0 * COL_GAP) / 4.0).max(48.0);
+                egui::Grid::new("rs41-card-grid")
+                    .num_columns(4)
+                    .min_col_width(col_w)
+                    .spacing([COL_GAP, 1.0])
+                    .show(ui, |ui| {
+                        for pair in fields.chunks(2) {
+                            for (key, val) in pair {
+                                kv(ui, key, val.as_deref());
+                            }
+                            if pair.len() == 1 {
+                                ui.label("");
+                                ui.label("");
+                            }
+                            ui.end_row();
                         }
-                        if pair.len() == 1 {
-                            ui.label("");
-                            ui.label("");
-                        }
-                        ui.end_row();
-                    }
-                });
-        });
+                    });
+            });
     }
 
     fn rs41_map_pane(&mut self, ui: &mut egui::Ui, st: &Rs41Status, now: i64, h: f32) {

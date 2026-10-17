@@ -36,6 +36,7 @@ mod ism;
 mod js8;
 mod limerfe;
 mod memory;
+mod meshtastic;
 mod meters;
 mod mode;
 mod morse_trainer;
@@ -77,15 +78,9 @@ mod voice;
 mod wefax;
 mod winlink;
 mod wsjtx;
-mod meshtastic;
 mod wspr;
 
 pub use access::{AUTH_BUSY, AUTH_REFUSED, AuthPhase, RemoteAccess, RemoteServer, is_auth_busy};
-pub use meshtastic::{
-    MESHTASTIC_ASIA433_HZ, MESHTASTIC_EU868_HZ, MESHTASTIC_LANE_RATE_HZ, MESHTASTIC_MIN_RATE_HZ,
-    MESHTASTIC_US915_HZ, MeshtasticMessage, MeshtasticNode, MeshtasticPskKind, MeshtasticRegion,
-    MeshtasticSettings, MeshtasticStatus,
-};
 pub use adsb::{
     ADSB_DROP_LIST_S, ADSB_DROP_MAP_S, ADSB_FREQ_HZ, ADSB_GOOD_RATE_HZ, ADSB_HISTORY_POINTS,
     ADSB_MAX_AIRCRAFT, ADSB_MAX_RATE_HZ, ADSB_MIN_RATE_HZ, ADSB_TRACK_MAX, ADSB_VECTOR_MINUTES,
@@ -188,6 +183,11 @@ pub use limerfe::{
     resolve as rfe_resolve, rx_port_check, tx_port_check,
 };
 pub use memory::{BandStackEntry, MemoryChannel, MemoryFolder, MemorySort, RttyMemory};
+pub use meshtastic::{
+    MESHTASTIC_ASIA433_HZ, MESHTASTIC_EU868_HZ, MESHTASTIC_LANE_RATE_HZ, MESHTASTIC_MIN_RATE_HZ,
+    MESHTASTIC_US915_HZ, MeshtasticMessage, MeshtasticNode, MeshtasticPskKind, MeshtasticRegion,
+    MeshtasticSettings, MeshtasticStatus,
+};
 pub use meters::{Meters, OVERLOAD_FRACTION, PsMeter, TxMeters, TxTelemetry};
 pub use mode::{AgcMode, Mode, NrEngine, NrLevel, NrStrength, SlotTiming};
 pub use morse_trainer::{ADVANCE_RUN, Answer, KOCH_ORDER, MorseProgress, START_UNLOCKED};

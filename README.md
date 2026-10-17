@@ -1693,6 +1693,8 @@ them, plus PTT, band, mode, filter and much else, are rebindable on the
 | `M` | Toggle mute |
 | `N` | Toggle the noise blanker |
 | `F` | Fit the panadapter to the full device passband |
+| Hold `[` + `←` / `→` | Lower / raise the low filter edge (±50 Hz) |
+| Hold `]` + `←` / `→` | Lower / raise the high filter edge (±50 Hz) |
 
 ## Mouse operation
 

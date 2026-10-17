@@ -1908,6 +1908,16 @@ impl SdroxideApp {
     /// ↑/↓ ±1 kHz, PgUp/PgDn ±10 kHz, M mute, N noise blanker, F fit span.
     fn control_inputs(&mut self, ctx: &egui::Context, now: f64, cmds: &mut Vec<Command>) {
         let mut speech_acts: Vec<sdroxide_types::Action> = Vec::new();
+        // SAT list arrows only after a click in that panel — see
+        // `SatWinState::keys_capture`. Read before the borrow below.
+        self.input.suppress_arrows = self.sat_win.keys_capture
+            && matches!(
+                self.sat_tab,
+                crate::app::sat::SatTab::Satellites
+                    | crate::app::sat::SatTab::Watching
+                    | crate::app::sat::SatTab::Passes
+            )
+            && (self.show_sat || self.system_docked_as(crate::app::SystemDock::Sat));
         // Destructured rather than borrowed field-by-field: the runtime needs
         // `state` and the window flags mutably at the same time, and they are
         // disjoint parts of `self`.

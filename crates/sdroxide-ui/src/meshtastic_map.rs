@@ -97,7 +97,11 @@ pub fn show(
 
     let live: Vec<&MeshtasticNode> = nodes
         .iter()
-        .filter(|n| n.lat.is_some() && n.lon.is_some() && now.saturating_sub(n.last_heard_unix) <= DROP_MAP_S)
+        .filter(|n| {
+            n.lat.is_some()
+                && n.lon.is_some()
+                && now.saturating_sub(n.last_heard_unix) <= DROP_MAP_S
+        })
         .collect();
 
     let aspect = (rect.height() / rect.width()) as f64;

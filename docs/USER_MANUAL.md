@@ -16255,6 +16255,8 @@ right.
 | N | Toggle noise blanker. |
 | F | Fit the view to the full receiver span. |
 | V | Flip the waterfall (scroll upwards). |
+| Hold `[` + ← / → | Lower / raise the low filter edge (±50 Hz). |
+| Hold `]` + ← / → | Lower / raise the high filter edge (±50 Hz). |
 | 1 – 9, 0 (numpad) | Transmit voice-keyer slots 1–10 (nothing if the slot is empty). |
 | − (numpad) | Stop a voice-keyer message. |
 | Space (CW, with **KEY** on) | The straight key: carrier while held, and re-bindable as **CW straight key** in Settings → Controls ([2.14](#214-cw-decoding-and-keyboard-sending)). |

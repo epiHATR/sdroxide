@@ -1393,8 +1393,7 @@ impl SdroxideApp {
         #[cfg(target_arch = "wasm32")]
         let _ = &wgpu_render_state;
         let remote = ctrl.engine_is_remote();
-        let seat_restore =
-            if remote { persist::load_remote_seat(storage, radio_id) } else { None };
+        let seat_restore = if remote { persist::load_remote_seat(storage, radio_id) } else { None };
         let mut app = SdroxideApp {
             ctrl,
             display_class,

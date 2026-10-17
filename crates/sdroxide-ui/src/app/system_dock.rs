@@ -446,7 +446,8 @@ impl SdroxideApp {
             if room.is_empty() {
                 break;
             }
-            let room_w: f32 = room.iter().map(|&i| self.system_dock_weight(heights[i].0)).sum::<f32>().max(0.05);
+            let room_w: f32 =
+                room.iter().map(|&i| self.system_dock_weight(heights[i].0)).sum::<f32>().max(0.05);
             for i in room {
                 let share = rem * (self.system_dock_weight(heights[i].0) / room_w);
                 heights[i].1 = (heights[i].1 + share).min(cap);
@@ -1021,11 +1022,8 @@ impl SdroxideApp {
                 let new_ha = (ha + dy).clamp(lo, cap);
                 let new_hb = (pair_px - new_ha).clamp(lo, cap);
                 // If the pair no longer sums (both at cap), keep the drag side.
-                let new_hb = if (new_ha + new_hb - pair_px).abs() > 0.5 {
-                    pair_px - new_ha
-                } else {
-                    new_hb
-                };
+                let new_hb =
+                    if (new_ha + new_hb - pair_px).abs() > 0.5 { pair_px - new_ha } else { new_hb };
                 self.system_dock_weights.insert(a, new_ha.max(0.05));
                 self.system_dock_weights.insert(b, new_hb.max(0.05));
             }
