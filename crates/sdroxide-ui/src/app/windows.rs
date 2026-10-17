@@ -103,9 +103,11 @@ fn mem_drop_target<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -
     (out.inner, dropped)
 }
 
-/// One memory: recall, name/frequency/mode, edit, delete. The label is the
-/// drag handle — deliberately not the whole row, whose drag sense would sit
-/// over the buttons and turn a sloppy RCL or DEL press into a drag.
+/// One memory row: `[RCL] {frequency} {mode} {name} [EDIT] [DEL]`.
+///
+/// The name is the drag handle — deliberately not the whole row, whose drag
+/// sense would sit over the buttons and turn a sloppy RCL or DEL press into a
+/// drag.
 ///
 /// `edit` is the edit in progress anywhere in the list; when it is this
 /// memory's, the row is replaced by the editor.
@@ -121,94 +123,88 @@ fn memory_row(
         memory_edit_row(ui, edit, focus, antennas, cmds);
         return;
     }
-    ui.horizontal(|ui| {
+    // An RTTY memory recalls its modem setup with it; show that next to the
+    // mode so two memories on the same dial read as the different stations
+    // they are (f32's Display keeps 45.45 as-is and 170.0 as "170").
+    let rtty = m.rtty.map_or(String::new(), |r| {
+        format!(" {}/{}{}", r.baud, r.shift_hz, if r.reverse { " R" } else { "" })
+    });
+    // …and the repeater setup, for the same reason.
+    let rpt = repeater_summary(m.repeater);
+    // …and the antenna — nothing for a single-socket receiver.
+    let ant = m.antenna.as_deref().map_or(String::new(), |a| format!(" [{a}]"));
+    let mode_text = format!("{}{}{}", m.mode.label(), rtty, rpt);
+    let name_text = format!("{}{}", m.name, ant);
+
+    // Top-aligned: a centred horizontal row expands to the full dock height.
+    ui.horizontal_top(|ui| {
         if crate::chrome::chip(ui, false, "RCL").on_hover_text("Recall").clicked() {
             cmds.push(Command::RecallMemory(m.id));
         }
-        // The buttons are placed before the label rather than after it, so that
-        // what is left over is the label's and it truncates inside it. Drawn
-        // the other way round the label claims the width its text wants — a
-        // memory list is monospace and wide — and the row's buttons end up
-        // painted over the end of it.
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if crate::chrome::chip_accent(
-                ui,
-                false,
-                RichText::new("DEL").size(11.0),
-                crate::theme::PINK(),
-                Color32::WHITE,
+        let row_h = ui.spacing().interact_size.y;
+        // Fixed columns so frequency and mode line up down the list; name
+        // fills the middle; EDIT / DEL stay flush on the right edge.
+        const FREQ_W: f32 = 118.0;
+        const MODE_W: f32 = 72.0;
+        ui.add_sized(
+            egui::vec2(FREQ_W, row_h),
+            egui::Label::new(
+                RichText::new(format!("{:>11.6} MHz", m.freq_hz / 1e6)).monospace().size(11.0),
             )
-            .on_hover_text("Delete")
-            .clicked()
-            {
-                cmds.push(Command::DeleteMemory(m.id));
-            }
-            if crate::chrome::chip(ui, false, RichText::new("EDT").size(11.0))
-                .on_hover_text("Edit the name, frequency, mode, antenna and repeater setup")
+            .truncate(),
+        );
+        ui.add_sized(
+            egui::vec2(MODE_W, row_h),
+            egui::Label::new(RichText::new(mode_text).monospace().size(11.0)).truncate(),
+        );
+        // RTL places DEL then EDIT from the right edge; name takes the rest.
+        let rest = ui.available_width();
+        ui.allocate_ui_with_layout(
+            egui::vec2(rest, row_h),
+            egui::Layout::right_to_left(egui::Align::Center),
+            |ui| {
+                if crate::chrome::chip_accent(
+                    ui,
+                    false,
+                    RichText::new("DEL").size(11.0),
+                    crate::theme::PINK(),
+                    Color32::WHITE,
+                )
+                .on_hover_text("Delete")
                 .clicked()
-            {
-                *edit = Some(MemoryEdit::of(m));
-                *focus = true;
-            }
-            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                ui.dnd_drag_source(
-                    crate::layout::salted_id(ui.ctx(), "mem-drag").with(m.id),
-                    DraggedMemory(m.id),
-                    |ui| {
-                        // An RTTY memory recalls its modem setup with it; show that
-                        // setup so two memories on the same dial read as the
-                        // different stations they are (f32's Display keeps 45.45
-                        // as-is and 170.0 as "170").
-                        let rtty = m.rtty.map_or(String::new(), |r| {
-                            format!(
-                                " {}/{}{}",
-                                r.baud,
-                                r.shift_hz,
-                                if r.reverse { " R" } else { "" }
-                            )
-                        });
-                        // …and the repeater setup, for the same reason: two
-                        // memories on one dial are different channels if one
-                        // shifts and the other does not.
-                        let rpt = repeater_summary(m.repeater);
-                        // …and the antenna, which is a third way two channels
-                        // on one dial can be different channels. Nothing at all
-                        // for a memory that says nothing about antennas, which
-                        // is every one stored on a receiver with a single
-                        // socket.
-                        let ant = m.antenna.as_deref().map_or(String::new(), |a| format!(" [{a}]"));
-                        // Laid out rather than added: the whole of what is left
-                        // is the drag handle, and the text is pinned to the left
-                        // of it so the columns line up down the list. `add_sized`
-                        // would centre each row's text in its own box, which puts
-                        // a short name in a different place from a long one.
-                        let w = ui.available_width();
-                        let h = ui.spacing().interact_size.y;
-                        ui.allocate_ui_with_layout(
-                            egui::vec2(w, h),
-                            egui::Layout::left_to_right(egui::Align::Center),
-                            |ui| {
-                                ui.add(
-                                    egui::Label::new(
-                                        RichText::new(format!(
-                                            "{:<10} {:>11.6} MHz {}{}{}{}",
-                                            m.name,
-                                            m.freq_hz / 1e6,
-                                            m.mode.label(),
-                                            rtty,
-                                            rpt,
-                                            ant
-                                        ))
-                                        .monospace(),
-                                    )
-                                    .truncate(),
-                                );
-                            },
-                        );
-                    },
-                );
-            });
-        });
+                {
+                    cmds.push(Command::DeleteMemory(m.id));
+                }
+                if crate::chrome::chip(ui, false, RichText::new("EDIT").size(11.0))
+                    .on_hover_text("Edit the name, frequency, mode, antenna and repeater setup")
+                    .clicked()
+                {
+                    *edit = Some(MemoryEdit::of(m));
+                    *focus = true;
+                }
+                let name_w = ui.available_width().max(48.0);
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    ui.dnd_drag_source(
+                        crate::layout::salted_id(ui.ctx(), "mem-drag").with(m.id),
+                        DraggedMemory(m.id),
+                        |ui| {
+                            ui.allocate_ui_with_layout(
+                                egui::vec2(name_w, row_h),
+                                egui::Layout::left_to_right(egui::Align::Center),
+                                |ui| {
+                                    ui.add(
+                                        egui::Label::new(
+                                            RichText::new(name_text).monospace().size(11.0),
+                                        )
+                                        .truncate(),
+                                    );
+                                },
+                            );
+                        },
+                    );
+                });
+            },
+        );
     });
 }
 
@@ -499,9 +495,8 @@ impl SdroxideApp {
                 .open(&mut open)
                 .frame(crate::chrome::window_frame())
                 .resizable(true)
-                // Wide enough for a row: the recall button, a name, a dial to the
-                // Hz, a mode, and the edit and delete buttons. Narrower than this
-                // and every name is drawn with an ellipsis on it.
+                // Wide enough for a row: RCL, frequency, mode, name, EDIT, DEL.
+                // Narrower than this and every name is drawn with an ellipsis.
                 .default_width(size.x)
                 // A real starting height, and a floor under what egui remembers:
                 // the window used to hug its (often short) list and come up a few
