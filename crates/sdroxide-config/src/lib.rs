@@ -924,9 +924,10 @@ pub struct RadiosFile {
     /// Deliberately *not* the order of `radios` itself. That list is the
     /// station's identity: its first entry is the radio that holds the shared
     /// network services, takes the command line's overrides and the legacy
-    /// configuration paths, and cannot be closed — here and, over the wire, at
-    /// every client. Rearranging the strip is a display choice and must not
-    /// hand any of that to a different radio, so the two are kept apart.
+    /// configuration paths — here and, over the wire, at every client — until
+    /// that radio is closed and the next entry inherits those duties.
+    /// Rearranging the strip is a display choice and must not hand any of that
+    /// to a different radio, so the two are kept apart.
     ///
     /// Read through [`RadiosFile::display_order`], never raw: a hand-edited or
     /// stale list may name a radio that has been closed or leave out one that

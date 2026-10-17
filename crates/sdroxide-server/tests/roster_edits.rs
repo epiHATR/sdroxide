@@ -283,24 +283,43 @@ async fn a_client_adds_renames_switches_and_closes_the_stations_radios() {
     radios_until(&mut second, |r| r.iter().any(|x| x.id == added && x.enabled == Some(true))).await;
     assert!(sdroxide_config::load_radios().is_enabled(added));
 
-    // --- the first radio is not closeable -----------------------------
+    // --- close the first while another remains ------------------------
+    // The previous first may go: `/ws` then means the radio that is left.
     send(&mut first, &ClientMsg::RemoveRadio { id: 0 }).await;
-    let why = next_notice(&mut first).await;
-    assert!(why.contains("first radio"), "unexpected refusal: {why}");
-    let (status, body) = http_get("/radios").await;
-    assert!(status.contains("200"));
-    assert!(body.contains("\"id\":0"), "the first radio went anyway: {body}");
-
-    // --- close --------------------------------------------------------
-    send(&mut first, &ClientMsg::RemoveRadio { id: added }).await;
     let (_, radios) = radios_until(&mut first, |r| r.len() == 1).await;
-    assert_eq!(radios[0].id, 0, "the wrong radio was closed");
+    assert_eq!(radios[0].id, added, "closing the first should leave the other");
+    let (me, radios) = radios_until(&mut second, |r| r.len() == 1).await;
+    assert_eq!(me, added);
+    assert_eq!(radios[0].id, added);
+    assert!(!sdroxide_config::load_radios().radios.iter().any(|r| r.id == 0));
 
+    // --- the only radio left is not closeable -----------------------
+    send(&mut second, &ClientMsg::RemoveRadio { id: added }).await;
+    let why = next_notice(&mut second).await;
+    assert!(why.contains("only radio"), "unexpected refusal: {why}");
+    assert!(
+        sdroxide_config::load_radios().radios.iter().any(|r| r.id == added),
+        "the only radio went anyway"
+    );
+
+    // Re-add a spare, close it, and check the closed radio's client, engine and
+    // address go with it — the same teardown the old "close added" path had.
+    send(&mut second, &ClientMsg::AddRadio { name: "spare".into() }).await;
+    let (_, radios) = radios_until(&mut second, |r| r.len() == 2).await;
+    let spare = radios.iter().map(|r| r.id).find(|&id| id != added).expect("spare radio");
+    let (mut third, _) =
+        tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{PORT}/ws/{spare}"))
+            .await
+            .expect("connect the spare radio");
+    send(&mut third, &hello()).await;
+    let _ = next_radios(&mut third).await;
+
+    send(&mut second, &ClientMsg::RemoveRadio { id: spare }).await;
     // The client that was *on* the closed radio is told, on the way out: the
     // roster it gets no longer lists the radio it is on, which is how its tab
     // knows to close rather than to redial an address that is now a 404.
-    let (me, radios) = radios_until(&mut second, |r| !r.iter().any(|x| x.id == added)).await;
-    assert_eq!(me, added, "the closed radio's client was told about somebody else");
+    let (me, radios) = radios_until(&mut third, |r| !r.iter().any(|x| x.id == spare)).await;
+    assert_eq!(me, spare, "the closed radio's client was told about somebody else");
     assert_eq!(radios.len(), 1, "the roster it went out with was wrong");
 
     // ...and its engine stops, which is what hands the device back. Nothing on
@@ -320,8 +339,8 @@ async fn a_client_adds_renames_switches_and_closes_the_stations_radios() {
     assert!(stopped.is_ok(), "the closed radio's engine is still running");
 
     // Gone from the roster file, and from the address space.
-    assert!(!sdroxide_config::load_radios().radios.iter().any(|r| r.id == added));
-    match tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{PORT}/ws/{added}")).await {
+    assert!(!sdroxide_config::load_radios().radios.iter().any(|r| r.id == spare));
+    match tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{PORT}/ws/{spare}")).await {
         Err(tokio_tungstenite::tungstenite::Error::Http(r)) => assert_eq!(r.status(), 404),
         Err(e) => panic!("expected a 404 for the closed radio, got {e}"),
         Ok(_) => panic!("a socket opened on a radio that has been closed"),

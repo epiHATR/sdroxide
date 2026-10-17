@@ -169,15 +169,16 @@ pub struct MultiApp {
     /// [`MultiApp::open_peer_radios`].
     peers_opened: std::collections::HashSet<String>,
     /// The station radio: the first one the frontend booted, which is the first
-    /// entry of `radios.json`.
+    /// entry of `radios.json` until that radio is closed.
     ///
     /// Held rather than read off `tabs[0]`, because the strip's order is the
     /// operator's to arrange (issue #224) and this radio's standing is not. It
-    /// holds the station's shared services and the legacy configuration paths,
-    /// takes the command line's overrides, and is the one radio that cannot be
-    /// closed — none of which may move to another radio because a chip was
-    /// dragged. `None` only where every tab is somebody else's station, which
-    /// is every browser client.
+    /// holds the station's shared services and (while it lives) the legacy
+    /// configuration paths, and takes the command line's overrides — none of
+    /// which may move to another radio because a chip was dragged. Closing it
+    /// while other local radios remain hands those duties to the next local
+    /// tab. `None` only where every tab is somebody else's station, which is
+    /// every browser client.
     station_radio: Option<u32>,
     /// Whether the window has been checked against the screen it opened on.
     ///
@@ -358,12 +359,12 @@ impl MultiApp {
     /// The roster as published to the visible tabs, for the settings dialog's
     /// copy of the strip.
     fn roster(&self) -> Vec<RadioChip> {
-        // The radio each station will not part with: its first. For this
-        // machine that is [`MultiApp::station_radio`] — the radio that holds
-        // the shared services and the legacy configuration, which is where the
-        // frontend booted it and not wherever its chip has since been dragged
-        // to; for a station at the far end it is the first radio in the roster
-        // it announced, which is what its `/ws` means.
+        // Which radio currently answers as the station's first. For this
+        // machine that is [`MultiApp::station_radio`] — shared services and
+        // legacy configuration, wherever its chip has since been dragged
+        // (issue #224); for a station at the far end it is the first radio in
+        // the roster it announced, which is what its `/ws` means. Closing it
+        // is allowed when another radio remains.
         let first_local = self.station_radio;
         self.tabs
             .iter()
@@ -1119,18 +1120,8 @@ impl MultiApp {
         if i >= self.tabs.len() || self.tabs.len() == 1 {
             return;
         }
-        // The station radio stays: it holds the shared network services and the
-        // legacy configuration, and a window is a station. Named rather than
-        // "the first tab", because the strip's order is the operator's to
-        // arrange (issue #224) and this radio's standing is not.
-        //
-        // A *connection* is never that radio, whichever chip it sits under — a
-        // client dialled straight at one of a station's other radios has one as
-        // its first tab — and a connection whose radio has been closed at the
-        // far end has to be able to go with it.
-        if self.station_radio == Some(self.tabs[i].id) {
-            return;
-        }
+        let closing_id = self.tabs[i].id;
+        let was_station = self.station_radio == Some(closing_id);
         let mut tab = self.tabs.remove(i);
         tab.app.shutdown_ctrl();
         // Closing a connection hangs up and nothing more: it was never in this
@@ -1152,6 +1143,17 @@ impl MultiApp {
         if was_focused {
             self.focused = self.focused.min(self.tabs.len() - 1);
             self.tabs[self.focused].app.set_focused(true, ctx);
+        }
+        // Closing the station radio hands the shared services to another local
+        // tab — a window is still a station as long as one of its own remains.
+        if was_station {
+            self.station_radio = self.tabs.iter().find(|t| !t.remote).map(|t| t.id);
+            let shared = self.tabs.len() > 1;
+            if let Some(id) = self.station_radio
+                && let Some(t) = self.tabs.iter_mut().find(|t| t.id == id)
+            {
+                t.app.set_shared_log(shared);
+            }
         }
         if self.tabs.len() == 1 {
             self.tabs[0].app.set_shared_log(false);

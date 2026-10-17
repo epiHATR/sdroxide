@@ -345,8 +345,8 @@ impl Station {
 
     /// The station's first radio: what `/ws` means, and the one radio a client
     /// that knows nothing of a roster ever asks for. Always there — a station
-    /// with none is refused at startup ([`ServerError::NoRadios`]) and the
-    /// first radio is the one removal will not take.
+    /// with none is refused at startup ([`ServerError::NoRadios`]), and closing
+    /// the previous first simply leaves the next entry answering here.
     pub(crate) fn first(&self) -> Arc<Shared> {
         self.radios.read().unwrap()[0].clone()
     }
@@ -439,9 +439,9 @@ impl Station {
     /// Take a radio out of the roster. Its configuration stays on disk: this
     /// is closing a radio, not destroying what it was set up as.
     ///
-    /// The station's first radio is refused — it holds the shared network
-    /// services and the legacy configuration, and `/ws` has to keep meaning
-    /// something.
+    /// The last radio is refused — a station with none is not a station, and
+    /// `/ws` has to keep meaning something. Closing the previous first radio
+    /// simply leaves the next one answering at `/ws`.
     pub(crate) fn remove_radio(&self, id: u32) -> Result<(), String> {
         let Some(remove) = self.remove.as_ref() else {
             return Err("this station's radios cannot be changed from here".into());
@@ -449,8 +449,8 @@ impl Station {
         let _edit = self.edit.lock().unwrap_or_else(|e| e.into_inner());
         let gone = {
             let mut radios = self.radios.write().unwrap();
-            if radios.first().is_some_and(|r| r.id == id) {
-                return Err("the station's first radio cannot be closed".into());
+            if radios.len() <= 1 {
+                return Err("the station's only radio cannot be closed".into());
             }
             let Some(i) = radios.iter().position(|r| r.id == id) else {
                 return Err(format!("this station has no radio {id}"));

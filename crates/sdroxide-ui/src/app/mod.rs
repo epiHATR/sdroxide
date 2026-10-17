@@ -1205,10 +1205,10 @@ pub(crate) struct RadioChip {
     /// edits from a client; false for a browser tab's own machine, which has no
     /// roster, and for a station whose host did not wire that up.
     pub roster_editable: bool,
-    /// Whether this is the first radio of the station that holds it — the one
-    /// that runs the station-wide network services and answers at its plain
-    /// `/ws`. It is not offered for closing anywhere, because no station will
-    /// let go of it.
+    /// Whether this is currently the first radio of the station that holds it
+    /// — the one that answers at plain `/ws` and runs station-wide services.
+    /// Informational for the roster; closing is allowed as long as another
+    /// radio remains (the next one inherits `/ws`).
     pub first_of_station: bool,
 }
 

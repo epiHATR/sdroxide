@@ -4036,37 +4036,30 @@ impl SdroxideApp {
                         on: !chip.enabled,
                     });
                 }
-                // The first radio is the station: it runs the shared network
-                // services and the legacy configuration, and it stays.
+                // On one of this machine's own radios "×" asks, then closes it.
+                // On a *connection* it opens a menu, because there are two
+                // things it could mean and they are not the same: hanging up
+                // leaves the radio where it is, and closing it on the station
+                // takes it out of somebody's roster. Both live here — a second
+                // button somewhere else is a button that does not get found
+                // (issue #188) — and closing a radio always asks again, so
+                // taking one out of a roster is never one stray click.
                 //
-                // On one of this machine's own radios "×" closes it, as it
-                // always has. On a *connection* it opens a menu instead,
-                // because there are two things it could mean and they are not
-                // the same thing at all: hanging up leaves the radio where it
-                // is, and closing it on the station takes it out of somebody's
-                // roster. Both live here, where the operator reaches for the
-                // close box — a second button somewhere else is a button that
-                // does not get found (issue #188) — and the second asks again
-                // before it acts, so taking a radio out of a station is still
-                // never one stray click.
-                // Exactly the one tab the shell refuses to close: this
-                // machine's station radio, which holds the shared services and
-                // the legacy configuration. Not "the first chip on the strip" —
-                // that is the operator's to arrange (issue #224) — and never a
-                // connection, however far left it has been dragged: hanging up
-                // has to stay possible.
-                if !(chip.station.is_empty() && chip.first_of_station) {
+                // The only radio that cannot close is the last one left: a
+                // window without a radio is not a station. Any other radio —
+                // including the one that currently answers at `/ws` — may go;
+                // the next remaining radio inherits those duties.
+                let sole_local = chip.station.is_empty() && self.radio_roster.len() <= 1;
+                if !sole_local {
                     let closing = if chip.station.is_empty() {
-                        "Close this radio (its configuration is kept)"
+                        "Close this radio — configuration is kept on disk"
                     } else {
                         "Close this tab, or close the radio on its station"
                     };
                     let close = crate::chrome::chip(ui, false, RichText::new("×").size(11.0))
                         .on_hover_text(closing);
                     if chip.station.is_empty() {
-                        if close.clicked() {
-                            requests.push(crate::app::RadioTabRequest::Close(chip.id));
-                        }
+                        Self::close_local_radio_menu(ui, &close, chip, requests);
                     } else {
                         Self::close_station_radio_menu(ui, &close, chip, requests);
                     }
@@ -4191,6 +4184,41 @@ impl SdroxideApp {
         ui.add_space(6.0);
     }
 
+    /// What the "×" on a *local* radio opens: confirm close, and say why the
+    /// configuration is kept.
+    ///
+    /// Closing drops the roster entry and releases the device. The files under
+    /// `~/.config/sdroxide/` stay — a closed radio is not a deleted one — so
+    /// Settings → Radio setup survives and a later radio can reuse it. That is
+    /// easy to miss if "×" acted on the first click with only a hover tip.
+    fn close_local_radio_menu(
+        ui: &mut egui::Ui,
+        button: &egui::Response,
+        chip: &crate::app::RadioChip,
+        requests: &mut Vec<crate::app::RadioTabRequest>,
+    ) {
+        crate::chrome::menu_popup(ui, button, |ui| {
+            let mut body = format!(
+                "Close {}? It leaves the roster and releases its device. Its configuration \
+                 stays on disk (~/.config/sdroxide/) — closing is not deleting the setup — \
+                 so you can add a radio later without redoing Settings → Radio.",
+                chip.display_name(),
+            );
+            if chip.first_of_station {
+                body.push_str(
+                    " This radio currently answers at /ws; another remaining radio will \
+                     inherit that.",
+                );
+            }
+            ui.label(RichText::new(body).size(11.5));
+            ui.add_space(4.0);
+            if ui.button(RichText::new("Close this radio").strong()).clicked() {
+                requests.push(crate::app::RadioTabRequest::Close(chip.id));
+                ui.close();
+            }
+        });
+    }
+
     /// What the "×" on a *connection's* chip opens: hang up, or close the radio
     /// on the station it lives at.
     ///
@@ -4200,11 +4228,8 @@ impl SdroxideApp {
     /// has always done, and it changes nothing anywhere else. Taking the radio
     /// out of the station's roster is the second, and asks again: it reaches
     /// across the network, every other client on that station sees it, and its
-    /// device is released.
-    ///
-    /// The station's own first radio is never offered the second: it holds the
-    /// shared network services and the address every client that knows nothing
-    /// of a roster arrives at, and the station refuses to close it.
+    /// device is released. The station refuses only when it would be left with
+    /// no radios at all.
     fn close_station_radio_menu(
         ui: &mut egui::Ui,
         button: &egui::Response,
@@ -4212,7 +4237,7 @@ impl SdroxideApp {
         requests: &mut Vec<crate::app::RadioTabRequest>,
     ) {
         let where_ = station_label(&chip.station).to_string();
-        let removable = chip.roster_editable && !chip.first_of_station;
+        let removable = chip.roster_editable;
         crate::chrome::menu_popup(ui, button, |ui| {
             if ui
                 .button("Close this tab")
@@ -4226,14 +4251,19 @@ impl SdroxideApp {
                 return;
             }
             ui.separator();
-            ui.label(
-                RichText::new(format!(
-                    "Close {} on {where_}? Its configuration stays on that machine; the tab here \
-                     closes with it, and so does everyone else's.",
-                    chip.display_name(),
-                ))
-                .size(11.5),
+            let mut body = format!(
+                "Close {} on {where_}? Its configuration stays on that machine — closing \
+                 removes it from the roster, not from disk — so the setup survives. The \
+                 tab here closes with it, and so does everyone else's.",
+                chip.display_name(),
             );
+            if chip.first_of_station {
+                body.push_str(
+                    " It currently answers at /ws there; another remaining radio will \
+                     inherit that.",
+                );
+            }
+            ui.label(RichText::new(body).size(11.5));
             if ui.button(RichText::new(format!("Close it on {where_}")).strong()).clicked() {
                 requests.push(crate::app::RadioTabRequest::RemoveFromStation(chip.id));
                 ui.close();
