@@ -85,7 +85,7 @@ impl SdroxideApp {
             && dial <= sdroxide_types::RS41_BAND_HI_HZ
             && st.unavailable.is_none();
 
-        ui.horizontal_wrapped(|ui| {
+        ui.horizontal(|ui| {
             ui.set_min_height(22.0);
             ui.label(RichText::new("SONDE").size(11.0).strong().color(theme::CYAN()));
             ui.label(
@@ -125,24 +125,25 @@ impl SdroxideApp {
                 );
             }
 
-            ui.separator();
-            let up = self.net_cfg_edit.sondehub.upload;
-            if crate::chrome::chip(ui, up, "UPLOAD")
-                .on_hover_text(
-                    "Upload radiosonde receptions to SondeHub. Uses My callsign and \
-                     My grid from the digimode identity.",
-                )
-                .clicked()
-            {
-                self.net_cfg_edit.sondehub.upload = !up;
-                cmds.push(Command::SetNetworkConfig(self.net_cfg_edit.clone()));
-            }
-            if crate::chrome::chip(ui, self.show_rs41_setup, "SETUP")
-                .on_hover_text("Sonde type, decoder timeouts, trail length and table size")
-                .clicked()
-            {
-                self.show_rs41_setup = !self.show_rs41_setup;
-            }
+            crate::chrome::row_tail(ui, |ui| {
+                let up = self.net_cfg_edit.sondehub.upload;
+                if crate::chrome::chip(ui, up, "UPLOAD")
+                    .on_hover_text(
+                        "Upload radiosonde receptions to SondeHub. Uses My callsign and \
+                         My grid from the digimode identity.",
+                    )
+                    .clicked()
+                {
+                    self.net_cfg_edit.sondehub.upload = !up;
+                    cmds.push(Command::SetNetworkConfig(self.net_cfg_edit.clone()));
+                }
+                if crate::chrome::chip(ui, self.show_rs41_setup, "SETUP")
+                    .on_hover_text("Sonde type, decoder timeouts, trail length and table size")
+                    .clicked()
+                {
+                    self.show_rs41_setup = !self.show_rs41_setup;
+                }
+            });
         });
 
         if let Some(why) = &st.unavailable {
