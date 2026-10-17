@@ -14,7 +14,7 @@
 //! cheap enough to do once, and far too dear to do ninety times per repaint.
 
 use eframe::egui::{self, RichText};
-use sdroxide_types::{Command, Mode, SatLockConfig, SatUplink, Vfo};
+use sdroxide_types::{Command, Mode, SatLockConfig, SatUplink};
 
 use crate::app::SdroxideApp;
 use crate::theme;
@@ -1236,12 +1236,21 @@ fn pass_timeline(
 
 /// The mode a link's published emission maps onto. Satellite SSB convention
 /// is USB on the downlink, whatever the band. An SSTV downlink is FM on V/UHF,
-/// and tuning it as plain NFM would leave the picture undecoded (#622).
+/// and tuning it as plain NFM (or USB) would leave the picture undecoded (#622).
+///
+/// SatNOGS often publishes `mode: "SSTV"` with no "FM" in the string — that
+/// still means FM SSTV on the bird, not SSB.
 fn mode_for_link(l: &sdroxide_types::SatLink) -> Mode {
     let m = l.mode.to_ascii_uppercase();
-    let sstv = m.contains("SSTV") || l.label.to_ascii_uppercase().contains("SSTV");
-    if sstv && m.contains("FM") {
-        Mode::SstvFm
+    let label = l.label.to_ascii_uppercase();
+    let sstv = m.contains("SSTV") || label.contains("SSTV");
+    if sstv {
+        // Rare HF/SSB SSTV on a satellite; everything else is the FM decoder.
+        if m.contains("SSB") || m.contains("USB") || m.contains("LSB") {
+            Mode::Sstv
+        } else {
+            Mode::SstvFm
+        }
     } else if m.contains("FM") || m.contains("APT") {
         Mode::Nfm
     } else if m.contains("SSB") || m.contains("BPSK") || m.contains("GMSK") || m.contains("AX.25") {
@@ -2690,20 +2699,23 @@ impl SdroxideApp {
                 ui.horizontal_top(|ui| {
                     if crate::chrome::chip(ui, false, "TUNE")
                         .on_hover_text(
-                            "Set the dial and mode to this link — no lock, no correction",
+                            "Set the dial and decoder to this link — no lock, no correction",
                         )
                         .clicked()
                     {
-                        if link.downlink.is_some() {
-                            cmds.push(Command::SetVfo {
-                                vfo: Vfo::A,
-                                hz: lock_downlink_hz(link, self.state.active_freq_hz()),
-                            });
-                        }
+                        // Mode first so a decoder that parks on a convention
+                        // frequency (APRS, …) cannot overwrite the downlink we
+                        // set next — same order as a memory recall.
                         cmds.push(Command::SetMode {
                             rx: sdroxide_types::RxId::Main,
                             mode: mode_for_link(link),
                         });
+                        if link.downlink.is_some() {
+                            cmds.push(Command::SetVfo {
+                                vfo: self.state.active_vfo,
+                                hz: lock_downlink_hz(link, self.state.active_freq_hz()),
+                            });
+                        }
                     }
                     // Green fill needs [`theme::INK_ON_BRIGHT`], not the cyan-chip ink —
                     // several themes' greens are mid-bright and wash out dark `INK_ON_CYAN`.
@@ -2837,7 +2849,7 @@ mod tests {
     use sdroxide_types::{Passband, SatLink};
 
     /// Issue #622: TUNE on the ISS SSTV downlink lands in SSTV-FM, where the
-    /// picture is decoded, rather than plain NFM.
+    /// picture is decoded, rather than plain NFM or USB.
     #[test]
     fn an_sstv_downlink_tunes_in_sstv_fm() {
         let sstv = SatLink::down("SSTV 70 cm", "SSTV FM / PD120", Passband::at(437.550));
@@ -2845,6 +2857,11 @@ mod tests {
         // An operator's own entry may say SSTV only in the label.
         let own = SatLink::down("SSTV", "FM", Passband::at(145.800));
         assert_eq!(mode_for_link(&own), Mode::SstvFm);
+        // SatNOGS publishes mode "SSTV" with no "FM" — still the FM decoder.
+        let satnogs = SatLink::down("Mode U - SSTV", "SSTV", Passband::at(437.800));
+        assert_eq!(mode_for_link(&satnogs), Mode::SstvFm);
+        let robot = SatLink::down("Mode U - SSTV - Robot-36", "SSTV", Passband::at(437.550));
+        assert_eq!(mode_for_link(&robot), Mode::SstvFm);
         // Voice stays voice.
         let voice = SatLink::down("FM voice", "FM", Passband::at(145.800));
         assert_eq!(mode_for_link(&voice), Mode::Nfm);
