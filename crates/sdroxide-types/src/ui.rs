@@ -528,6 +528,11 @@ impl SmeterStyle {
 /// closed — puts it back where the operator left it rather than at the built-in
 /// size. `pos` is `None` on Wayland, which gives a client no absolute window
 /// position; the size still comes back and the compositor places the window.
+///
+/// `maximized` defaults to true so a config written before this field existed
+/// (and a first open with no seed) comes up filling the screen — the 3D view
+/// is not useful as a small fixed panel. Un-maximising and closing remembers
+/// that choice.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Solar3dWindow {
     /// Inner (drawing-area) size in points.
@@ -535,6 +540,13 @@ pub struct Solar3dWindow {
     /// Outer (top-left, including decorations) position in points.
     #[serde(default)]
     pub pos: Option<[f32; 2]>,
+    /// Whether the window was maximised when last seen.
+    #[serde(default = "solar3d_maximized_default")]
+    pub maximized: bool,
+}
+
+fn solar3d_maximized_default() -> bool {
+    true
 }
 
 /// User display preferences. All have defaults so a missing `[ui]` table loads.

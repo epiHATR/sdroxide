@@ -206,6 +206,24 @@ fn menu_bar(
             ui.set_max_width(width);
             ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
             ui.horizontal_wrapped(|ui| {
+                // First in the row: a one-tap return to the operator's own
+                // square, without opening a menu. Disabled wording when the
+                // grid is unset — the chip still draws so the control stays
+                // findable.
+                let qth_tip = if st.qth.is_some() {
+                    format!("Zoom the camera onto your QTH ({})", st.qth_grid)
+                } else {
+                    "Set your grid square in Settings to zoom here".into()
+                };
+                if chrome::chip(ui, false, "My QTH")
+                    .on_hover_text(qth_tip)
+                    .clicked()
+                    && let Some(qth) = st.qth
+                {
+                    let b = super::scene::bodies(st, wall + st.sim_offset_s);
+                    super::camera::frame_home(&mut st.view, &b, qth);
+                }
+
                 let btn = chrome::chip(ui, st.view.auto, "VIEW")
                     .on_hover_text("Which body the camera orbits, and the animated tour");
                 menu(ui, st, M_VIEW, btn, view_controls);
@@ -1459,36 +1477,40 @@ fn pass_window(ui: &egui::Ui, st: &mut SolarUi, data: Option<&SolarData>, sim_no
             // Lock on from right here — the main window activates satellite
             // mode when the root pass drains the request. Browser tab: the
             // relay carries no commands, so the button would be a lie.
+            //
+            // Same pairing as the SAT window's LOCK chip: green fill needs
+            // [`theme::INK_ON_BRIGHT`], not the cyan-chip ink — several themes'
+            // greens wash out dark `INK_ON_CYAN`.
             #[cfg(not(target_arch = "wasm32"))]
             {
                 ui.add_space(6.0);
-                if st.sat_lock == Some(id) {
-                    if chrome::chip_accent(
-                        ui,
-                        true,
-                        egui::RichText::new(" ● LOCKED — UNLOCK ").strong(),
-                        theme::GREEN(),
-                        theme::INK_ON_CYAN(),
-                    )
-                    .on_hover_text("Release the satellite lock")
-                    .clicked()
-                    {
-                        st.unlock_requested = true;
-                    }
-                } else if chrome::chip_accent(
+                let locked_here = st.sat_lock == Some(id) || st.lock_requested == Some(id);
+                if chrome::chip_accent(
                     ui,
-                    false,
-                    egui::RichText::new(" LOCK ON ").strong(),
+                    locked_here,
+                    if locked_here {
+                        egui::RichText::new(" ● LOCKED — UNLOCK ").strong()
+                    } else {
+                        egui::RichText::new(" LOCK ON ").strong()
+                    },
                     theme::GREEN(),
-                    theme::INK_ON_CYAN(),
+                    theme::INK_ON_BRIGHT(),
                 )
-                .on_hover_text(
+                .on_hover_text(if locked_here {
+                    "Release the satellite lock"
+                } else {
                     "Track this satellite in the main window: Doppler-corrected RX and TX, \
-                     transponder-mapped uplink, rotator steering",
-                )
+                     transponder-mapped uplink, rotator steering"
+                })
                 .clicked()
                 {
-                    st.lock_requested = Some(id);
+                    if locked_here {
+                        st.unlock_requested = true;
+                        st.lock_requested = None;
+                    } else {
+                        st.lock_requested = Some(id);
+                        st.unlock_requested = false;
+                    }
                 }
             }
 
@@ -1703,7 +1725,7 @@ fn bottom_right(rect: egui::Rect, bottom: f32, size: egui::Vec2) -> egui::Rect {
 ///
 /// Out of the way rather than beside the clock: the date is checked once and
 /// then ignored, while the top of the view is where the menu chips and the space
-/// weather live. Returns the box it drew, so the award key can stack above it.
+/// live. Returns the box it drew, so the award key can stack above it.
 fn date_readout(ui: &egui::Ui, st: &SolarUi, rect: egui::Rect, sim_now: f64) -> Option<egui::Rect> {
     let utc = sim_now as i64;
     let scrubbed = st.sim_offset_s != 0.0;
@@ -1774,8 +1796,10 @@ fn date_readout(ui: &egui::Ui, st: &SolarUi, rect: egui::Rect, sim_now: f64) -> 
 /// satellite that means its pass table, which is what you looked it up for; on
 /// a body it means pointing the camera at it, which is the same thing.
 ///
-/// Hidden only when *neither* population is being drawn, because a search that
-/// highlights things nothing is drawing would look broken.
+/// Matches are listed under the box; the globe only lights the one the
+/// operator has picked (and draws its orbit). Hidden only when *neither*
+/// population is being drawn, because a search that lists things nothing is
+/// drawing would look broken.
 fn find_box(
     ui: &egui::Ui,
     st: &mut SolarUi,
@@ -1786,8 +1810,8 @@ fn find_box(
     let Some(clock_rect) = clock_rect else { return };
     let (sats, bodies) = (st.layer(layer::SATS), st.layer(layer::PLANETS));
     if !sats && !bodies {
-        // Leaving text behind in a hidden box would keep highlighting after the
-        // layers came back, with nothing on screen to say why.
+        // Leaving text behind in a hidden box would keep a stale selection
+        // after the layers came back, with nothing on screen to say why.
         st.search.clear();
         return;
     }
@@ -1802,25 +1826,31 @@ fn find_box(
         clock_rect.left_bottom() + egui::vec2(0.0, 6.0),
         egui::vec2(width, 30.0),
     );
-    if !rect.contains_rect(area) {
+    if area.min.x < rect.min.x || area.min.y < rect.min.y || area.max.x > rect.max.x {
         return;
     }
 
-    // Counted from the same predicates the scene highlights with, so "3 of 94"
-    // can never disagree with what is lit up.
-    let (sat_hits, sat_total) = match data.filter(|_| sats) {
-        Some(d) => d.satellites().fold((0usize, 0usize), |(h, n), sat| {
-            (h + st.sat_hit(&sat.name, sat.norad_id) as usize, n + 1)
-        }),
-        None => (0, 0),
+    // Cap how many rows the list can grow: a short query can match dozens, and
+    // dumping them all would cover the globe. Scroll covers the rest.
+    const LIST_CAP: usize = 8;
+    let sat_hits: Vec<(u64, String)> = match data.filter(|_| sats) {
+        Some(d) => d
+            .satellites()
+            .filter(|sat| st.sat_hit(&sat.name, sat.norad_id))
+            .map(|sat| (sat.norad_id, sat.name.clone()))
+            .collect(),
+        None => Vec::new(),
     };
-    let body_hits: Vec<usize> =
-        if bodies { st.small_hits().map(|(i, _)| i).collect() } else { Vec::new() };
-    let body_total = if bodies { sdroxide_solar::smallbody::BODIES.len() } else { 0 };
+    let body_hits: Vec<(usize, &'static str)> = if bodies {
+        st.small_hits().map(|(i, b)| (i, b.designation)).collect()
+    } else {
+        Vec::new()
+    };
 
     let query = st.search.trim().to_string();
     let mut clear = false;
     let mut open: Option<u64> = None;
+    let mut deselect = false;
     let mut go: Option<Focus> = None;
     let hint = match (sats, bodies) {
         (true, true) => "satellite, planet or comet",
@@ -1831,6 +1861,7 @@ fn find_box(
     egui::Area::new(egui::Id::new("solar-find"))
         .order(egui::Order::Foreground)
         .fixed_pos(area.min)
+        .constrain_to(rect)
         .show(ui.ctx(), |ui| {
             egui::Frame::new()
                 .fill(theme::BG_DEEP().gamma_multiply(0.72))
@@ -1854,15 +1885,9 @@ fn find_box(
                         // tie against a satellite only when it is the sole
                         // match overall, so neither can hijack the other's key.
                         if edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                            match (sat_hits, body_hits.len()) {
-                                (1, 0) => {
-                                    open = data.and_then(|d| {
-                                        d.satellites()
-                                            .find(|s| st.sat_hit(&s.name, s.norad_id))
-                                            .map(|s| s.norad_id)
-                                    })
-                                }
-                                (0, 1) => go = Some(Focus::Small(body_hits[0])),
+                            match (sat_hits.len(), body_hits.len()) {
+                                (1, 0) => open = Some(sat_hits[0].0),
+                                (0, 1) => go = Some(Focus::Small(body_hits[0].0)),
                                 _ => {}
                             }
                         }
@@ -1872,34 +1897,63 @@ fn find_box(
                             clear = true;
                         }
                     });
-                    if !query.is_empty() {
-                        let (text, colour) = match (sat_hits, body_hits.len()) {
-                            (0, 0) => ("no match".to_string(), theme::ALERT()),
-                            // Named outright when there is exactly one, because
-                            // "1 of 40" is a worse answer than "Apophis".
-                            (0, 1) => (
-                                format!(
-                                    "{} — ↵ to fly there",
-                                    sdroxide_solar::smallbody::BODIES[body_hits[0]].designation
-                                ),
-                                theme::YELLOW(),
-                            ),
-                            (s, 0) => (format!("{s} of {sat_total} tracked"), theme::YELLOW()),
-                            (0, b) => (format!("{b} of {body_total} bodies"), theme::YELLOW()),
-                            (s, b) => (
-                                format!("{s} of {sat_total} tracked · {b} of {body_total} bodies"),
-                                theme::YELLOW(),
-                            ),
-                        };
-                        ui.label(RichText::new(text).color(colour).size(10.0));
+                    if query.is_empty() {
+                        return;
                     }
+                    if sat_hits.is_empty() && body_hits.is_empty() {
+                        ui.label(RichText::new("no match").color(theme::ALERT()).size(10.0));
+                        return;
+                    }
+                    let row_h = 18.0;
+                    let rows = (sat_hits.len() + body_hits.len()).min(LIST_CAP);
+                    let list_h = row_h * rows as f32 + 4.0;
+                    egui::ScrollArea::vertical()
+                        .max_height(list_h)
+                        .id_salt("solar-find-hits")
+                        .show(ui, |ui| {
+                            ui.set_min_width(width - 16.0);
+                            for (id, name) in &sat_hits {
+                                let on = st.selected_sat == Some(*id);
+                                let label = RichText::new(name.as_str())
+                                    .color(if on { theme::YELLOW() } else { theme::TEXT_STRONG() })
+                                    .size(11.0);
+                                if ui
+                                    .selectable_label(on, label)
+                                    .on_hover_text("Show this satellite and its orbit")
+                                    .clicked()
+                                {
+                                    // Same toggle the globe label uses: pick
+                                    // again to put the bird away.
+                                    if on {
+                                        deselect = true;
+                                    } else {
+                                        open = Some(*id);
+                                    }
+                                }
+                            }
+                            for (i, designation) in &body_hits {
+                                let on = st.focus() == Focus::Small(*i);
+                                let label = RichText::new(*designation)
+                                    .color(if on { theme::YELLOW() } else { theme::TEXT_STRONG() })
+                                    .size(11.0);
+                                if ui
+                                    .selectable_label(on, label)
+                                    .on_hover_text("Fly the camera there")
+                                    .clicked()
+                                {
+                                    go = Some(Focus::Small(*i));
+                                }
+                            }
+                        });
                 });
         });
 
     if clear {
         st.search.clear();
     }
-    if let Some(id) = open {
+    if deselect {
+        st.selected_sat = None;
+    } else if let Some(id) = open {
         st.selected_sat = Some(id);
     }
     if let Some(f) = go {

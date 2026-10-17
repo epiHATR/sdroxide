@@ -733,18 +733,30 @@ fn satellites(
         return;
     }
     let show_all = st.view.all_satellites;
+    // While Doppler-locked, the globe is about that one bird: every other
+    // popular / ALL SATS marker is noise on the pass you are working. The
+    // pending lock request counts too (native only — the browser tab has no
+    // command path), so the strip clears on the same click that asks the
+    // engine, not a frame later.
+    #[cfg(not(target_arch = "wasm32"))]
+    let locked_id = st.sat_lock.or(st.lock_requested);
+    #[cfg(target_arch = "wasm32")]
+    let locked_id = st.sat_lock;
     let place = |dir: sdroxide_solar::Vec3, radii: f64| {
         b.earth + V3::from_f64(dir) * (b.earth_r * radii as f32)
     };
 
     for sat in data.satellites() {
-        // A search match is drawn whether or not it otherwise would be: looking
-        // for a satellite that is not on screen is the main reason to search.
-        let hit = st.sat_hit(&sat.name, sat.norad_id);
-        // The locked satellite likewise: the engine is correcting Doppler
-        // against this one *right now*, so it is on screen no matter what.
-        let locked = st.sat_lock == Some(sat.norad_id);
-        if !(show_all || sat.popular || hit || locked) {
+        // The find box lists every match; only the one the operator has picked
+        // (or the Doppler-locked bird) is forced onto the globe. Highlighting
+        // every substring hit at once turned a search into a yellow scribble.
+        let selected = st.selected_sat == Some(sat.norad_id);
+        let locked = locked_id == Some(sat.norad_id);
+        if let Some(id) = locked_id {
+            if sat.norad_id != id {
+                continue;
+            }
+        } else if !(show_all || sat.popular || selected) {
             continue;
         }
         let Some(state) = sat.at(unix_s) else { continue };
@@ -753,23 +765,23 @@ fn satellites(
         // Geostationary orbits read differently from low ones — one is a fixed
         // relay, the other a pass you have to catch — so they are coloured apart.
         let geo = sat.period_min > 1300.0;
-        // A match is pulled out of that scheme entirely rather than merely
+        // A selection is pulled out of that scheme entirely rather than merely
         // brightened: against ninety cyan dots, "a bit lighter" is not findable,
         // and yellow is the one accent nothing else in this layer uses. The
         // locked bird outranks even that, in the one colour louder still.
-        let color = match (locked, hit, geo) {
+        let color = match (locked, selected, geo) {
             (true, ..) => ink::PINK,
             (false, true, _) => ink::YELLOW,
             (false, false, true) => ink::GREEN,
             (false, false, false) => ink::CYAN_DIM,
         };
-        let ringed = sat.popular || hit || locked;
+        let ringed = sat.popular || selected || locked;
 
         s.sprites.push(SpriteInst {
             center: pos.arr(),
             size_px: if locked {
                 11.0
-            } else if hit {
+            } else if selected {
                 10.0
             } else if sat.popular {
                 7.0
@@ -781,13 +793,13 @@ fn satellites(
         });
 
         // Orbit rings only for the ringed set: ninety of them at once is noise.
-        // A pasted element set, a subscription with orbits on, and a search
-        // match all land here; a ninety-satellite group without does not.
+        // A pasted element set, a subscription with orbits on, and the find-box
+        // pick all land here; a ninety-satellite group without does not.
         if ringed {
             let path = sat.orbit(unix_s, 96);
             let (w_px, alpha) = if locked {
                 (2.6, 0.95)
-            } else if hit {
+            } else if selected {
                 (2.4, 0.9)
             } else {
                 (1.3, 0.4)
@@ -822,13 +834,12 @@ fn satellites(
             }
         }
 
-        // A match is labelled even with the LABELS layer off and even when it
-        // is not one of the curated few — the name is what was searched for, so
-        // withholding it would defeat the search. The locked bird gets the
-        // same treatment for the same reason. The floor is lower than the
-        // ordinary one but not absent: on an Earth twelve pixels across there
-        // is nothing for a label to point at.
-        let labelled = if hit || locked {
+        // The find-box pick and the locked bird are labelled even with LABELS
+        // off and even when they are not among the curated few — the name is
+        // what was asked for. The floor is lower than the ordinary one but not
+        // absent: on an Earth twelve pixels across there is nothing for a
+        // label to point at.
+        let labelled = if selected || locked {
             earth_px > 12.0
         } else {
             st.layer(layer::LABELS) && sat.popular && earth_px > 24.0
@@ -852,7 +863,8 @@ fn satellites(
             // says so by going dim, the way its marker already does by
             // vanishing behind the globe. See [`behind_earth`].
             let occluded = behind_earth(cam, b, pos);
-            let alpha = (if hit { 1.0 } else { 0.9 }) * if occluded { OCCLUDED_LABEL } else { 1.0 };
+            let alpha =
+                (if selected { 1.0 } else { 0.9 }) * if occluded { OCCLUDED_LABEL } else { 1.0 };
             s.labels.push(Label {
                 world: pos.arr(),
                 text,

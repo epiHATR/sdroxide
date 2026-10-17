@@ -153,6 +153,16 @@ impl ApplicationHandler<UserEvent> for Paced<'_> {
     }
 
     fn resumed(&mut self, el: &ActiveEventLoop) {
+        // macOS otherwise merges the radio window and the solar deferred
+        // viewport into one rounded native tab bar ("Waterfall" / "solar
+        // system"). Those tabs sit over the content and cannot wear the
+        // app's own multi-radio tab chrome — so keep each viewport its own
+        // window. Must run before eframe creates the first window.
+        #[cfg(target_os = "macos")]
+        {
+            use egui_winit::winit::platform::macos::ActiveEventLoopExtMacOS as _;
+            el.set_allows_automatic_window_tabbing(false);
+        }
         self.inner.resumed(el);
     }
 

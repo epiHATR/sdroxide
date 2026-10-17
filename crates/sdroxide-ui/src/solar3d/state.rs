@@ -264,19 +264,20 @@ pub struct SolarUi {
     pub sat_cfg: std::sync::Arc<sdroxide_types::SatConfig>,
     /// What has been typed into the find box.
     ///
-    /// Matches are drawn with their orbit and label whether or not they
-    /// otherwise would be — looking for something that is *not* on screen is
-    /// the main reason to search at all. It covers two populations that have
-    /// the same problem: ninety satellites around one planet, and forty small
-    /// bodies scattered over fifty AU, both of them dots too small and too
-    /// numerous to find by reading labels.
+    /// Matches are listed under the box; only the row the operator picks is
+    /// drawn on the globe (with its orbit and label). Looking for something
+    /// that is *not* already on screen is the main reason to search at all. It
+    /// covers two populations that have the same problem: ninety satellites
+    /// around one planet, and forty small bodies scattered over fifty AU, both
+    /// of them dots too small and too numerous to find by reading labels.
     ///
     /// The small bodies have no layer chip of their own on purpose. A chip
     /// answers "show me all of these", which for thirty-five asteroids is not a
     /// question anyone has; the question people actually have is "where is
     /// Apophis", and that is a search box.
     pub search: String,
-    /// Satellite whose pass table is open, by catalogue number.
+    /// Satellite whose pass table is open — and which the find box has picked
+    /// out on the globe — by catalogue number.
     pub selected_sat: Option<u64>,
     /// Cached pass prediction: which satellite, from what QTH, computed when,
     /// and the result. Stepping a whole orbit at second resolution is far too
@@ -490,8 +491,8 @@ impl SolarUi {
     ///
     /// Case-insensitive substring on the name, and on the catalogue number as
     /// text so `25544` finds the ISS. An empty box matches *nothing* rather
-    /// than everything: this drives a highlight, and highlighting all ninety
-    /// would be the same as highlighting none.
+    /// than everything: the find box lists the hits, and only the row the
+    /// operator picks is drawn on the globe.
     pub fn sat_hit(&self, name: &str, norad_id: u64) -> bool {
         let q = self.search.trim();
         if q.is_empty() {

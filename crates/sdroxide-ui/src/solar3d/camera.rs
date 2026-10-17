@@ -38,6 +38,21 @@ pub fn dist_range(focus_radius: f32) -> (f32, f32) {
     ((focus_radius * 1.6).max(1e-4), MAX_DIST)
 }
 
+/// Point the orbit camera straight at the operator's QTH and pull in as close
+/// as the Earth clamp allows — what the 3D view's **My QTH** chip does.
+///
+/// Cancels AUTO: a menu that flies the camera somewhere the operator asked for
+/// has to win over the tour that would take it away again next frame.
+pub fn frame_home(view: &mut crate::view::Solar3dView, b: &Bodies, qth: (f64, f64)) {
+    let d = b.surface_dir(qth.0, qth.1);
+    let (lo, _) = dist_range(b.earth_r);
+    view.focus = Focus::Earth.to_id();
+    view.yaw = yaw_of(d);
+    view.pitch = d.z.clamp(-1.0, 1.0).asin().clamp(-PITCH_LIMIT, PITCH_LIMIT);
+    view.dist = lo;
+    view.auto = false;
+}
+
 impl Camera {
     /// A camera that is only an eye position, for tests of the geometry that
     /// depends on nothing else — [`crate::solar3d::scene::behind_earth`] and
@@ -1608,6 +1623,30 @@ mod tests {
     /// A point on (or above) the globe, the way the arc is drawn.
     fn on_globe(b: &Bodies, lat: f64, lon: f64, lift: f32) -> V3 {
         b.earth + b.surface_dir(lat, lon) * (b.earth_r * lift)
+    }
+
+    /// The My QTH chip has to leave the operator's square in the middle of the
+    /// frame, not somewhere off the limb of a still-wide Earth view.
+    #[test]
+    fn frame_home_centres_the_qth() {
+        let mut st = SolarUi::new(Solar3dView::default());
+        st.view.auto = true;
+        st.view.dist = 80.0;
+        let b = scene::bodies(&st, 1_784_937_600.0);
+        frame_home(&mut st.view, &b, VIENNA);
+        assert!(!st.view.auto);
+        assert_eq!(st.focus(), Focus::Earth);
+        let cam = Camera::from_view(&st, &b, [1600.0, 900.0]);
+        let home = on_globe(&b, VIENNA.0, VIENNA.1, 1.0);
+        let (x, y) = ndc(&cam, home).expect("QTH behind the camera after frame_home");
+        assert!(
+            x.abs() < 0.15 && y.abs() < 0.15,
+            "QTH should be near frame centre, got ({x:.3}, {y:.3})"
+        );
+        assert!(
+            (cam.eye - b.earth).len() < b.earth_r * 2.0,
+            "camera should be pulled in close over the QTH"
+        );
     }
 
     // ── The satellite view ──────────────────────────────────────────────────
