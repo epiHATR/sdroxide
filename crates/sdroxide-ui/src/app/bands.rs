@@ -133,10 +133,20 @@ impl SdroxideApp {
         });
         ui.add_space(4.0);
 
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            egui::Grid::new("bands_grid").num_columns(5).spacing([14.0, 3.0]).striped(true).show(
-                ui,
-                |ui| {
+        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+            // Stretch the five columns across the window / dock width rather
+            // than hugging the labels (same approach as the SAT list grid).
+            const COLS: usize = 5;
+            const COL_GAP: f32 = 14.0;
+            ui.set_min_width(ui.available_width());
+            let col_w =
+                ((ui.available_width() - COL_GAP * (COLS as f32 - 1.0)) / COLS as f32).max(48.0);
+            egui::Grid::new("bands_grid")
+                .num_columns(COLS)
+                .spacing([COL_GAP, 3.0])
+                .min_col_width(col_w)
+                .striped(true)
+                .show(ui, |ui| {
                     ui.label(dim("BAND"));
                     ui.label(dim("CONDX"));
                     ui.label(dim("PATHS"));
@@ -198,8 +208,7 @@ impl SdroxideApp {
                         }
                         ui.end_row();
                     }
-                },
-            );
+                });
             self.ibp_section(ui);
             self.meteor_section(ui);
         });
