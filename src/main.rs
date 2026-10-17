@@ -421,13 +421,19 @@ fn boot_radios(cli: &mut Cli, settings: &Settings) -> anyhow::Result<Vec<RadioBo
         // from coming back. The command line's own front ends (`--siggen`,
         // `--file`) still win, exactly as they do over a panadapter pairing:
         // they are this session's explicit instruction, and they only ever
-        // apply to radio 0.
+        // apply to the station radio (first roster entry).
         let overridden = i == 0 && (cli.siggen || cli.file.is_some());
         if !slot.enabled && !overridden {
             // The remembered dial is restored either way: switched off is a
             // radio put down where it was, not one wound back to nothing.
             let (c, initial_mode) = if i == 0 {
-                let mode = cli.restore_session();
+                // Station duties follow the first roster entry; its files follow
+                // its own id. Radio 0 alone still lives at the legacy root.
+                let mode = if slot.id == 0 {
+                    cli.restore_session()
+                } else {
+                    cli.apply_session(store.load_session())
+                };
                 (cli.clone(), mode)
             } else {
                 let mut c = secondary_cli(cli);
@@ -450,8 +456,35 @@ fn boot_radios(cli: &mut Cli, settings: &Settings) -> anyhow::Result<Vec<RadioBo
             continue;
         }
         let boot = if i == 0 {
-            let initial_mode = cli.restore_session();
-            let (source, caps) = open_source(cli, settings)?;
+            // Station radio: CLI overrides and `--record-iq` land here. Its
+            // files are still this slot's own scope — only id 0 lives at the
+            // legacy root. Opening the root `radio.json` for whichever radio
+            // happens to sit first is what kept a closed RX-888 pinned after
+            // its tab was gone: Settings wrote `radio-N/radio.json` while the
+            // engine kept reopening the orphaned root config.
+            let initial_mode = if slot.id == 0 {
+                cli.restore_session()
+            } else {
+                cli.apply_session(store.load_session())
+            };
+            let (source, caps) = if slot.id == 0 || cli.siggen || cli.file.is_some() {
+                open_source(cli, settings)?
+            } else {
+                match open_converted_source(&store.load_radio_config(), cli, settings) {
+                    Ok(pair) => pair,
+                    Err(e) => {
+                        tracing::warn!("radio {} unavailable: {e:#}", slot.id + 1);
+                        let msg = format!(
+                            "{e}. Retrying — or open Settings → Radio to choose another interface."
+                        );
+                        (
+                            Box::new(null_source::NullSource::new(cli.center_hz(), msg))
+                                as Box<dyn IqSource>,
+                            synthetic_caps("No radio"),
+                        )
+                    }
+                }
+            };
             RadioBoot {
                 id: slot.id,
                 name: slot.name.clone(),
@@ -460,7 +493,7 @@ fn boot_radios(cli: &mut Cli, settings: &Settings) -> anyhow::Result<Vec<RadioBo
                 caps,
                 initial_mode,
                 initial_antenna: cli.initial_antenna(),
-                reopen: Some(reopen_factory(cli)),
+                reopen: Some(reopen_factory_for(cli, store.clone(), slot.id)),
                 store,
                 record_iq: cli.record_iq.clone(),
             }
@@ -510,14 +543,12 @@ fn boot_radios(cli: &mut Cli, settings: &Settings) -> anyhow::Result<Vec<RadioBo
 /// Re-reads the persisted radio config + settings each call and opens at the
 /// current dial. Fallible so a bad new config leaves the current interface
 /// running.
-fn reopen_factory(cli: &Cli) -> sdroxide_radio::ReopenFn {
-    reopen_factory_for(cli, sdroxide_config::Store::station(), 0)
-}
-
-/// [`reopen_factory`], reading `radio.json` from one radio's scope. The
-/// `--siggen`/`--file` overrides only ever apply to the station scope (radio
-/// 0); every caller building a factory for another radio passes a
-/// [`secondary_cli`], which has them stripped.
+///
+/// `store` and `id` must be the same radio: the factory opens that scope's
+/// `radio.json`, and asks the roster about that id. The `--siggen`/`--file`
+/// overrides only ever apply to the station radio (first roster entry); every
+/// caller building a factory for another radio passes a [`secondary_cli`],
+/// which has them stripped.
 ///
 /// `id` is the roster id the scope belongs to, which the factory needs for two
 /// questions it cannot ask a `Store`. The first is whether this radio has been
@@ -611,10 +642,10 @@ fn lent_answer(owner: Option<u32>, was_lent: &mut bool) -> Option<Result<u32, St
     }
 }
 
-/// The command line, minus everything that belongs to radio 0 alone: the
-/// synthetic sources (`--siggen`, `--file`) and the tuning/antenna/device
+/// The command line, minus everything that belongs to the station radio alone:
+/// the synthetic sources (`--siggen`, `--file`) and the tuning/antenna/device
 /// overrides. A secondary radio boots purely from its own scope — the flags
-/// were typed for the radio the operator has always had.
+/// were typed for the station radio (first roster entry).
 fn secondary_cli(cli: &Cli) -> Cli {
     let mut c = cli.clone();
     c.siggen = false;
@@ -3154,6 +3185,65 @@ mod tests {
         // And from then on it is an ordinary interface change again: a failure
         // is reported as one, leaving whatever is running running.
         assert!(factory(14_200_000.0).is_err(), "no longer coming back from off");
+
+        unsafe { std::env::remove_var("SDROXIDE_CONFIG_DIR") };
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Closing radio 0 leaves its root `radio.json` on disk (a closed tab is
+    /// not a delete). The next radio that inherits station duties must open
+    /// *its* scope — not keep resurrecting the orphaned root interface.
+    #[test]
+    fn the_station_radio_opens_its_own_scope_after_radio_zero_is_closed() {
+        let root = std::env::temp_dir()
+            .join(format!("sdroxide-station-scope-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("radio-9")).expect("scratch dir");
+        std::fs::write(
+            root.join("radios.json"),
+            r#"{"radios":[{"id":9,"name":"RTL SDR USB","enabled":true}],"next_id":10}"#,
+        )
+        .unwrap();
+        // Orphaned closed radio 0: still pinned to a missing RX-888. Booting
+        // this would be the bug.
+        std::fs::write(
+            root.join("radio.json"),
+            r#"{"backend":"Rx888","rx888":{"serial":"0009012009413315"}}"#,
+        )
+        .unwrap();
+        // The live station radio: no interface yet, so the open fails with a
+        // known message — never the RX-888 serial complaint.
+        std::fs::write(root.join("radio-9/radio.json"), r#"{"backend":"None"}"#).unwrap();
+        // SAFETY: single-threaded within this test; no other test in this
+        // binary reads the variable.
+        unsafe { std::env::set_var("SDROXIDE_CONFIG_DIR", &root) };
+
+        let mut cli = Cli::parse_from(["sdroxide"]);
+        let settings = sdroxide_config::Settings::load();
+        let radios = boot_radios(&mut cli, &settings).expect("station radio still boots");
+        assert_eq!(radios.len(), 1);
+        assert_eq!(radios[0].id, 9);
+        let status = radios[0].source.open_status().unwrap_or_default();
+        assert!(
+            status.to_ascii_lowercase().contains("no radio interface"),
+            "expected Backend::None stand-in, got: {status}"
+        );
+        assert!(
+            !status.contains("RX-888") && !status.contains("0009012009413315"),
+            "orphaned root RX-888 must not be opened: {status}"
+        );
+
+        // And a reconnect must keep reading radio-9, not the root file.
+        let mut reopen =
+            reopen_factory_for(&Cli::parse_from(["sdroxide"]), sdroxide_config::Store::radio(9), 9);
+        let Err(e) = reopen(14_200_000.0) else {
+            panic!("Backend::None must refuse rather than open the orphaned RX-888");
+        };
+        assert!(
+            e.to_ascii_lowercase().contains("no radio interface"),
+            "reopen must use radio-9: {e}"
+        );
+        assert!(!e.contains("RX-888") && !e.contains("0009012009413315"), "reopen: {e}");
 
         unsafe { std::env::remove_var("SDROXIDE_CONFIG_DIR") };
         let _ = std::fs::remove_dir_all(&root);
