@@ -52,7 +52,7 @@ impl SolarApp {
         // native 3D window instead shares the main app's context and atomics
         // and never gets here.
         let ui = crate::app::persist::load_ui_settings(cc.storage);
-        crate::theme::set_look(ui.theme, ui.button_style, ui.window_style);
+        crate::theme::set_look(ui.theme, ui.button_style, ui.window_style, ui.box_style);
         crate::theme::set_font_sizes(
             ui.skimmer_font_size,
             ui.waterfall_font_size,

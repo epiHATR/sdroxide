@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering};
 use eframe::egui::{
     self, Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Stroke, TextStyle,
 };
-use sdroxide_types::{BandplanKind, ChromeStyle, FontSize, SpotKind, UiTheme};
+use sdroxide_types::{BandplanKind, BoxStyle, ChromeStyle, FontSize, SpotKind, UiTheme};
 
 /// Every colour role the chrome wears. A theme is one full assignment of
 /// these; the field names keep the historic constant names (`cyan` is "the
@@ -1529,18 +1529,29 @@ const fn style_index(s: ChromeStyle) -> u8 {
     }
 }
 
-// The zero defaults are UiTheme::Default / ChromeStyle::Angled — the look the
-// first frame wears if nothing calls `set_look` first.
+// The zero defaults are UiTheme::Default / ChromeStyle::Angled / BoxStyle::Default
+// — the look the first frame wears if nothing calls `set_look` first.
 static THEME: AtomicU8 = AtomicU8::new(0);
 static BUTTON_STYLE: AtomicU8 = AtomicU8::new(0);
 static WINDOW_STYLE: AtomicU8 = AtomicU8::new(0);
+static BOX_STYLE: AtomicU8 = AtomicU8::new(0);
+
+const fn box_index(s: BoxStyle) -> u8 {
+    match s {
+        BoxStyle::Default => 0,
+        BoxStyle::NoBorder => 1,
+    }
+}
+
+const BOX_ORDER: [BoxStyle; 2] = [BoxStyle::Default, BoxStyle::NoBorder];
 
 /// Select the process-wide look. Takes effect on whatever is painted next; the
 /// egui `Visuals` derived from it need a separate [`apply_visuals`] call.
-pub fn set_look(theme: UiTheme, buttons: ChromeStyle, windows: ChromeStyle) {
+pub fn set_look(theme: UiTheme, buttons: ChromeStyle, windows: ChromeStyle, boxes: BoxStyle) {
     THEME.store(theme_index(theme), Ordering::Relaxed);
     BUTTON_STYLE.store(style_index(buttons), Ordering::Relaxed);
     WINDOW_STYLE.store(style_index(windows), Ordering::Relaxed);
+    BOX_STYLE.store(box_index(boxes), Ordering::Relaxed);
 }
 
 /// The current theme's palette.
@@ -1655,6 +1666,12 @@ pub fn button_style() -> ChromeStyle {
 #[inline]
 pub fn window_style() -> ChromeStyle {
     STYLE_ORDER[WINDOW_STYLE.load(Ordering::Relaxed) as usize]
+}
+
+/// Whether panels and windows currently wear the accent border.
+#[inline]
+pub fn box_style() -> BoxStyle {
+    BOX_ORDER[BOX_STYLE.load(Ordering::Relaxed) as usize]
 }
 
 const fn font_index(f: FontSize) -> u8 {

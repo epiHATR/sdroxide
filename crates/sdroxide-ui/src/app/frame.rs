@@ -178,11 +178,15 @@ impl eframe::App for SdroxideApp {
         // them into `ui_settings` at the end of last frame, and the top of the
         // frame is the one place a visuals rewrite cannot race the settings
         // window's ScrollPalette push/pop.
-        let look =
-            (self.ui_settings.theme, self.ui_settings.button_style, self.ui_settings.window_style);
+        let look = (
+            self.ui_settings.theme,
+            self.ui_settings.button_style,
+            self.ui_settings.window_style,
+            self.ui_settings.box_style,
+        );
         if self.applied_look != look {
             self.applied_look = look;
-            crate::theme::set_look(look.0, look.1, look.2);
+            crate::theme::set_look(look.0, look.1, look.2, look.3);
             crate::theme::apply_visuals(&ctx);
             ctx.request_repaint();
         }

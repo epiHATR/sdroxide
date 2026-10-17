@@ -27,7 +27,7 @@ pub(in crate::app) fn settings_ui_tab(
     cfg: &mut sdroxide_types::UiSettings,
     cloud_march: Option<&mut bool>,
 ) {
-    use sdroxide_types::{ChromeStyle, FontSize, LayoutMode, UiSettings, UiTheme};
+    use sdroxide_types::{BoxStyle, ChromeStyle, FontSize, LayoutMode, UiSettings, UiTheme};
     ui.label(RichText::new("Display").size(14.0).strong().color(crate::theme::CYAN()));
     ui.add_space(6.0);
     // Said here because this is where they used to be, and where an operator
@@ -70,6 +70,13 @@ pub(in crate::app) fn settings_ui_tab(
             &ChromeStyle::ALL,
             ChromeStyle::label,
         );
+        ui.end_row();
+
+        ui.label("Box style").on_hover_text(
+            "Whether panels and floating windows wear the accent border. Default is the \
+             pink/red outline; No border leaves them flush against the background.",
+        );
+        enum_combo(ui, "ui-box-style", &mut cfg.box_style, &BoxStyle::ALL, BoxStyle::label);
         ui.end_row();
 
         ui.label("Screen update rate");

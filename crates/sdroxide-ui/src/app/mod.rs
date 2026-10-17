@@ -308,8 +308,12 @@ pub struct SdroxideApp {
     /// The theme and chrome styles last written into the egui context, so the
     /// top-of-frame check in `frame.rs` can re-apply the visuals the moment
     /// the settings dialog changes any of them — no restart.
-    applied_look:
-        (sdroxide_types::UiTheme, sdroxide_types::ChromeStyle, sdroxide_types::ChromeStyle),
+    applied_look: (
+        sdroxide_types::UiTheme,
+        sdroxide_types::ChromeStyle,
+        sdroxide_types::ChromeStyle,
+        sdroxide_types::BoxStyle,
+    ),
     /// The interface font size last written into the context as its zoom
     /// factor, for the same reason — and so the zoom is left alone in between,
     /// where it belongs to egui's own ctrl+plus / ctrl+minus.
@@ -1334,6 +1338,7 @@ impl SdroxideApp {
             ui_settings.theme,
             ui_settings.button_style,
             ui_settings.window_style,
+            ui_settings.box_style,
         );
         crate::theme::set_font_sizes(
             ui_settings.skimmer_font_size,
@@ -1436,7 +1441,12 @@ impl SdroxideApp {
             profile_apply_pending: false,
             settings_upload_tab: sdroxide_types::UploadTarget::QrzLogbook,
             ui_settings,
-            applied_look: (ui_settings.theme, ui_settings.button_style, ui_settings.window_style),
+            applied_look: (
+                ui_settings.theme,
+                ui_settings.button_style,
+                ui_settings.window_style,
+                ui_settings.box_style,
+            ),
             applied_ui_font: ui_settings.menu_font_size,
             speech: speech::SpeechRuntime::new(load_speech_settings(storage)),
             speech_voices: Vec::new(),

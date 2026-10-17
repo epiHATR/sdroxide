@@ -432,6 +432,35 @@ impl ChromeStyle {
     }
 }
 
+/// Whether panels and floating windows wear the coloured accent border.
+///
+/// Independent of [`ChromeStyle`]: the window style still picks the *shape*
+/// (angled cuts, rounded corners, …); this picks whether that outline is
+/// drawn at all. Declared with `Default` last so a hand-edited or older
+/// config that omits the field keeps the historic pink/red border.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BoxStyle {
+    /// No outline — panels sit flush against the background.
+    NoBorder,
+    /// The accent border (pink/red on the stock theme). Last for serde's
+    /// catch-all, so an unknown value degrades to the look every build before
+    /// this setting had.
+    #[default]
+    #[serde(other)]
+    Default,
+}
+
+impl BoxStyle {
+    pub const ALL: [BoxStyle; 2] = [BoxStyle::Default, BoxStyle::NoBorder];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            BoxStyle::Default => "Default",
+            BoxStyle::NoBorder => "No border",
+        }
+    }
+}
+
 /// Which face the S-meter wears. Cycled by clicking the meter itself.
 ///
 /// A preference of the operator rather than of the radio — which instrument
@@ -601,6 +630,10 @@ pub struct UiSettings {
     pub button_style: ChromeStyle,
     /// The shape floating windows and popups wear.
     pub window_style: ChromeStyle,
+    /// Whether those windows and the operating-panel boxes wear the accent
+    /// border. Defaults to the historic pink/red outline.
+    #[serde(default)]
+    pub box_style: BoxStyle,
     /// Font size for the skimmer / spot boxes overlaid on the waterfall.
     /// `Medium` is the historic size.
     pub skimmer_font_size: FontSize,
@@ -776,6 +809,7 @@ impl Default for UiSettings {
             theme: UiTheme::Default,
             button_style: ChromeStyle::Angled,
             window_style: ChromeStyle::Angled,
+            box_style: BoxStyle::Default,
             skimmer_font_size: FontSize::Medium,
             waterfall_font_size: FontSize::Small,
             menu_font_size: FontSize::Medium,

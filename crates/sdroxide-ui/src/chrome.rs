@@ -244,6 +244,9 @@ pub fn popup_fade_alpha(
 /// cover the square fill corners so the cut reads as a real bevel; the other
 /// styles get their shape from the frame fill itself.
 pub fn paint_cut_border(p: &Painter, rect: Rect, color: Color32, mask: Color32) {
+    if theme::box_style() == sdroxide_types::BoxStyle::NoBorder {
+        return;
+    }
     match theme::window_style() {
         ChromeStyle::Angled => paint_angled_border(p, rect, color, mask),
         ChromeStyle::Rectangular | ChromeStyle::Gradient => {
