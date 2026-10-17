@@ -219,6 +219,7 @@ fn mode_digit(m: Mode) -> char {
         | Mode::Vdl2
         | Mode::Ais
         | Mode::Rs41
+        | Mode::Meshtastic
         | Mode::HdRadio => '4',
         Mode::Am | Mode::Sam | Mode::Dsb | Mode::Isb | Mode::Drm | Mode::Acars => '5',
         Mode::Digl => '9',

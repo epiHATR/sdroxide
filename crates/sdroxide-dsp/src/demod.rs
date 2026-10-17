@@ -254,7 +254,9 @@ pub fn make_demod(mode: Mode, channel_rate: f64) -> Option<Box<dyn Demodulator>>
         // modulation two megahertz wide, decoded off the raw I/Q by an engine
         // lane of its own. There is nothing for this chain to demodulate, and a
         // silent receiver is the correct behaviour rather than a missing case.
-        Mode::Adsb | Mode::Vdl2 | Mode::Ais | Mode::Hfdl => None,
+        // Meshtastic is the same shape as ADS-B: LoRa I/Q decode in an engine
+        // lane of its own, nothing for this chain to demodulate.
+        Mode::Adsb | Mode::Vdl2 | Mode::Ais | Mode::Hfdl | Mode::Meshtastic => None,
         Mode::Spec => None,
     }
 }

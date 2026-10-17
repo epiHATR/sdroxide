@@ -589,6 +589,11 @@ pub struct RadioState {
     /// separately. Appended last: postcard numbers fields by position.
     #[serde(default)]
     pub rs41: crate::Rs41Settings,
+    /// Meshtastic region / listen settings. Live status is
+    /// [`crate::MeshtasticStatus`], sent separately. Appended last: postcard
+    /// numbers fields by position.
+    #[serde(default)]
+    pub meshtastic: crate::MeshtasticSettings,
 }
 
 impl Default for RadioState {
@@ -640,6 +645,7 @@ impl Default for RadioState {
             hd_radio_unavailable: None,
             hfdl: crate::HfdlSettings::default(),
             rs41: crate::Rs41Settings::default(),
+            meshtastic: crate::MeshtasticSettings::default(),
         }
     }
 }

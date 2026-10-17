@@ -371,6 +371,16 @@ pub enum Mode {
     /// demod so the sonde can be heard while telemetry is decoded. Appended
     /// for the same reason as [`Mode::Hell`].
     Rs41,
+    /// Meshtastic — LoRa mesh messaging on the ISM bands (EU 868, US 915,
+    /// Asia 433): node positions, short text and device metrics.
+    ///
+    /// Receive only in this build. Not [`Mode::is_digital`]: the digi engine
+    /// works in 48 kHz audio, and Meshtastic is decoded from LoRa I/Q by a
+    /// lane of its own (first ship: status scaffolding; modem later). A
+    /// `Mode` rather than an ISM family chip because it owns the dial, the
+    /// region presets and an APRS-shaped panel (nodes / messages / map).
+    /// Appended for the same reason as [`Mode::Hell`].
+    Meshtastic,
 }
 
 /// The bands on which a mode that keeps phone practice rides the lower
@@ -391,7 +401,7 @@ const PHONE_LSB_BANDS: [(f64, f64); 3] =
 impl Mode {
     /// Every mode, in the order they cycle and appear in the picker — which is
     /// deliberately *not* the enum's declaration order (see [`Mode::Hell`]).
-    pub const ALL: [Mode; 50] = [
+    pub const ALL: [Mode; 51] = [
         Mode::Lsb,
         Mode::Usb,
         Mode::Cw,
@@ -405,6 +415,7 @@ impl Mode {
         Mode::Vdl2,
         Mode::Ais,
         Mode::Rs41,
+        Mode::Meshtastic,
         Mode::Digu,
         Mode::Digl,
         Mode::Dsb,
@@ -591,6 +602,14 @@ impl Mode {
         matches!(self, Mode::Rs41)
     }
 
+    /// Meshtastic LoRa mesh — receive-only lane with its own panel.
+    ///
+    /// Not [`Mode::is_digital`], for the reason [`Mode::is_adsb`] is not: it is
+    /// a surveillance / messaging decoder off I/Q, not a digi-audio modem.
+    pub fn is_meshtastic(self) -> bool {
+        matches!(self, Mode::Meshtastic)
+    }
+
     /// True for the modes that own the bottom panel.
     ///
     /// [`Mode::is_digital`] used to answer this on its own, which was true
@@ -604,6 +623,7 @@ impl Mode {
             || self.is_ais()
             || self.is_hfdl()
             || self.is_rs41()
+            || self.is_meshtastic()
     }
 
     /// True for the modes decoded by a wideband engine lane off the raw I/Q
@@ -902,6 +922,7 @@ impl Mode {
                 | Mode::Fst4
                 | Mode::Q65
                 | Mode::Rs41
+                | Mode::Meshtastic
         )
     }
 
@@ -986,6 +1007,7 @@ impl Mode {
             Mode::Q65 => "Q65",
             Mode::Fsk441 => "FSK441",
             Mode::Rs41 => "SONDE",
+            Mode::Meshtastic => "MESH",
         }
     }
 
@@ -1094,6 +1116,8 @@ impl Mode {
             // RS41 GFSK occupies a few kilohertz; shade a comfortable window
             // around the dial so the operator can see the sonde in the span.
             Mode::Rs41 => (-12_000.0, 12_000.0),
+            // LoRa LongFast is typically 250 kHz; shade that around the dial.
+            Mode::Meshtastic => (-125_000.0, 125_000.0),
             // Likewise not a receive filter: the decoder reads seven
             // channels spread over 325 kHz, and this is the whole plan
             // drawn on the panadapter so an operator can see that all of
@@ -1354,6 +1378,7 @@ impl Mode {
             | Mode::Ais
             | Mode::Hfdl
             | Mode::Rs41
+            | Mode::Meshtastic
             | Mode::HdRadio => C::Fm,
             // Everything a rig would be put into DATA (or DIGI) for, on either
             // sideband — including RIFP and VHF packet, which the rig carries
@@ -1415,6 +1440,7 @@ impl Mode {
                 | Mode::Ais
                 | Mode::Hfdl
                 | Mode::Rs41
+                | Mode::Meshtastic
                 | Mode::HdRadio
         )
     }
@@ -1584,6 +1610,7 @@ impl Mode {
             // whole 24 kHz channel, so this only shades what is read.
             Mode::Hfdl => &[("24k", -12_000.0, 12_000.0)],
             Mode::Rs41 => &[("24k", -12_000.0, 12_000.0)],
+            Mode::Meshtastic => &[("250k", -125_000.0, 125_000.0), ("500k", -250_000.0, 250_000.0)],
             // The one digital mode with a real filter choice: 1200 Bell 202
             // occupies about 10 kHz and 9600 G3RUH about 16 kHz, so the
             // operator wants the narrower one when running 1200 on a busy
@@ -1677,6 +1704,9 @@ impl std::str::FromStr for Mode {
         // written before the multi-type radiosonde work.
         if s.eq_ignore_ascii_case("rs41") {
             return Ok(Mode::Rs41);
+        }
+        if s.eq_ignore_ascii_case("mesh") || s.eq_ignore_ascii_case("meshtastic") {
+            return Ok(Mode::Meshtastic);
         }
         Mode::ALL
             .into_iter()
@@ -2114,7 +2144,8 @@ mod tests {
                         || m == Mode::Vdl2
                         || m == Mode::Ais
                         || m == Mode::Hfdl
-                        || m == Mode::Rs41,
+                        || m == Mode::Rs41
+                        || m == Mode::Meshtastic,
                     "{m:?} has only symmetric presets — should its edges mirror?"
                 );
             }
@@ -2182,6 +2213,7 @@ mod tests {
             (Mode::Q65, 47),
             (Mode::Fsk441, 48),
             (Mode::Rs41, 49),
+            (Mode::Meshtastic, 50),
         ];
         for (mode, index) in pinned {
             assert_eq!(mode as u8, index, "{} moved", mode.label());
@@ -2228,7 +2260,7 @@ mod tests {
         // dropped and nothing listed twice.
         // The last variant *by discriminant*, which is the one appended most
         // recently — not the one that reads last in the picker.
-        let last = Mode::Rs41 as u8;
+        let last = Mode::Meshtastic as u8;
         for i in 0..=last {
             let present = Mode::ALL.iter().filter(|m| **m as u8 == i).count();
             assert_eq!(present, 1, "discriminant {i} appears {present} times in Mode::ALL");

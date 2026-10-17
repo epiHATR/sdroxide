@@ -1570,7 +1570,16 @@ use sdroxide_types::{
 /// v185: `ServerMsg::SatTleListing` / `RadioEvent::SatTleListing` — amalgamated
 /// pasted+subscription TLE text so a wasm SAT picker can show pass times
 /// (browser has no host disk cache).
-pub const PROTO_VERSION: u16 = 185;
+///
+/// v186: Meshtastic — `Mode::Meshtastic` appended; `RadioState.meshtastic` /
+/// `Command::SetMeshtasticConfig` / `RadioEvent::MeshtasticStatus` /
+/// `ServerMsg::MeshtasticStatus`. RX scaffolding (nodes / messages / map);
+/// LoRa modem decode follows later.
+///
+/// v187: `MeshtasticRegion` expanded (append-only) with the Meshtastic
+/// commercial region set — SG_923, JP, ANZ, MY_919, … — LongFast default
+/// centres match firmware slot hashing.
+pub const PROTO_VERSION: u16 = 187;
 const VERSION_BYTE: u8 = 0x12;
 
 #[derive(Debug, thiserror::Error)]
@@ -2039,6 +2048,11 @@ pub enum ServerMsg {
     /// connect so the browser does not sit on "no elements" until the next
     /// refresh. Appended last, for the usual reason.
     SatTleListing(String),
+    /// Every Meshtastic node and message the decoder is tracking. A whole
+    /// snapshot — see [`sdroxide_types::MeshtasticStatus`].
+    ///
+    /// Appended last, for the usual reason.
+    MeshtasticStatus(Box<sdroxide_types::MeshtasticStatus>),
 }
 
 /// One radio in a station's roster, as a client sees it.

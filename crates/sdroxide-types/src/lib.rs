@@ -77,9 +77,14 @@ mod voice;
 mod wefax;
 mod winlink;
 mod wsjtx;
+mod meshtastic;
 mod wspr;
 
 pub use access::{AUTH_BUSY, AUTH_REFUSED, AuthPhase, RemoteAccess, RemoteServer, is_auth_busy};
+pub use meshtastic::{
+    MESHTASTIC_ASIA433_HZ, MESHTASTIC_EU868_HZ, MESHTASTIC_US915_HZ, MeshtasticMessage,
+    MeshtasticNode, MeshtasticRegion, MeshtasticSettings, MeshtasticStatus,
+};
 pub use adsb::{
     ADSB_DROP_LIST_S, ADSB_DROP_MAP_S, ADSB_FREQ_HZ, ADSB_GOOD_RATE_HZ, ADSB_HISTORY_POINTS,
     ADSB_MAX_AIRCRAFT, ADSB_MAX_RATE_HZ, ADSB_MIN_RATE_HZ, ADSB_TRACK_MAX, ADSB_VECTOR_MINUTES,

@@ -7039,6 +7039,7 @@ fn band_mode_menu(
             Mode::Ais,
             Mode::Hfdl,
             Mode::Rs41,
+            Mode::Meshtastic,
         ]) {
             if crate::chrome::chip(ui, mode == m, m.label()).clicked() {
                 cmds.push(Command::SetMode { rx: RxId::Main, mode: m });

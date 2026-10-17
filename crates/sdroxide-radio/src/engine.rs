@@ -2845,6 +2845,13 @@ struct Engine {
     /// Last `last_at` uploaded to SondeHub per serial, so a status tick does
     /// not re-post the same package.
     rs41_uploaded: std::collections::HashMap<String, i64>,
+    /// Meshtastic RX scaffolding: node / message tables the LoRa modem will
+    /// fill. Status is emitted while the mode is selected so the panel paints.
+    meshtastic_nodes: Vec<sdroxide_types::MeshtasticNode>,
+    meshtastic_messages: Vec<sdroxide_types::MeshtasticMessage>,
+    /// Fingerprint of the last status sent, so a quiet mode does not flood the
+    /// event channel every poll tick.
+    meshtastic_last_fp: u64,
     /// Open capture file for `--record-iq`, and the interleaving scratch it is
     /// written from.
     iq_rec: Option<std::io::BufWriter<std::fs::File>>,
@@ -3815,6 +3822,21 @@ fn engine_thread(
                 state.band = Band::containing(hz);
             }
         }
+        // Meshtastic: park on the configured region's LongFast centre.
+        if mode.is_meshtastic() {
+            let hz = state.meshtastic.region.center_hz();
+            info!(
+                from = state.active_freq_hz(),
+                to = hz,
+                region = ?state.meshtastic.region,
+                "Meshtastic region centre; tuning there"
+            );
+            match state.active_vfo {
+                Vfo::A => state.vfo_a_hz = hz,
+                Vfo::B => state.vfo_b_hz = hz,
+            }
+            state.band = Band::containing(hz);
+        }
         // ...and HFDL, whose channel is chosen in its panel rather than by the
         // dial: there is a plan of assigned frequencies, so the mode brings the
         // dial onto the chosen one and the panadapter shows the signal the lane
@@ -4258,6 +4280,9 @@ fn engine_thread(
         rs41_cfg,
         rs41_idle_sent: None,
         rs41_uploaded: std::collections::HashMap::new(),
+        meshtastic_nodes: Vec::new(),
+        meshtastic_messages: Vec::new(),
+        meshtastic_last_fp: 0,
         qo100_ddc: None,
         qo100: None,
         qo100_buf: Vec::new(),
@@ -4648,6 +4673,7 @@ fn engine_thread(
         engine.poll_vdl2();
         engine.poll_ais();
         engine.poll_rs41();
+        engine.poll_meshtastic();
         engine.poll_qo100();
         engine.poll_hfdl();
         engine.poll_scanner();
@@ -9240,6 +9266,11 @@ impl Engine {
                     // next character arrives reads as a button that missed.
                     self.emit_digi_status();
                 }
+                if self.state.rx[0].mode.is_meshtastic() {
+                    self.meshtastic_messages.clear();
+                    self.meshtastic_last_fp = 0;
+                    self.emit_meshtastic_status();
+                }
             }
             DigiTxActive(on) => {
                 if let Some(d) = self.digi.as_mut() {
@@ -9428,6 +9459,32 @@ impl Engine {
                 if let Some(d) = self.rs41.as_ref() {
                     d.set_config(cfg);
                 }
+            }
+
+            // Meshtastic region / listen settings.
+            SetMeshtasticConfig(cfg) => {
+                self.state.meshtastic = cfg;
+                if self.state.rx[0].mode.is_meshtastic() {
+                    let hz = cfg.region.center_hz();
+                    if self.caps.may_rx_hz(hz) {
+                        match self.state.active_vfo {
+                            Vfo::A => self.state.vfo_a_hz = hz,
+                            Vfo::B => self.state.vfo_b_hz = hz,
+                        }
+                        self.state.band = Band::containing(hz);
+                        self.follow_dial();
+                        self.update_tuning();
+                        // A prior region (e.g. LORA_24) that the front end
+                        // refused leaves a sticky `Notice` from `tune_refused`.
+                        // Parking on a reachable LongFast centre resolves that
+                        // condition — clear it so the banner does not linger
+                        // after the operator switches back.
+                        self.clear_notice();
+                    }
+                }
+                // Force a fresh status so the panel's region readout flips now.
+                self.meshtastic_last_fp = 0;
+                self.emit_meshtastic_status();
             }
 
             AttachListener { id } => self.attach_listener(id),
@@ -11881,6 +11938,98 @@ impl Engine {
         }
     }
 
+    /// Emit a Meshtastic status snapshot while the mode is selected.
+    ///
+    /// First ship is RX scaffolding: the dial parks on a region centre and the
+    /// panel paints an empty node / message table. The LoRa modem lane will
+    /// fill `meshtastic_nodes` / `meshtastic_messages` later.
+    fn poll_meshtastic(&mut self) {
+        if !self.state.rx[0].mode.is_meshtastic() {
+            if self.meshtastic_last_fp != 0 {
+                self.meshtastic_last_fp = 0;
+                let st = sdroxide_types::MeshtasticStatus {
+                    region: self.state.meshtastic.region,
+                    listening: false,
+                    ..Default::default()
+                };
+                let _ = self.event_tx.send(RadioEvent::MeshtasticStatus(Box::new(st)));
+            }
+            return;
+        }
+        self.emit_meshtastic_status();
+    }
+
+    fn emit_meshtastic_status(&mut self) {
+        let region = self.state.meshtastic.region;
+        let dial = self.state.active_freq_hz();
+        let centre = region.center_hz();
+        let unavailable = self.meshtastic_unavailable(region, dial, centre);
+        let st = sdroxide_types::MeshtasticStatus {
+            nodes: self.meshtastic_nodes.clone(),
+            messages: self.meshtastic_messages.clone(),
+            region,
+            listening: self.state.rx[0].mode.is_meshtastic() && unavailable.is_none(),
+            // LongFast defaults — shown until a real modem reports otherwise.
+            sf: Some(11),
+            bw_hz: Some(250_000),
+            cr: Some(5),
+            channel_name: "LongFast".into(),
+            last_snr_db: self.meshtastic_messages.last().and_then(|m| m.snr_db),
+            unavailable,
+        };
+        // Cheap fingerprint: lengths + region + listening + whether a warning
+        // is up. Dial-in-band changes must refresh so switching to a reachable
+        // profile clears the hazard line.
+        let fp = {
+            let mut h = 0u64;
+            h = h.wrapping_mul(31).wrapping_add(st.nodes.len() as u64);
+            h = h.wrapping_mul(31).wrapping_add(st.messages.len() as u64);
+            h = h.wrapping_mul(31).wrapping_add(st.region as u64);
+            h = h.wrapping_mul(31).wrapping_add(u64::from(st.listening));
+            h = h.wrapping_mul(31).wrapping_add(u64::from(region.contains_hz(dial)));
+            h = h.wrapping_mul(31).wrapping_add(u64::from(self.caps.may_rx_hz(centre)));
+            h = h.wrapping_mul(31).wrapping_add(st.unavailable.as_ref().map(|s| s.len()).unwrap_or(0) as u64);
+            h
+        };
+        if fp == self.meshtastic_last_fp {
+            return;
+        }
+        self.meshtastic_last_fp = fp;
+        let _ = self.event_tx.send(RadioEvent::MeshtasticStatus(Box::new(st)));
+    }
+
+    /// Why Meshtastic cannot listen at the current dial / region, if it cannot.
+    ///
+    /// Cleared once the dial sits inside the region's band *and* this receiver
+    /// can reach that region's LongFast centre — switching profile (or tuning
+    /// into band) drops the panel warning.
+    fn meshtastic_unavailable(
+        &self,
+        region: sdroxide_types::MeshtasticRegion,
+        dial_hz: f64,
+        centre_hz: f64,
+    ) -> Option<String> {
+        if !self.caps.may_rx_hz(centre_hz) {
+            let (lo, hi) = region.band_mhz();
+            return Some(format!(
+                "{} LongFast centre {:.3} MHz is outside this receiver's range \
+                 (region {lo:.3}–{hi:.3} MHz)",
+                region.label(),
+                centre_hz / 1e6
+            ));
+        }
+        if !region.contains_hz(dial_hz) {
+            let (lo, hi) = region.band_mhz();
+            return Some(format!(
+                "Dial {:.3} MHz is outside {} ({lo:.3}–{hi:.3} MHz) — switch \
+                 region or tune into the band",
+                dial_hz / 1e6,
+                region.label()
+            ));
+        }
+        None
+    }
+
     /// The main receiver's clean audio tap is shared: the digital-mode engine
     /// and the TCI server's RX-audio stream both read `tap_out`. Whoever wants
     /// it turns it on; it switches off only when nobody does. Every decision to
@@ -13671,6 +13820,22 @@ impl Engine {
             let dial = self.state.active_freq_hz();
             if dial < sdroxide_types::RS41_BAND_LO_HZ || dial > sdroxide_types::RS41_BAND_HI_HZ {
                 let hz = sdroxide_types::RS41_DEFAULT_HZ;
+                match self.state.active_vfo {
+                    Vfo::A => self.state.vfo_a_hz = hz,
+                    Vfo::B => self.state.vfo_b_hz = hz,
+                }
+                self.state.band = Band::containing(hz);
+                self.follow_dial();
+                self.update_tuning();
+            }
+        }
+        // Meshtastic: onto the region's LongFast centre when entering the mode.
+        if rx == RxId::Main
+            && mode.is_meshtastic()
+            && !self.state.rx[0].mode.is_meshtastic()
+        {
+            let hz = self.state.meshtastic.region.center_hz();
+            if self.caps.may_rx_hz(hz) {
                 match self.state.active_vfo {
                     Vfo::A => self.state.vfo_a_hz = hz,
                     Vfo::B => self.state.vfo_b_hz = hz,
@@ -18316,6 +18481,7 @@ fn rig_mode_class(m: Mode) -> u8 {
         | Mode::Vdl2
         | Mode::Ais
         | Mode::Rs41
+        | Mode::Meshtastic
         | Mode::HdRadio => 5,
     }
 }

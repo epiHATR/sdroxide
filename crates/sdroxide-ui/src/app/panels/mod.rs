@@ -29,6 +29,7 @@ pub(in crate::app) mod decodes;
 pub(in crate::app) mod fsq;
 pub(in crate::app) mod js8;
 pub(in crate::app) mod macros;
+pub(in crate::app) mod meshtastic;
 mod navtex;
 pub(in crate::app) mod packet;
 pub(in crate::app) mod pi4;
@@ -99,6 +100,9 @@ pub(in crate::app) fn panel_panes(mode: Mode) -> &'static [&'static str] {
         // the network has located, which move independently.
         Mode::Hfdl => &["DECODES", "MAP"],
         Mode::Rs41 => &["SONDES", "MAP"],
+        // Three, for the reason APRS has three: who is on the mesh, what they
+        // said, and where they are.
+        Mode::Meshtastic => &["NODES", "MESSAGES", "MAP"],
         Mode::Wefax => &["CHART", "SAVED"],
         Mode::Navtex => &["MESSAGES", "READING"],
         Mode::RfPaint => &["TEXT", "IMAGE"],

@@ -287,6 +287,9 @@ pub(crate) struct Latest {
     /// the vessel table is: a sonde reports about once a second, but a client
     /// that attached without the table would still open on an empty list.
     pub rs41_status: Option<Box<sdroxide_types::Rs41Status>>,
+    /// What the Meshtastic decoder has heard. Replayed on connect for the same
+    /// reason the node table is a standing condition on a busy mesh.
+    pub meshtastic_status: Option<Box<sdroxide_types::MeshtasticStatus>>,
     /// What the DRM decoder has made of the broadcast currently tuned. Replayed
     /// on connect for the same reason as `rds`: a station's label and the
     /// transmission's parameters are standing conditions, and a client that
@@ -1523,6 +1526,10 @@ fn handle_event(shared: &Shared, ev: RadioEvent) {
             RadioEvent::Rs41Status(st) => {
                 latest.rs41_status = Some(st.clone());
                 Some(ServerMsg::Rs41Status(st))
+            }
+            RadioEvent::MeshtasticStatus(st) => {
+                latest.meshtastic_status = Some(st.clone());
+                Some(ServerMsg::MeshtasticStatus(st))
             }
             // Native-only for now: every station this shipped for runs its
             // own hardware locally, so there is no `ServerMsg` variant for

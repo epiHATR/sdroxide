@@ -238,6 +238,23 @@ pub fn hfdl_log_text(log: &[HfdlDecode]) -> String {
     out
 }
 
+/// The Meshtastic message log as text.
+pub fn meshtastic_log_text(messages: &[sdroxide_types::MeshtasticMessage]) -> String {
+    let mut out = String::from("utc\tfrom\tto\tsnr_db\ttext\traw\n");
+    for m in messages {
+        out.push_str(&format!(
+            "{}\t{}\t{}\t{}\t{}\t{}\n",
+            stamp(m.unix),
+            tsv(&m.from),
+            tsv(&m.to),
+            m.snr_db.map_or(String::new(), |v| format!("{v:.1}")),
+            tsv(&m.text),
+            tsv(&m.raw),
+        ));
+    }
+    out
+}
+
 /// The VDL2 message log as text.
 pub fn vdl2_log_text(messages: &[Vdl2Message]) -> String {
     let mut out = String::from("utc\tfreq_mhz\tsnr_db\tsummary\n");

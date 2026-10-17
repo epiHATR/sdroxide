@@ -791,6 +791,16 @@ pub struct SdroxideApp {
     rs41_setup_was_open: bool,
     /// RS41 setup: keep forcing a centered position until `.show()` draws.
     rs41_setup_center_pending: bool,
+    /// Meshtastic: node / message snapshot as the engine last sent it.
+    meshtastic_status: Option<Box<sdroxide_types::MeshtasticStatus>>,
+    /// Meshtastic: the map's pan/zoom and which node is selected.
+    meshtastic_map: crate::meshtastic_map::MeshtasticMapState,
+    /// Meshtastic: filter for the node list.
+    meshtastic_filter: String,
+    /// Meshtastic: the decoder's own settings window is open.
+    show_meshtastic_setup: bool,
+    meshtastic_setup_was_open: bool,
+    meshtastic_setup_center_pending: bool,
     /// VDL2: everything the decoder has, as the engine last sent it. Boxed
     /// because it carries a whole message log and is far larger than anything
     /// else held here.
@@ -1601,6 +1611,12 @@ impl SdroxideApp {
             show_rs41_setup: false,
             rs41_setup_was_open: false,
             rs41_setup_center_pending: false,
+            meshtastic_status: None,
+            meshtastic_map: crate::meshtastic_map::MeshtasticMapState::default(),
+            meshtastic_filter: String::new(),
+            show_meshtastic_setup: false,
+            meshtastic_setup_was_open: false,
+            meshtastic_setup_center_pending: false,
             vdl2_status: None,
             vdl2_filter: String::new(),
             vdl2_selected: None,

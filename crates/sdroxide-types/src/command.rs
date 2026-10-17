@@ -1215,4 +1215,9 @@ pub enum Command {
         id: u64,
         on: bool,
     },
+
+    /// Set Meshtastic listen settings (region / channel plan). The engine
+    /// parks the dial on that region's centre and echoes the config in
+    /// [`crate::RadioState::meshtastic`]. Appended for the usual reason.
+    SetMeshtasticConfig(crate::MeshtasticSettings),
 }

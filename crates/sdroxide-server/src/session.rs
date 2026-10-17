@@ -173,6 +173,7 @@ async fn run_session(
         vdl2_status,
         ais_status,
         rs41_status,
+        meshtastic_status,
         drm,
         hd,
         relay,
@@ -201,6 +202,7 @@ async fn run_session(
             latest.vdl2_status.clone(),
             latest.ais_status.clone(),
             latest.rs41_status.clone(),
+            latest.meshtastic_status.clone(),
             latest.drm.clone(),
             latest.hd.clone(),
             latest.relay.clone(),
@@ -260,6 +262,9 @@ async fn run_session(
     }
     if let Some(st) = rs41_status {
         let _ = socket.send(msg(&ServerMsg::Rs41Status(st))).await;
+    }
+    if let Some(st) = meshtastic_status {
+        let _ = socket.send(msg(&ServerMsg::MeshtasticStatus(st))).await;
     }
     if let Some(p) = images {
         let _ = socket.send(msg(&ServerMsg::ImagePresets(p))).await;

@@ -220,6 +220,7 @@ fn mode_digit(m: Mode) -> char {
         | Mode::Vdl2
         | Mode::Ais
         | Mode::Rs41
+        | Mode::Meshtastic
         | Mode::HdRadio => '2',
         Mode::Usb
         | Mode::Spec

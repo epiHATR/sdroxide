@@ -417,6 +417,11 @@ pub enum RadioEvent {
     /// wasm SAT pickers that have no disk cache. Emitted with station config
     /// and after a TLE refresh. Appended last, for the usual reason.
     SatTleListing(String),
+    /// Live Meshtastic node table and message log. Boxed for the same reason
+    /// [`RadioEvent::Rs41Status`] is: a busy mesh's tables are large.
+    ///
+    /// Appended last, for the usual reason.
+    MeshtasticStatus(Box<crate::MeshtasticStatus>),
 }
 
 /// Snapshot of the frontend's switchable sound devices (native clients).
