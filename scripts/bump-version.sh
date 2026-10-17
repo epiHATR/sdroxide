@@ -4,7 +4,8 @@
 #   ./scripts/bump-version.sh 1.6.12
 #
 # Then fill in release/v1.6.12.md, commit, tag v1.6.12, and push the tag.
-# The Release workflow turns that file + a commit list into the GitHub notes.
+# The Release workflow turns that file + a commit list into the GitHub notes
+# (download/install help stays in release/DOWNLOAD.md, not the release body).
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
