@@ -51,7 +51,8 @@ use self::radio::{
 #[cfg(not(target_arch = "wasm32"))]
 use self::remote::settings_remote_tab;
 use self::servers::{
-    settings_rigctld_tab, settings_rotator_tab, settings_tci_server_tab, settings_wsjtx_tab,
+    settings_mqtt_tab, settings_rigctld_tab, settings_rotator_tab, settings_tci_server_tab,
+    settings_wsjtx_tab,
 };
 use self::tle::settings_tle_tab;
 use self::ui_tab::settings_ui_tab;
@@ -295,6 +296,8 @@ pub(in crate::app) struct SettingsIo<'a> {
     /// GridTracker, JTAlert, N1MM+ and Log4OM.
     wsjtx_edit: &'a mut sdroxide_types::WsjtxConfig,
     wsjtx_apply: &'a mut bool,
+    mqtt_edit: &'a mut sdroxide_types::MqttConfig,
+    mqtt_apply: &'a mut bool,
     /// The rotctld *client* — the satellite lock steering a motorized antenna.
     rot_edit: &'a mut sdroxide_types::RotatorConfig,
     rot_apply: &'a mut bool,
@@ -1118,6 +1121,8 @@ impl SdroxideApp {
         let mut rigctld_apply = false;
         let mut wsjtx_edit = self.wsjtx_edit.clone();
         let mut wsjtx_apply = false;
+        let mut mqtt_edit = self.mqtt_edit.clone();
+        let mut mqtt_apply = false;
         let mut rot_edit = self.rot_cfg_edit.clone();
         let mut rot_apply = false;
         let mut relay_edit = self.relay_edit.clone();
@@ -1308,6 +1313,8 @@ impl SdroxideApp {
                             rigctld_apply: &mut rigctld_apply,
                             wsjtx_edit: &mut wsjtx_edit,
                             wsjtx_apply: &mut wsjtx_apply,
+                            mqtt_edit: &mut mqtt_edit,
+                            mqtt_apply: &mut mqtt_apply,
                             rot_edit: &mut rot_edit,
                             rot_apply: &mut rot_apply,
                             relay_edit: &mut relay_edit,
@@ -1423,6 +1430,10 @@ impl SdroxideApp {
         if wsjtx_apply {
             // The engine persists wsjtx.json when it opens the socket.
             cmds.push(Command::SetWsjtxConfig(self.wsjtx_edit.clone()));
+        }
+        self.mqtt_edit = mqtt_edit;
+        if mqtt_apply {
+            cmds.push(Command::SetMqttConfig(self.mqtt_edit.clone()));
         }
         self.rot_cfg_edit = rot_edit;
         if rot_apply {
@@ -3520,6 +3531,10 @@ impl SdroxideApp {
                 ui.separator();
                 ui.add_space(8.0);
                 settings_wsjtx_tab(ui, io.wsjtx_edit, self.wsjtx_seeded, io.wsjtx_apply);
+                ui.add_space(12.0);
+                ui.separator();
+                ui.add_space(8.0);
+                settings_mqtt_tab(ui, io.mqtt_edit, self.mqtt_seeded, io.mqtt_apply);
                 ui.add_space(12.0);
                 ui.separator();
                 ui.add_space(8.0);

@@ -77,6 +77,7 @@ mod vdl2;
 mod voice;
 mod wefax;
 mod winlink;
+mod mqtt;
 mod wsjtx;
 mod wspr;
 
@@ -310,6 +311,7 @@ pub use winlink::{
     DEFAULT_CMS_ADDRESS, MAIL_PAGE_MAX, MailAttachment, MailDraft, MailEntry, MailFolder,
     MailListing, MailMessage, WinlinkConfig, WinlinkGateway, WinlinkLane, WinlinkStatus,
 };
+pub use mqtt::{MqttConfig, MqttTopic};
 pub use wsjtx::{CwTextConfig, N1mmConfig, WsjtxConfig};
 pub use wspr::{
     BURST_S as WSPR_BURST_S, DEFAULT_TX_HZ as WSPR_DEFAULT_TX_HZ, POWERS_DBM as WSPR_POWERS_DBM,

@@ -2913,6 +2913,11 @@ struct Engine {
     /// The decoded-CW UDP output, if switched on — see [`Engine::sync_cw_text`].
     cw_text: Option<sdroxide_wsjtx::CwTextUdp>,
     wsjtx_cfg: sdroxide_types::WsjtxConfig,
+    /// MQTT decode publish (Settings → Servers).
+    mqtt: sdroxide_net::MqttPublisher,
+    mqtt_cfg: sdroxide_types::MqttConfig,
+    /// Last Meshtastic message unix already sent to MQTT (dedupe).
+    mqtt_mesh_last_unix: i64,
     /// When the last WSJT-X heartbeat went out (clients time a station out
     /// without one).
     wsjtx_beat: Instant,
@@ -4324,6 +4329,9 @@ fn engine_thread(
         n1mm: None,
         cw_text: None,
         wsjtx_cfg: sdroxide_types::WsjtxConfig::default(),
+        mqtt: sdroxide_net::MqttPublisher::default(),
+        mqtt_cfg: sdroxide_types::MqttConfig::default(),
+        mqtt_mesh_last_unix: 0,
         wsjtx_beat: Instant::now(),
         rigctld: None,
         rigctld_cfg: RigctldConfig::default(),
@@ -4494,6 +4502,8 @@ fn engine_thread(
     // WSJT-X UDP broadcast is likewise off unless the operator turned it on.
     engine.wsjtx_cfg = engine.store.load_wsjtx_config();
     engine.sync_wsjtx();
+    engine.mqtt_cfg = engine.store.load_mqtt_config();
+    engine.sync_mqtt();
     // The satellite additions: the display tracker lives in the UI, but the
     // element sets are persisted here — and the satellite *lock*, when the
     // operator engages one, runs here too (see `poll_sat_track`).
@@ -6558,6 +6568,54 @@ impl Engine {
         }
     }
 
+    /// Connect or disconnect the MQTT decode publisher to match its config.
+    fn sync_mqtt(&mut self) {
+        self.mqtt.apply(self.mqtt_cfg.clone(), &self.digi_config.my_call);
+    }
+
+    fn mqtt_publish_digi(&self, decodes: &[sdroxide_types::Decode], dial_hz: f64) {
+        let mode = self.digi.as_ref().map(|d| d.mode().label().to_string()).unwrap_or_default();
+        let call = self.digi_config.my_call.as_str();
+        let grid = self.report_grid();
+        for d in decodes {
+            self.mqtt.publish_digi(d, &mode, dial_hz, call, &grid);
+        }
+    }
+
+    fn mqtt_publish_wspr(&self, spots: &[sdroxide_types::WsprSpot]) {
+        let call = self.digi_config.my_call.as_str();
+        let grid = self.report_grid();
+        for s in spots {
+            self.mqtt.publish_wspr(s, call, &grid);
+        }
+    }
+
+    fn mqtt_publish_sonde(&self, sondes: &[sdroxide_types::Rs41Sonde]) {
+        let call = self.digi_config.my_call.as_str();
+        let grid = self.report_grid();
+        for s in sondes {
+            self.mqtt.publish_sonde(s, call, &grid);
+        }
+    }
+
+    fn mqtt_publish_mesh(
+        &self,
+        messages: &[sdroxide_types::MeshtasticMessage],
+        last_unix: &mut i64,
+    ) {
+        let call = self.digi_config.my_call.as_str();
+        let grid = self.report_grid();
+        let mut newest = *last_unix;
+        for m in messages {
+            if m.unix <= *last_unix {
+                continue;
+            }
+            self.mqtt.publish_mesh(m, call, &grid);
+            newest = newest.max(m.unix);
+        }
+        *last_unix = newest;
+    }
+
     /// Notice the dial has crossed into another band, and drop what only meant
     /// anything on the one it left.
     ///
@@ -6734,6 +6792,7 @@ impl Engine {
                 DigiAction::Decodes(d) => {
                     self.psk_report_decodes(&d, dial);
                     self.wsjtx_decodes(&d);
+                    self.mqtt_publish_digi(&d, dial);
                     let _ = self.event_tx.send(RadioEvent::Ft8Decodes(d));
                 }
                 DigiAction::Status(s) => {
@@ -6763,6 +6822,7 @@ impl Engine {
                 }
                 DigiAction::WsprSpots(spots) => {
                     self.spots.wspr_report(&spots, dial, self.digi_config.wspr_tx_percent);
+                    self.mqtt_publish_wspr(&spots);
                     let _ = self.event_tx.send(RadioEvent::WsprSpots(spots));
                 }
                 // No reporting-network upload, unlike WSPR's: there is no
@@ -9812,6 +9872,16 @@ impl Engine {
                 return;
             }
 
+            SetMqttConfig(cfg) => {
+                if let Err(e) = self.store.save_mqtt_config(&cfg) {
+                    warn!("saving MQTT config: {e}");
+                }
+                self.mqtt_cfg = cfg;
+                self.sync_mqtt();
+                self.emit_station_config();
+                return;
+            }
+
             // Transmit-image presets and the received-picture stores (no
             // RadioState change → return before the State emit below).
             ImageSetSlot { slot, bytes } => {
@@ -12000,6 +12070,7 @@ impl Engine {
                     self.rs41_uploaded.insert(s.serial.clone(), s.last_at);
                 }
                 self.spots.sondehub_report(&fresh);
+                self.mqtt_publish_sonde(&fresh);
             }
             let _ = self.event_tx.send(RadioEvent::Rs41Status(st));
         }
@@ -12129,6 +12200,7 @@ impl Engine {
             return;
         }
         let unavailable = self.meshtastic_unavailable_now();
+        let mut statuses = Vec::new();
         if let Some(c) = self.meshtastic.as_ref() {
             while let Some(MeshtasticAction::Status(mut st)) = c.poll() {
                 // Engine reasons (dial/rate) win; else keep worker's (e.g. missing lorarx).
@@ -12139,11 +12211,18 @@ impl Engine {
                 };
                 st.listening = st.unavailable.is_none();
                 st.region = self.state.meshtastic.region;
-                self.meshtastic_last_fp = meshtastic_status_fp(&st);
-                let _ = self.event_tx.send(RadioEvent::MeshtasticStatus(st));
+                statuses.push(st);
             }
         } else {
             self.emit_meshtastic_status();
+            return;
+        }
+        for st in statuses {
+            self.meshtastic_last_fp = meshtastic_status_fp(&st);
+            let mut mesh_last = self.mqtt_mesh_last_unix;
+            self.mqtt_publish_mesh(&st.messages, &mut mesh_last);
+            self.mqtt_mesh_last_unix = mesh_last;
+            let _ = self.event_tx.send(RadioEvent::MeshtasticStatus(st));
         }
     }
 
@@ -12794,6 +12873,7 @@ impl Engine {
                 region: sdroxide_types::region(),
                 band_plan: sdroxide_types::band_plan().clone(),
                 digi_presets: sdroxide_types::digi_presets().to_vec(),
+                mqtt: self.mqtt_cfg.clone(),
             },
         )));
     }

@@ -1583,6 +1583,10 @@ use sdroxide_types::{
 /// v189: `Command::SetRecordingWav` + `RadioState::recording_wav` — Audio
 /// panel can ask the next QSO tape to be PCM WAV instead of MP3.
 ///
+/// v191: `Command::SetMqttConfig` + `StationConfig.mqtt` (`mqtt.json`) —
+/// optional MQTT publish of digi / WSPR / sonde / mesh decodes from
+/// Settings → Servers. Per-kind topics are operator-defined.
+///
 /// v190: `Command::SetRecordingPause` + `RadioState::recording_paused` —
 /// pause/resume an open QSO tape without closing the file.
 ///
@@ -1590,7 +1594,7 @@ use sdroxide_types::{
 /// `psk_bytes`) for LongFast AES-CTR; native soft-demod fills status.
 /// `SatConfig::watching` always serializes (empty included) so postcard
 /// layout of `StationConfig` stays aligned.
-pub const PROTO_VERSION: u16 = 190;
+pub const PROTO_VERSION: u16 = 191;
 const VERSION_BYTE: u8 = 0x12;
 
 #[derive(Debug, thiserror::Error)]

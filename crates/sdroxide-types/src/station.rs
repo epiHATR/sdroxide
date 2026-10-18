@@ -1,10 +1,10 @@
 //! The persisted configuration that belongs to the *station* rather than to
 //! the screen in front of it.
 //!
-//! Seven files, all written next to each other in the config directory and all
-//! owned by the engine: the network cockpit (`net.json`), the two built-in
-//! control servers (`rigctld.json`, `tciserver.json`), the WSJT-X UDP
-//! broadcast (`wsjtx.json`), the operator's satellite additions
+//! Files written next to each other in the config directory and owned by the
+//! engine: the network cockpit (`net.json`), the two built-in control servers
+//! (`rigctld.json`, `tciserver.json`), the WSJT-X UDP broadcast (`wsjtx.json`),
+//! MQTT decode publish (`mqtt.json`), the operator's satellite additions
 //! (`satellites.json`), the antenna-rotator client (`rotator.json`) and the
 //! external transmit/receive switch (`relay.json`).
 //!
@@ -23,8 +23,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    NetworkConfig, Region, RelayConfig, RigctldConfig, RotatorConfig, SatConfig, TciServerConfig,
-    WsjtxConfig,
+    MqttConfig, NetworkConfig, Region, RelayConfig, RigctldConfig, RotatorConfig, SatConfig,
+    TciServerConfig, WsjtxConfig,
 };
 
 /// Everything the engine host persists on the station's behalf, as one
@@ -88,4 +88,7 @@ pub struct StationConfig {
     ///
     /// Appended last, for the usual reason.
     pub digi_presets: Vec<crate::DigiPreset>,
+    /// MQTT decode publish (Settings → Servers). Appended last for postcard.
+    #[serde(default)]
+    pub mqtt: MqttConfig,
 }

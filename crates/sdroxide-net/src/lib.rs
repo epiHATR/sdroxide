@@ -13,6 +13,7 @@ mod freedvreporter;
 mod http;
 mod lookup;
 mod manager;
+mod mqtt;
 mod poll;
 mod pota;
 mod pskreporter;
@@ -26,6 +27,7 @@ mod wsprnet;
 
 pub use event::NetEvent;
 pub use manager::SpotManager;
+pub use mqtt::MqttPublisher;
 pub use pskupload::MAX_REPORT_HZ as MAX_PSK_REPORT_HZ;
 pub use pskupload::Report as PskReport;
 pub use sondehub::{Item as SondeHubItem, Reporter as SondeHubReporter};

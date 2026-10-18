@@ -1642,6 +1642,10 @@ impl SdroxideApp {
                         self.wsjtx_edit = c.wsjtx.clone();
                         self.wsjtx_seeded = true;
                     }
+                    if !self.mqtt_seeded {
+                        self.mqtt_edit = c.mqtt.clone();
+                        self.mqtt_seeded = true;
+                    }
                     if !self.sat_cfg_seeded {
                         self.sat_cfg_edit = c.sat.clone();
                         self.sat_cfg = std::sync::Arc::new(c.sat.clone());

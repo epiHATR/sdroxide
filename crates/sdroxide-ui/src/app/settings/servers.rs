@@ -1,10 +1,9 @@
-//! The Servers tab: the three interfaces this app offers to other software.
+//! The Servers tab: the interfaces this app offers to other software.
 //!
 //! Hamlib rigctld and the TCI server are control surfaces third-party clients
-//! connect to; the WSJT-X UDP broadcast is one-way, feeding decodes, status
-//! and logged QSOs to GridTracker, JTAlert, N1MM+ and Log4OM. All three are
-//! bound by the engine, which is also what persists their configuration and
-//! reports back whether the bind succeeded.
+//! connect to; the WSJT-X UDP broadcast and MQTT publisher are one-way,
+//! feeding decodes (and for WSJT-X, status / logged QSOs) to external tools.
+//! All of these are owned by the engine, which persists their configuration.
 //!
 //! That makes these three settings the *station's*, not the screen's: the
 //! engine announces what it has, and this tab edits that. `seeded` is whether
@@ -580,4 +579,116 @@ pub(in crate::app) fn settings_tci_server_tab(
         )
         .weak(),
     );
+}
+
+/// MQTT decode publish — one JSON object per decode to operator-chosen topics.
+pub(in crate::app) fn settings_mqtt_tab(
+    ui: &mut egui::Ui,
+    cfg: &mut sdroxide_types::MqttConfig,
+    seeded: bool,
+    apply: &mut bool,
+) {
+    ui.label(RichText::new("MQTT").size(14.0).strong().color(crate::theme::CYAN()));
+    ui.add_space(4.0);
+    if !seeded {
+        ui.label(RichText::new("Waiting for the station's MQTT configuration…").weak());
+        return;
+    }
+    ui.label(
+        RichText::new(
+            "Publishes decoded traffic as JSON to an MQTT broker — digi, WSPR, radiosonde and \
+             Meshtastic. Output only: nothing on the broker can touch the radio. Leave a topic \
+             empty to skip that kind.",
+        )
+        .weak(),
+    );
+    ui.add_space(6.0);
+    crate::chrome::checkbox(ui, &mut cfg.enabled, "Enable");
+    ui.add_space(6.0);
+    ui.add_enabled_ui(cfg.enabled, |ui| {
+        egui::Grid::new("mqtt-broker-grid").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
+            ui.label("Broker");
+            crate::chrome::field(
+                ui,
+                egui::TextEdit::singleline(&mut cfg.host)
+                    .desired_width(200.0)
+                    .hint_text("127.0.0.1"),
+            );
+            ui.end_row();
+
+            ui.label("Port");
+            ui.add(egui::DragValue::new(&mut cfg.port).range(1..=65535))
+                .on_hover_text("1883 plain MQTT, 8883 typical for TLS");
+            ui.end_row();
+
+            ui.label("TLS");
+            crate::chrome::checkbox(ui, &mut cfg.tls, "Use TLS");
+            ui.end_row();
+
+            ui.label("User");
+            crate::chrome::field(
+                ui,
+                egui::TextEdit::singleline(&mut cfg.user).desired_width(160.0),
+            );
+            ui.end_row();
+
+            ui.label("Password");
+            crate::chrome::field(
+                ui,
+                egui::TextEdit::singleline(&mut cfg.password)
+                    .desired_width(160.0)
+                    .password(true),
+            );
+            ui.end_row();
+
+            ui.label("Client id");
+            crate::chrome::field(
+                ui,
+                egui::TextEdit::singleline(&mut cfg.client_id)
+                    .desired_width(200.0)
+                    .hint_text("sdroxide-<callsign>"),
+            )
+            .on_hover_text("Empty uses sdroxide-<your callsign>");
+            ui.end_row();
+
+            ui.label("QoS");
+            ui.add(egui::DragValue::new(&mut cfg.qos).range(0..=1))
+                .on_hover_text("0 = at most once, 1 = at least once");
+            ui.end_row();
+        });
+
+        ui.add_space(10.0);
+        ui.label(RichText::new("Topics").size(12.0).strong().color(crate::theme::CYAN()));
+        ui.add_space(4.0);
+        egui::Grid::new("mqtt-topics-grid").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
+            for (label, topic, hint) in [
+                ("DIGI", &mut cfg.digi.topic, "sdroxide/DIGI"),
+                ("WSPR", &mut cfg.wspr.topic, "sdroxide/WSPR"),
+                ("SONDE", &mut cfg.sonde.topic, "sdroxide/SONDE"),
+                ("MESH", &mut cfg.mesh.topic, "sdroxide/MESH"),
+            ] {
+                ui.label(label);
+                crate::chrome::field(
+                    ui,
+                    egui::TextEdit::singleline(topic).desired_width(260.0).hint_text(hint),
+                )
+                .on_hover_text("Empty disables this kind");
+                ui.end_row();
+            }
+        });
+    });
+
+    ui.add_space(8.0);
+    if crate::chrome::chip_accent(
+        ui,
+        false,
+        RichText::new(" APPLY ").strong(),
+        crate::theme::GREEN(),
+        crate::theme::INK_ON_CYAN(),
+    )
+    .on_hover_text("Persist and (re)connect the MQTT publisher")
+    .clicked()
+    {
+        *apply = true;
+    }
 }

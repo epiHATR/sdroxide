@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AgcMode, Band, DigiConfig, Direction, ImageKind, LoginTarget, Mode, NetworkConfig, NrLevel,
-    QsoStep, RadioConfig, RigctldConfig, RotatorConfig, RxId, SatConfig, SatLockConfig,
+    AgcMode, Band, DigiConfig, Direction, ImageKind, LoginTarget, Mode, MqttConfig, NetworkConfig,
+    NrLevel, QsoStep, RadioConfig, RigctldConfig, RotatorConfig, RxId, SatConfig, SatLockConfig,
     SkimmerSettings, SpectrumConfig, SstvMode, TciServerConfig, TxEqState, UploadTarget, Vfo,
     WsjtxConfig,
 };
@@ -1232,4 +1232,9 @@ pub enum Command {
     /// closing the file. No effect when nothing is recording. Appended for the
     /// usual reason.
     SetRecordingPause(bool),
+
+    /// Apply (and persist) the MQTT decode-publish configuration: connect or
+    /// disconnect the broker and which topics carry digi / WSPR / sonde / mesh.
+    /// Output only — Settings → Servers. Appended for the usual reason.
+    SetMqttConfig(MqttConfig),
 }

@@ -169,6 +169,8 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 postcard = { version = "1", features = ["use-std"] }
 crossbeam-channel = "0.5"
+# Sync MQTT client for decode publish (sdroxide-net only; not on the wasm graph).
+rumqttc = { version = "0.24", default-features = true, features = ["use-rustls"] }
 rtrb = "0.4"
 # HFDL (ARINC 635) decode core, vendored under `vendor/xng` — a submodule pinned
 # to one commit, so the build takes no network dependency of its own. The crates

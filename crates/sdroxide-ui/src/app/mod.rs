@@ -1012,6 +1012,9 @@ pub struct SdroxideApp {
     /// UI-owned editable copy, seeded from the engine like the configs above.
     wsjtx_edit: sdroxide_types::WsjtxConfig,
     wsjtx_seeded: bool,
+    // ── MQTT decode publish (Settings → Servers) ──
+    mqtt_edit: sdroxide_types::MqttConfig,
+    mqtt_seeded: bool,
     /// Live status from `RadioEvent::RigctldStatus`. Same shape as the TCI
     /// server's, so the two share one status type.
     rigctld_status: Option<TciServerStatus>,
@@ -1779,6 +1782,8 @@ impl SdroxideApp {
             rigctld_seeded: false,
             wsjtx_edit: sdroxide_types::WsjtxConfig::default(),
             wsjtx_seeded: false,
+            mqtt_edit: sdroxide_types::MqttConfig::default(),
+            mqtt_seeded: false,
             rigctld_status: None,
             tci_srv_edit: sdroxide_types::TciServerConfig::default(),
             tci_srv_seeded: false,

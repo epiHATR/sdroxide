@@ -878,6 +878,14 @@ impl Store {
     pub fn save_wsjtx_config(&self, cfg: &sdroxide_types::WsjtxConfig) -> Result<(), ConfigError> {
         self.save("wsjtx.json", cfg)
     }
+
+    pub fn load_mqtt_config(&self) -> sdroxide_types::MqttConfig {
+        self.load("mqtt.json")
+    }
+
+    pub fn save_mqtt_config(&self, cfg: &sdroxide_types::MqttConfig) -> Result<(), ConfigError> {
+        self.save("mqtt.json", cfg)
+    }
 }
 
 /// One radio in the station (`radios.json`).
@@ -1882,6 +1890,15 @@ pub fn load_wsjtx_config() -> sdroxide_types::WsjtxConfig {
 
 pub fn save_wsjtx_config(cfg: &sdroxide_types::WsjtxConfig) -> Result<(), ConfigError> {
     Store::station().save_wsjtx_config(cfg)
+}
+
+/// MQTT decode-publish config (Settings → Servers). Owned by the engine.
+pub fn load_mqtt_config() -> sdroxide_types::MqttConfig {
+    Store::station().load_mqtt_config()
+}
+
+pub fn save_mqtt_config(cfg: &sdroxide_types::MqttConfig) -> Result<(), ConfigError> {
+    Store::station().save_mqtt_config(cfg)
 }
 
 /// Control-input bindings: keyboard chords, panadapter mouse behaviour and the

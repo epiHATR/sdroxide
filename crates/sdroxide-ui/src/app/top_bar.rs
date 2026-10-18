@@ -5727,7 +5727,8 @@ impl SdroxideApp {
     }
 
     /// The PROF chip: saved station setups behind a popup, like SPEC.
-    /// Lit while any profiles exist, so an empty list is visible from the strip.
+    /// Lit only while the popup is open — same reading as MAIL / MEM on this
+    /// row (open), not "you have profiles saved".
     fn profiles_button(
         &mut self,
         ui: &mut egui::Ui,
@@ -5735,16 +5736,24 @@ impl SdroxideApp {
         label: &str,
         extra: f32,
     ) {
-        let has = !self.profiles.is_empty();
-        let btn = chip_stretched(ui, has, label, extra).on_hover_text(
-            "Profiles — save and apply named setups: dial, mode, and the current \
-             layout (panadapter view + docks). Same list as Settings → Profiles.",
-        );
-        let popup_id = egui::Popup::default_response_id(&btn);
+        // Stable id so we can ask whether the popup is open before painting the
+        // chip (and so a rename of the label does not lose open state).
+        let chip_id = ui.id().with("prof-chip");
+        let popup_id = chip_id.with("popup");
+        let open = egui::Popup::is_id_open(ui.ctx(), popup_id);
+        let btn = ui
+            .push_id(chip_id, |ui| {
+                chip_stretched(ui, open, label, extra).on_hover_text(
+                    "Profiles — save and apply named setups: dial, mode, and the current \
+                     layout (panadapter view + docks). Same list as Settings → Profiles.",
+                )
+            })
+            .inner;
         let now = ui.input(|i| i.time);
         let alpha =
             crate::chrome::popup_fade_alpha(ui.ctx(), popup_id, now, &mut self.prof_popup_since);
         let resp = egui::Popup::from_toggle_button_response(&btn)
+            .id(popup_id)
             .frame(crate::chrome::window_frame_alpha(alpha))
             .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
             .show(|ui| {
