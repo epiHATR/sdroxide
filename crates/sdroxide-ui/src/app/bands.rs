@@ -27,6 +27,14 @@ use sdroxide_types::Band;
 
 use crate::app::SdroxideApp;
 
+/// Which table the BANDS window is showing (issue #699) — same split as the
+/// band/mode menu's Ham | Broadcast chips.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BandsWindowTab {
+    Ham,
+    Broadcast,
+}
+
 /// Column headings and everything the reader is not meant to look at first —
 /// the same grey the propagation chip row uses for its scale caption.
 fn dim_ink() -> Color32 {
@@ -78,8 +86,13 @@ impl SdroxideApp {
             return;
         }
         let mut open = self.show_bands;
-        let size =
-            egui::vec2(crate::layout::window_w(ctx, 520.0), crate::layout::window_h(ctx, 460.0));
+        // Cap at half the viewport so the Ham / Broadcast table does not bury
+        // the waterfall; the body already scrolls.
+        let max_h = (ctx.content_rect().height() * 0.5).max(120.0);
+        let size = egui::vec2(
+            crate::layout::window_w(ctx, 520.0),
+            crate::layout::window_h(ctx, 460.0).min(max_h),
+        );
         let pending = self.system_center_pending.bands;
         let resp = crate::layout::center_on_open(
             egui::Window::new("BANDS")
@@ -88,7 +101,8 @@ impl SdroxideApp {
                 .frame(crate::chrome::window_frame())
                 .resizable(true)
                 .default_width(size.x)
-                .default_height(size.y),
+                .default_height(size.y)
+                .max_height(max_h),
             ctx,
             pending,
             size,
@@ -116,7 +130,29 @@ impl SdroxideApp {
         let field = self.prop.peek();
         let dim = |s: &str| RichText::new(s).size(9.5).color(dim_ink());
 
+        // Ham vs broadcast metre bands (issue #699) — same Ham | Broadcast
+        // split as the band/mode menu, so the table does not mix two services.
+        let tab_id = ui.id().with("bands-window-tab");
+        let band_id = ui.id().with("bands-window-tab-band");
+        let from_band = if self.state.band.is_broadcast() {
+            BandsWindowTab::Broadcast
+        } else {
+            BandsWindowTab::Ham
+        };
+        let band_changed = ui.data(|d| d.get_temp::<Band>(band_id)) != Some(self.state.band);
+        let mut tab = if band_changed {
+            from_band
+        } else {
+            ui.data(|d| d.get_temp::<BandsWindowTab>(tab_id)).unwrap_or(from_band)
+        };
         ui.horizontal(|ui| {
+            if crate::chrome::chip(ui, tab == BandsWindowTab::Ham, "Ham").clicked() {
+                tab = BandsWindowTab::Ham;
+            }
+            if crate::chrome::chip(ui, tab == BandsWindowTab::Broadcast, "Broadcast").clicked() {
+                tab = BandsWindowTab::Broadcast;
+            }
+            ui.add_space(8.0);
             ui.label(
                 RichText::new(if self.daylight { "☀ DAYLIGHT" } else { "☾ NIGHT" })
                     .size(10.0)
@@ -131,6 +167,10 @@ impl SdroxideApp {
                 }
             }
         });
+        ui.data_mut(|d| {
+            d.insert_temp(tab_id, tab);
+            d.insert_temp(band_id, self.state.band);
+        });
         ui.add_space(4.0);
 
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
@@ -141,7 +181,11 @@ impl SdroxideApp {
             ui.set_min_width(ui.available_width());
             let col_w =
                 ((ui.available_width() - COL_GAP * (COLS as f32 - 1.0)) / COLS as f32).max(48.0);
-            egui::Grid::new("bands_grid")
+            let grid_id = match tab {
+                BandsWindowTab::Ham => "bands_grid_ham",
+                BandsWindowTab::Broadcast => "bands_grid_bc",
+            };
+            egui::Grid::new(grid_id)
                 .num_columns(COLS)
                 .spacing([COL_GAP, 3.0])
                 .min_col_width(col_w)
@@ -154,63 +198,27 @@ impl SdroxideApp {
                     ui.label(dim("BEST"));
                     ui.end_row();
 
-                    for b in Band::ALL {
-                        if b == Band::Gen {
-                            continue;
-                        }
-                        ui.label(RichText::new(b.label()).size(11.0).strong());
-
-                        // The forecast. Blank where none is published — see the
-                        // module note; 160 m, 60 m and everything above 10 m
-                        // live here permanently.
-                        match self
-                            .band_conditions
-                            .as_ref()
-                            .and_then(|c| c.for_band(b, self.daylight))
-                        {
-                            Some(v) => {
-                                let t = RichText::new(v).size(10.5);
-                                ui.label(match rating_color(BandRating::of(v)) {
-                                    Some(c) => t.color(c),
-                                    None => t,
-                                });
-                            }
-                            None => {
-                                ui.label(dim("—"));
+                    match tab {
+                        BandsWindowTab::Ham => {
+                            for b in Band::ALL {
+                                if b == Band::Gen || b.is_broadcast() {
+                                    continue;
+                                }
+                                self.bands_table_row(ui, &field, b);
                             }
                         }
-
-                        // The evidence.
-                        match field.plane(b).filter(|p| !p.is_empty()) {
-                            Some(p) => {
-                                ui.label(
-                                    RichText::new(format!("{:.0}", p.total_paths())).size(10.5),
-                                );
-                                ui.label(
-                                    RichText::new(format!("{:.0}%", p.reach() * 100.0)).size(10.5),
-                                );
-                                ui.label(match p.best_margin_db() {
-                                    Some(m) => RichText::new(format!("{m:+.0} dB")).size(10.5),
-                                    // Paths but no reports: a plane built from
-                                    // logged contacts alone. An RST is not an
-                                    // SNR, so there is no number to print.
-                                    None => dim("—"),
-                                });
-                            }
-                            None => {
-                                // Not "closed": nothing was heard, and nobody
-                                // may have been transmitting. The two look
-                                // identical from here and must not be conflated.
-                                ui.label(dim("—"));
-                                ui.label(dim("—"));
-                                ui.label(dim("—"));
+                        BandsWindowTab::Broadcast => {
+                            for b in Band::BROADCAST {
+                                self.bands_table_row(ui, &field, b);
                             }
                         }
-                        ui.end_row();
                     }
                 });
-            self.ibp_section(ui);
-            self.meteor_section(ui);
+            // IBP and meteor showers are amateur-band tools; keep them on Ham.
+            if tab == BandsWindowTab::Ham {
+                self.ibp_section(ui);
+                self.meteor_section(ui);
+            }
         });
 
         ui.add_space(6.0);
@@ -220,6 +228,56 @@ impl SdroxideApp {
                  shut, or only that nobody was on it.")
             .italics(),
         );
+    }
+
+    /// One data row of the BANDS table.
+    fn bands_table_row(
+        &self,
+        ui: &mut egui::Ui,
+        field: &sdroxide_types::PropField,
+        b: Band,
+    ) {
+        let dim = |s: &str| RichText::new(s).size(9.5).color(dim_ink());
+        ui.label(RichText::new(b.label()).size(11.0).strong());
+
+        // The forecast. Blank where none is published — see the module note;
+        // 160 m, 60 m and everything above 10 m live here permanently.
+        // Broadcast metre bands have no HAMQSL verdict either.
+        match self.band_conditions.as_ref().and_then(|c| c.for_band(b, self.daylight)) {
+            Some(v) => {
+                let t = RichText::new(v).size(10.5);
+                ui.label(match rating_color(BandRating::of(v)) {
+                    Some(c) => t.color(c),
+                    None => t,
+                });
+            }
+            None => {
+                ui.label(dim("—"));
+            }
+        }
+
+        // The evidence.
+        match field.plane(b).filter(|p| !p.is_empty()) {
+            Some(p) => {
+                ui.label(RichText::new(format!("{:.0}", p.total_paths())).size(10.5));
+                ui.label(RichText::new(format!("{:.0}%", p.reach() * 100.0)).size(10.5));
+                ui.label(match p.best_margin_db() {
+                    Some(m) => RichText::new(format!("{m:+.0} dB")).size(10.5),
+                    // Paths but no reports: a plane built from logged contacts
+                    // alone. An RST is not an SNR, so there is no number to print.
+                    None => dim("—"),
+                });
+            }
+            None => {
+                // Not "closed": nothing was heard, and nobody may have been
+                // transmitting. The two look identical from here and must not
+                // be conflated.
+                ui.label(dim("—"));
+                ui.label(dim("—"));
+                ui.label(dim("—"));
+            }
+        }
+        ui.end_row();
     }
 
     /// The IBP beacon list at the foot of the BANDS window.

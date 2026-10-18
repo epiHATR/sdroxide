@@ -236,6 +236,21 @@ pub fn band_color(band: sdroxide_types::Band) -> [u8; 3] {
         Band::Cm9 => [160, 220, 172],  // pale green
         Band::Cm6 => [150, 204, 236],  // pale sky
         Band::Cm3 => [166, 178, 240],  // pale blue
+        // Broadcast metre bands: a warm brown shared with the waterfall's
+        // Broadcast strip colour — not in the amateur hue run (issue #699).
+        Band::Bc120
+        | Band::Bc90
+        | Band::Bc75
+        | Band::Bc60
+        | Band::Bc49
+        | Band::Bc41
+        | Band::Bc31
+        | Band::Bc25
+        | Band::Bc22
+        | Band::Bc19
+        | Band::Bc16
+        | Band::Bc13
+        | Band::Bc11 => [180, 120, 60],
         // Not a band: nothing is ever binned here.
         Band::Gen => [128, 128, 128],
     }
@@ -313,7 +328,10 @@ mod prop_tests {
         use sdroxide_types::Band;
         let mut seen: Vec<[u8; 3]> = Vec::new();
         for b in Band::ALL {
-            if b == Band::Gen {
+            // GEN has no hue; broadcast metre bands share one brown — they are
+            // not propagation-map planes and are not mixed on one cell
+            // (issue #699).
+            if b == Band::Gen || b.is_broadcast() {
                 continue;
             }
             let c = band_color(b);

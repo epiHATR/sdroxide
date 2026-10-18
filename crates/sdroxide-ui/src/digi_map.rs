@@ -295,11 +295,11 @@ impl DigiStations {
                 (s.grid.as_deref(), Some(s.call.as_str()))
             };
             let Some(grid) = grid.filter(|g| !g.is_empty()) else { continue };
-            // `Gen` means the frequency fell outside every band in the
-            // station's region, which is not a hue — a WSPRnet report from
-            // another region can land there.
+            // `Gen` / broadcast metre bands are not a hue — a WSPRnet report
+            // from another region, or an SWL frequency, can land there
+            // (issue #699).
             let band = Some(sdroxide_types::Band::containing(s.freq_hz))
-                .filter(|b| *b != sdroxide_types::Band::Gen);
+                .filter(|b| *b != sdroxide_types::Band::Gen && !b.is_broadcast());
             self.note(call, grid, band, Some(s.snr_db), s.slot_utc, now_t, now_utc, &mut fresh);
         }
         self.retire(fresh, now_t, cutoff(now_utc));
@@ -613,11 +613,12 @@ mod tests {
         assert_eq!(d.stations(0.0)[0].band, None);
     }
 
-    /// A WSPRnet report can name a frequency in no band this station's region
-    /// has. `Gen` is not a colour, so nothing is claimed for it.
+    /// A WSPRnet report can name a frequency in no amateur band this station's
+    /// region has. Broadcast / `Gen` are not a colour, so nothing is claimed.
     #[test]
     fn a_frequency_in_no_band_gets_no_colour() {
         let mut s = DigiStations::default();
+        // 9.5 MHz is 31 m broadcast — selectable as Bc31, but not a digi hue.
         s.observe_wspr(&[WsprSpot { freq_hz: 9_500_000.0, ..wspr("FN42", 0) }], 0.0, NOW);
         assert_eq!(s.stations(0.0)[0].band, None);
     }

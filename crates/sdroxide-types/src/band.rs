@@ -79,10 +79,28 @@ pub enum Band {
     /// Appended for the reason [`Band::M70`] gives; [`Band::ALL`] puts it
     /// between 12 m and 10 m, where the frequencies are.
     M11,
+    /// Shortwave broadcast metre bands (issue #699). Same pattern as
+    /// [`Band::M11`]: on the bar for listening, [`Band::is_amateur`] is false
+    /// so the default transmit lockout holds. Appended for postcard wire
+    /// order; [`Band::ALL`] / [`Band::BROADCAST`] put them in frequency order
+    /// ahead of [`Band::Gen`].
+    Bc120,
+    Bc90,
+    Bc75,
+    Bc60,
+    Bc49,
+    Bc41,
+    Bc31,
+    Bc25,
+    Bc22,
+    Bc19,
+    Bc16,
+    Bc13,
+    Bc11,
 }
 
 impl Band {
-    pub const ALL: [Band; 23] = [
+    pub const ALL: [Band; 36] = [
         Band::M160,
         Band::M80,
         Band::M60,
@@ -105,7 +123,41 @@ impl Band {
         Band::Cm9,
         Band::Cm6,
         Band::Cm3,
+        // Broadcast metre bands after the amateur (+ CB) chips so
+        // `containing` still prefers a ham allocation on any overlap, then
+        // GEN last.
+        Band::Bc120,
+        Band::Bc90,
+        Band::Bc75,
+        Band::Bc60,
+        Band::Bc49,
+        Band::Bc41,
+        Band::Bc31,
+        Band::Bc25,
+        Band::Bc22,
+        Band::Bc19,
+        Band::Bc16,
+        Band::Bc13,
+        Band::Bc11,
         Band::Gen,
+    ];
+
+    /// ITU shortwave broadcast metre bands, in frequency order — the chips
+    /// under the band menu's Broadcast caption (issue #699).
+    pub const BROADCAST: [Band; 13] = [
+        Band::Bc120,
+        Band::Bc90,
+        Band::Bc75,
+        Band::Bc60,
+        Band::Bc49,
+        Band::Bc41,
+        Band::Bc31,
+        Band::Bc25,
+        Band::Bc22,
+        Band::Bc19,
+        Band::Bc16,
+        Band::Bc13,
+        Band::Bc11,
     ];
 
     /// This band's place in [`Band::ALL`] — the order the bands are shown in,
@@ -128,7 +180,7 @@ impl Band {
     ///
     /// Append-only, forever. A new band goes on the end here and wherever it
     /// belongs in [`Band::ALL`]; the two lists are deliberately different.
-    const DECLARED: [Band; 23] = [
+    const DECLARED: [Band; 36] = [
         Band::M160,
         Band::M80,
         Band::M60,
@@ -152,6 +204,19 @@ impl Band {
         Band::Cm6,
         Band::Cm3,
         Band::M11,
+        Band::Bc120,
+        Band::Bc90,
+        Band::Bc75,
+        Band::Bc60,
+        Band::Bc49,
+        Band::Bc41,
+        Band::Bc31,
+        Band::Bc25,
+        Band::Bc22,
+        Band::Bc19,
+        Band::Bc16,
+        Band::Bc13,
+        Band::Bc11,
     ];
 
     /// This band's position in the *declaration* order, which is append-only
@@ -211,20 +276,53 @@ impl Band {
                 Region::R2 | Region::R3 => "5CM",
             },
             Band::Cm3 => "3CM",
+            Band::Bc120 => "120BC",
+            Band::Bc90 => "90BC",
+            Band::Bc75 => "75BC",
+            Band::Bc60 => "60BC",
+            Band::Bc49 => "49BC",
+            Band::Bc41 => "41BC",
+            Band::Bc31 => "31BC",
+            Band::Bc25 => "25BC",
+            Band::Bc22 => "22BC",
+            Band::Bc19 => "19BC",
+            Band::Bc16 => "16BC",
+            Band::Bc13 => "13BC",
+            Band::Bc11 => "11BC",
             Band::Gen => "GEN",
         }
     }
 
     /// Whether this band is an *amateur* allocation.
     ///
-    /// True for every band on the bar but two: [`Band::Gen`], which is the
-    /// absence of a band, and [`Band::M11`], which is the citizens' band — a
-    /// separate radio service that an amateur licence does not grant. The
-    /// transmit lockout asks this rather than comparing against `Gen`, so
-    /// putting a band on the bar so it can be *listened* to does not quietly
-    /// hand out permission to key up on it (issue #396).
+    /// True for every band on the bar but [`Band::Gen`], [`Band::M11`] (CB),
+    /// and the shortwave broadcast metre bands — separate radio services that
+    /// an amateur licence does not grant. The transmit lockout asks this
+    /// rather than comparing against `Gen`, so putting a band on the bar so
+    /// it can be *listened* to does not quietly hand out permission to key up
+    /// on it (issues #396, #699).
     pub fn is_amateur(self) -> bool {
-        !matches!(self, Band::Gen | Band::M11)
+        !matches!(self, Band::Gen | Band::M11) && !self.is_broadcast()
+    }
+
+    /// Whether this is an ITU shortwave broadcast metre band (issue #699).
+    pub fn is_broadcast(self) -> bool {
+        matches!(
+            self,
+            Band::Bc120
+                | Band::Bc90
+                | Band::Bc75
+                | Band::Bc60
+                | Band::Bc49
+                | Band::Bc41
+                | Band::Bc31
+                | Band::Bc25
+                | Band::Bc22
+                | Band::Bc19
+                | Band::Bc16
+                | Band::Bc13
+                | Band::Bc11
+        )
     }
 
     /// Band edges in Hz for the station's configured region (see
@@ -376,6 +474,31 @@ impl Band {
             // stop at 10.45 or carve the middle out, which is what a
             // hand-edited `bandplan.json` is for.
             Band::Cm3 => Some((10_000_000_000.0, 10_500_000_000.0)),
+            // Shortwave broadcast metre bands (ITU / tropical). Not IARU
+            // allocations — see [`Band::is_broadcast`] — but the same tables
+            // the waterfall strips and EiBi filter already use. 75 m and 41 m
+            // are region-dependent so they do not paint across an American
+            // operator's own 80 m / 40 m.
+            Band::Bc120 => Some((2_300_000.0, 2_495_000.0)),
+            Band::Bc90 => Some((3_200_000.0, 3_400_000.0)),
+            Band::Bc75 => match region {
+                Region::R1 => Some((3_950_000.0, 4_000_000.0)),
+                Region::R3 => Some((3_900_000.0, 4_000_000.0)),
+                Region::R2 => None,
+            },
+            Band::Bc60 => Some((4_750_000.0, 5_060_000.0)),
+            Band::Bc49 => Some((5_900_000.0, 6_200_000.0)),
+            Band::Bc41 => {
+                let lo = if region == Region::R2 { 7_300_000.0 } else { 7_200_000.0 };
+                Some((lo, 7_450_000.0))
+            }
+            Band::Bc31 => Some((9_400_000.0, 9_900_000.0)),
+            Band::Bc25 => Some((11_600_000.0, 12_100_000.0)),
+            Band::Bc22 => Some((13_570_000.0, 13_870_000.0)),
+            Band::Bc19 => Some((15_100_000.0, 15_830_000.0)),
+            Band::Bc16 => Some((17_480_000.0, 17_900_000.0)),
+            Band::Bc13 => Some((21_450_000.0, 21_850_000.0)),
+            Band::Bc11 => Some((25_670_000.0, 26_100_000.0)),
             Band::Gen => None,
         }
     }
@@ -445,6 +568,22 @@ impl Band {
             // The 3 cm narrow-band calling frequency, and the same one
             // everywhere: 10368.100 is where a 3 cm contact starts.
             Band::Cm3 => (10_368_100_000.0, Mode::Usb),
+            // Mid-allocation AM for each broadcast metre band. 75 m's default
+            // sits inside both R1 and R3 edges (and is unused in R2, which has
+            // no 75 m BC chip).
+            Band::Bc120 => (2_400_000.0, Mode::Am),
+            Band::Bc90 => (3_300_000.0, Mode::Am),
+            Band::Bc75 => (3_975_000.0, Mode::Am),
+            Band::Bc60 => (4_900_000.0, Mode::Am),
+            Band::Bc49 => (6_050_000.0, Mode::Am),
+            Band::Bc41 => (7_325_000.0, Mode::Am),
+            Band::Bc31 => (9_650_000.0, Mode::Am),
+            Band::Bc25 => (11_850_000.0, Mode::Am),
+            Band::Bc22 => (13_720_000.0, Mode::Am),
+            Band::Bc19 => (15_450_000.0, Mode::Am),
+            Band::Bc16 => (17_690_000.0, Mode::Am),
+            Band::Bc13 => (21_650_000.0, Mode::Am),
+            Band::Bc11 => (25_880_000.0, Mode::Am),
             Band::Gen => (7_200_000.0, Mode::Am),
         }
     }
@@ -491,12 +630,12 @@ mod tests {
         }
         assert!(!Band::M11.is_amateur());
         assert!(!Band::Gen.is_amateur());
-        // ...and it is the only band on the bar that is not, so nothing else
-        // has quietly lost its transmit permission.
+        // ...and nothing else has quietly lost its transmit permission —
+        // broadcast metre bands are the other non-amateur chips (issue #699).
         for b in Band::ALL {
             assert_eq!(
                 b.is_amateur(),
-                !matches!(b, Band::M11 | Band::Gen),
+                !matches!(b, Band::M11 | Band::Gen) && !b.is_broadcast(),
                 "{b:?} is on the wrong side of is_amateur"
             );
         }
@@ -585,16 +724,18 @@ mod tests {
         assert_eq!(Band::containing_in(425_000_000.0, Region::R1), Band::Gen);
         assert_eq!(Band::containing_in(425_000_000.0, Region::R2), Band::M70);
         assert_eq!(Band::containing_in(425_000_000.0, Region::R3), Band::Gen);
-        // 40 m above 7.200 is Region 2's alone.
-        assert_eq!(Band::containing_in(7_250_000.0, Region::R1), Band::Gen);
+        // 40 m above 7.200 is Region 2's alone; elsewhere that slice is 41 m BC.
+        assert_eq!(Band::containing_in(7_250_000.0, Region::R1), Band::Bc41);
         assert_eq!(Band::containing_in(7_250_000.0, Region::R2), Band::M40);
-        assert_eq!(Band::containing_in(7_250_000.0, Region::R3), Band::Gen);
+        assert_eq!(Band::containing_in(7_250_000.0, Region::R3), Band::Bc41);
         // 80 m: Region 2 to 4.000, Region 3 to 3.900, Region 1 to 3.800.
+        // Above Region 1's 80 m and inside 75 m BC in R1/R3; Region 2 keeps 80 m.
         assert_eq!(Band::containing_in(3_850_000.0, Region::R1), Band::Gen);
         assert_eq!(Band::containing_in(3_850_000.0, Region::R2), Band::M80);
         assert_eq!(Band::containing_in(3_850_000.0, Region::R3), Band::M80);
-        assert_eq!(Band::containing_in(3_950_000.0, Region::R3), Band::Gen);
+        assert_eq!(Band::containing_in(3_950_000.0, Region::R3), Band::Bc75);
         assert_eq!(Band::containing_in(3_950_000.0, Region::R2), Band::M80);
+        assert_eq!(Band::containing_in(3_975_000.0, Region::R1), Band::Bc75);
         // 160 m's lower edge.
         assert_eq!(Band::containing_in(1_805_000.0, Region::R1), Band::Gen);
         assert_eq!(Band::containing_in(1_805_000.0, Region::R2), Band::M160);
@@ -682,9 +823,53 @@ mod tests {
             }
             spans.sort_by(|a, b| a.1.0.total_cmp(&b.1.0));
             for w in spans.windows(2) {
-                assert!(w[0].1.1 < w[1].1.0, "{:?} and {:?} overlap in {region:?}", w[0].0, w[1].0);
+                // Touching is fine: `containing` uses a half-open [lo, hi), so
+                // 40 m ending at 7.200 and 41 m BC starting there do not steal
+                // each other's frequencies.
+                assert!(
+                    w[0].1.1 <= w[1].1.0,
+                    "{:?} and {:?} overlap in {region:?}",
+                    w[0].0,
+                    w[1].0
+                );
             }
         }
+    }
+
+    /// Issue #699: shortwave broadcast metre bands are selectable bands —
+    /// listen-only under the default TX lockout — with the same edges the
+    /// waterfall strips already draw.
+    #[test]
+    fn broadcast_metre_bands_are_on_the_bar_but_not_amateur() {
+        assert_eq!(Band::BROADCAST.len(), 13);
+        for b in Band::BROADCAST {
+            assert!(b.is_broadcast(), "{b:?}");
+            assert!(!b.is_amateur(), "{b:?}");
+            assert!(b.index() < Band::Gen.index(), "{b:?} must sit before GEN");
+            let (hz, mode) = b.default_entry();
+            assert_eq!(mode, crate::Mode::Am, "{b:?}");
+            // Default sits inside every region that has the band.
+            for region in Region::ALL {
+                if let Some((lo, hi)) = b.edges_in(region) {
+                    assert!(
+                        (lo..=hi).contains(&hz),
+                        "{b:?} opens on {hz} outside {lo}..{hi} in {region:?}"
+                    );
+                }
+            }
+        }
+        // 75 m BC is absent in Region 2 (that slice is 80 m amateur).
+        assert_eq!(Band::Bc75.edges_in(Region::R2), None);
+        assert_eq!(Band::Bc75.edges_in(Region::R1), Some((3_950_000.0, 4_000_000.0)));
+        assert_eq!(Band::Bc75.edges_in(Region::R3), Some((3_900_000.0, 4_000_000.0)));
+        // 41 m BC starts where 40 m ends.
+        assert_eq!(Band::Bc41.edges_in(Region::R2), Some((7_300_000.0, 7_450_000.0)));
+        assert_eq!(Band::Bc41.edges_in(Region::R1), Some((7_200_000.0, 7_450_000.0)));
+        // 11 m BC is not the citizens' band.
+        assert_eq!(Band::Bc11.edges_in(Region::R1), Some((25_670_000.0, 26_100_000.0)));
+        assert_ne!(Band::Bc11.label(), Band::M11.label());
+        // A known 49 m spot lands on the broadcast chip, not GEN.
+        assert_eq!(Band::containing_in(6_050_000.0, Region::R1), Band::Bc49);
     }
 
     /// A starting frequency outside its own band would drop the operator into

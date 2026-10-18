@@ -77,6 +77,21 @@ fn ham_label(band: Band, region: Region) -> &'static str {
             Region::R2 | Region::R3 => "5cm HAM",
         },
         Band::Cm3 => "3cm HAM",
+        // Named for exhaustiveness; `coarse` / `fine` skip non-amateur bands
+        // and `non_ham` already draws these as Broadcast strips (issue #699).
+        Band::Bc120 => "120m BC",
+        Band::Bc90 => "90m BC",
+        Band::Bc75 => "75m BC",
+        Band::Bc60 => "60m BC",
+        Band::Bc49 => "49m BC",
+        Band::Bc41 => "41m BC",
+        Band::Bc31 => "31m BC",
+        Band::Bc25 => "25m BC",
+        Band::Bc22 => "22m BC",
+        Band::Bc19 => "19m BC",
+        Band::Bc16 => "16m BC",
+        Band::Bc13 => "13m BC",
+        Band::Bc11 => "11m BC",
         Band::Gen => "GEN",
     }
 }
@@ -99,6 +114,9 @@ fn non_ham(region: Region) -> Vec<Seg> {
     let mut v = vec![
         s(0.153 * M, 0.279 * M, "LW AM", Kind::Am),
         s(0.531 * M, 1.602 * M, "MW AM", Kind::Am),
+        // Tropical / ITU broadcast metre bands — same edges as `Band::Bc*`.
+        s(2.300 * M, 2.495 * M, "120m BC", Kind::Broadcast),
+        s(3.200 * M, 3.400 * M, "90m BC", Kind::Broadcast),
         s(4.750 * M, 5.060 * M, "60m BC", Kind::Broadcast),
         s(5.900 * M, 6.200 * M, "49m BC", Kind::Broadcast),
         s(9.400 * M, 9.900 * M, "31m BC", Kind::Broadcast),

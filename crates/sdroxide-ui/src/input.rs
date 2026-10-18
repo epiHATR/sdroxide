@@ -471,7 +471,10 @@ pub(crate) fn apply_action(
 /// onto Region 1's 4 m in the Americas would be stepping out of band.
 fn step_band(cur: sdroxide_types::Band, up: bool) -> Option<sdroxide_types::Band> {
     use sdroxide_types::Band;
-    let ham: Vec<Band> = Band::ALL.iter().copied().filter(|b| b.edges().is_some()).collect();
+    // Amateur (+ CB) chips only — broadcast metre bands have their own menu
+    // row and are not part of the keyboard band cycle (issue #699).
+    let ham: Vec<Band> =
+        Band::ALL.iter().copied().filter(|b| b.edges().is_some() && !b.is_broadcast()).collect();
     let i = ham.iter().position(|b| *b == cur)?;
     let n = ham.len();
     Some(if up { ham[(i + 1) % n] } else { ham[(i + n - 1) % n] })

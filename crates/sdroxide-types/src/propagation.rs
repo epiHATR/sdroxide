@@ -197,7 +197,9 @@ impl PropObservation {
         margin_db: Option<f32>,
     ) -> Option<Self> {
         let band = Band::containing(freq_hz);
-        if band == Band::Gen {
+        // Amateur allocations only — GEN, CB, and shortwave broadcast metre
+        // bands are not propagation-map planes (issue #699).
+        if !band.is_amateur() {
             return None;
         }
         Some(PropObservation {

@@ -378,6 +378,19 @@ const BANDS_ADDED_SINCE_THE_FILE: &[Band] = &[
     Band::Cm6,
     Band::Cm3,
     Band::M11,
+    Band::Bc120,
+    Band::Bc90,
+    Band::Bc75,
+    Band::Bc60,
+    Band::Bc49,
+    Band::Bc41,
+    Band::Bc31,
+    Band::Bc25,
+    Band::Bc22,
+    Band::Bc19,
+    Band::Bc16,
+    Band::Bc13,
+    Band::Bc11,
 ];
 
 impl TryFrom<PlanFile> for BandPlan {
@@ -453,11 +466,15 @@ impl RegionPlan {
         // match, which is a defined answer, and an operator splitting a band
         // into licence classes may well want them to touch. But they are worth
         // saying out loud, because the *other* band then never appears.
+        //
+        // Touching (`hi == next_lo`) is not an overlap: `containing` uses a
+        // half-open [lo, hi), so 40 m ending at 7.200 and 41 m BC starting
+        // there do not share a frequency (issue #699).
         let mut spans: Vec<(Band, (f64, f64))> =
             Band::ALL.iter().zip(edges.iter()).filter_map(|(b, e)| e.map(|e| (*b, e))).collect();
         spans.sort_by(|a, b| a.1.0.total_cmp(&b.1.0));
         for w in spans.windows(2) {
-            if w[0].1.1 >= w[1].1.0 {
+            if w[0].1.1 > w[1].1.0 {
                 problems.push(format!(
                     "region {r}: {} ({}–{} MHz) overlaps {} ({}–{} MHz); a frequency in both \
                      reports as the first.",

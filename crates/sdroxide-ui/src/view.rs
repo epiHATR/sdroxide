@@ -469,11 +469,14 @@ fn prop_band_default() -> u8 {
 }
 
 /// Default for [`Solar3dView::prop_bands`] — every band with a hue, i.e. all of
-/// them except the general-coverage placeholder.
+/// them except general coverage and the shortwave broadcast metre bands
+/// (those are not propagation-map planes — issue #699). Skipped bands also
+/// keep the mask inside a `u32`: broadcast chips sit at indices past 31.
 fn prop_bands_default() -> u32 {
     let mut m = 0u32;
     for (i, b) in sdroxide_types::Band::ALL.iter().enumerate() {
-        if *b != sdroxide_types::Band::Gen {
+        if *b != sdroxide_types::Band::Gen && !b.is_broadcast() {
+            debug_assert!(i < 32, "prop_bands bit {i} does not fit in u32");
             m |= 1 << i;
         }
     }

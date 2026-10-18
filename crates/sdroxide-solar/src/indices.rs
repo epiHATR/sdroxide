@@ -249,8 +249,22 @@ fn band_group(band: sdroxide_types::Band) -> Option<&'static str> {
         // 11 m is inside the range the "12m-10m" verdict covers, but it is not
         // one of the bands that verdict is published *about* — it is not an
         // amateur band at all — and quoting an amateur forecast at it would be
-        // claiming an authority the source does not have.
+        // claiming an authority the source does not have. Same for the
+        // shortwave broadcast metre bands (issue #699).
         | Band::M11
+        | Band::Bc120
+        | Band::Bc90
+        | Band::Bc75
+        | Band::Bc60
+        | Band::Bc49
+        | Band::Bc41
+        | Band::Bc31
+        | Band::Bc25
+        | Band::Bc22
+        | Band::Bc19
+        | Band::Bc16
+        | Band::Bc13
+        | Band::Bc11
         | Band::M6
         | Band::M4
         | Band::M2
