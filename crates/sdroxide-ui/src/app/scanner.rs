@@ -3,7 +3,7 @@
 
 use eframe::egui::{self, RichText};
 use sdroxide_types::{
-    Command, Mode, ScanKind, ScanResume, ScannerConfig, SCAN_STEPS_HZ, SQUELCH_OPEN_DB,
+    Command, Mode, SCAN_STEPS_HZ, SQUELCH_OPEN_DB, ScanKind, ScanResume, ScannerConfig,
 };
 
 use crate::app::SdroxideApp;
@@ -283,11 +283,8 @@ impl SdroxideApp {
                 });
                 for m in listed {
                     let skipped = cfg.skip.contains(&m.id);
-                    let name = if m.name.is_empty() {
-                        format!("#{}", m.id)
-                    } else {
-                        m.name.clone()
-                    };
+                    let name =
+                        if m.name.is_empty() { format!("#{}", m.id) } else { m.name.clone() };
                     let freq_s = format!("{:.4} MHz", m.freq_hz / 1e6);
                     let mode_s = m.mode.label().to_string();
                     let mut skip_clicked = false;
@@ -306,21 +303,15 @@ impl SdroxideApp {
                         });
                         scan_mem_cell(ui, FREQ_W, row_h, |ui| {
                             let t = RichText::new(&freq_s).monospace().size(11.0);
-                            ui.add(
-                                egui::Label::new(if skipped { t.weak() } else { t }).truncate(),
-                            );
+                            ui.add(egui::Label::new(if skipped { t.weak() } else { t }).truncate());
                         });
                         scan_mem_cell(ui, name_w, row_h, |ui| {
                             let t = RichText::new(&name).size(11.0);
-                            ui.add(
-                                egui::Label::new(if skipped { t.weak() } else { t }).truncate(),
-                            );
+                            ui.add(egui::Label::new(if skipped { t.weak() } else { t }).truncate());
                         });
                         scan_mem_cell(ui, MODE_W, row_h, |ui| {
                             let t = RichText::new(&mode_s).monospace().size(11.0);
-                            ui.add(
-                                egui::Label::new(if skipped { t.weak() } else { t }).truncate(),
-                            );
+                            ui.add(egui::Label::new(if skipped { t.weak() } else { t }).truncate());
                         });
                     });
                     if skip_clicked {

@@ -635,9 +635,7 @@ pub(in crate::app) fn settings_mqtt_tab(
             ui.label("Password");
             crate::chrome::field(
                 ui,
-                egui::TextEdit::singleline(&mut cfg.password)
-                    .desired_width(160.0)
-                    .password(true),
+                egui::TextEdit::singleline(&mut cfg.password).desired_width(160.0).password(true),
             );
             ui.end_row();
 

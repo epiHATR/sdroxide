@@ -282,8 +282,7 @@ fn fetch_all(agent: &ureq::Agent, cache: &mut Cache) -> Result<FetchResult, Stri
                     }
                     None => {
                         let merged = serde_json::Value::Array(all);
-                        let text =
-                            serde_json::to_string(&merged).map_err(|e| e.to_string())?;
+                        let text = serde_json::to_string(&merged).map_err(|e| e.to_string())?;
                         return Ok(FetchResult::Body { text, validators: v });
                     }
                 }

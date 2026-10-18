@@ -2642,10 +2642,9 @@ impl SdroxideApp {
                 let link_w = (usable - mode_w - 2.0 * freq_w - 3.0 * LINK_GAP).max(80.0);
                 let row_h = ui.spacing().interact_size.y.max(18.0);
                 ui.set_max_width(usable);
-                egui::Grid::new("sat-links")
-                    .num_columns(4)
-                    .spacing([LINK_GAP, 2.0])
-                    .show(ui, |ui| {
+                egui::Grid::new("sat-links").num_columns(4).spacing([LINK_GAP, 2.0]).show(
+                    ui,
+                    |ui| {
                         for (label, w) in [
                             ("LINK", link_w),
                             ("DOWNLINK (MHz)", freq_w),
@@ -2722,7 +2721,8 @@ impl SdroxideApp {
                             );
                             ui.end_row();
                         }
-                    });
+                    },
+                );
                 let link = &links[win.link_idx];
                 if !link.note.is_empty() {
                     ui.label(dim(&format!("{} — {}", link.label, link.note)));
@@ -2798,8 +2798,7 @@ impl SdroxideApp {
                     .clicked()
                     {
                         if watching_here {
-                            win.confirm_unwatch =
-                                Some((id, list.entries[entry_idx].name.clone()));
+                            win.confirm_unwatch = Some((id, list.entries[entry_idx].name.clone()));
                         } else {
                             self.sat_toggle_watching(id, true, cmds);
                         }

@@ -834,12 +834,7 @@ fn sat_visualize(
     for k in 0..DASHES {
         let t0 = (k as f32 + 0.15) / DASHES as f32;
         let t1 = (k as f32 + 0.85) / DASHES as f32;
-        s.lines.push(seg(
-            feet + (sat_pos - feet) * t0,
-            feet + (sat_pos - feet) * t1,
-            2.2,
-            pink,
-        ));
+        s.lines.push(seg(feet + (sat_pos - feet) * t0, feet + (sat_pos - feet) * t1, 2.2, pink));
     }
 
     s.sprites.push(SpriteInst {
@@ -855,11 +850,7 @@ fn sat_visualize(
         params: [SPRITE_RING, 0.0, 0.0, 0.0],
     });
 
-    let el_txt = if el > 0.0 {
-        format!("{el:.0}° el")
-    } else {
-        format!("▼ {el:.0}°")
-    };
+    let el_txt = if el > 0.0 { format!("{el:.0}° el") } else { format!("▼ {el:.0}°") };
     s.labels.push(Label {
         world: sat_pos.arr(),
         text: format!("{}  {el_txt}", sat.name),
@@ -2469,20 +2460,10 @@ fn qso_intro_arcs(
         let color = ink::GREEN;
         for w in 0..n {
             let mid = (w as f32 + 0.5) / STEPS as f32;
-            s.lines.push(seg(
-                pts[w],
-                pts[w + 1],
-                5.5,
-                lin(color, (0.16 + 0.12 * mid) * fade),
-            ));
+            s.lines.push(seg(pts[w], pts[w + 1], 5.5, lin(color, (0.16 + 0.12 * mid) * fade)));
         }
         for w in 0..n {
-            s.lines.push(seg(
-                pts[w],
-                pts[w + 1],
-                3.2,
-                lin(color, (0.6 + 0.35 * progress) * fade),
-            ));
+            s.lines.push(seg(pts[w], pts[w + 1], 3.2, lin(color, (0.6 + 0.35 * progress) * fade)));
         }
         // Tip glow while the line is still growing.
         if !intro.line_done() {
@@ -2516,18 +2497,8 @@ fn qso_intro_arcs(
                 color: lin(color, 0.4 * fade),
                 params: [SPRITE_RING, 0.0, 0.0, 0.0],
             });
-            if names
-                && let Some(call) = intro.call.as_deref()
-            {
-                station_label(
-                    s,
-                    b,
-                    cam,
-                    dest,
-                    call,
-                    lin_color(color, 0.95 * fade),
-                    RANK_ALWAYS,
-                );
+            if names && let Some(call) = intro.call.as_deref() {
+                station_label(s, b, cam, dest, call, lin_color(color, 0.95 * fade), RANK_ALWAYS);
             }
         }
     }

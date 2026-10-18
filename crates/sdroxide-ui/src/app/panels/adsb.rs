@@ -440,96 +440,94 @@ impl SdroxideApp {
             size,
         )
         .show(ctx, |ui| {
-                crate::chrome::window_body_bg(ui);
-                egui::Grid::new("adsb-cfg").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
-                    ui.label("Drop from map after");
-                    ui.horizontal(|ui| {
-                        ui.add(
-                            egui::DragValue::new(&mut cfg.drop_map_s).range(2..=600).suffix(" s"),
-                        );
-                        ui.label(RichText::new("without a position report").size(9.5).weak());
-                    });
-                    ui.end_row();
-                    ui.label("");
-                    ui.label(
-                        RichText::new(
-                            "Past this the aircraft comes off the map and its row greys. It \
-                             is not faded: a dim square at a stale position is still a claim \
-                             about where an aeroplane is, in the same ink as the true ones.",
-                        )
-                        .size(10.0)
-                        .weak(),
-                    );
-                    ui.end_row();
-
-                    ui.label("Drop from list after");
-                    ui.horizontal(|ui| {
-                        ui.add(
-                            egui::DragValue::new(&mut cfg.drop_list_s)
-                                .range(i64::from(cfg.drop_map_s)..=3600)
-                                .suffix(" s"),
-                        );
-                        ui.label(RichText::new("with nothing heard at all").size(9.5).weak());
-                    });
-                    ui.end_row();
-
-                    ui.label("Trail length");
-                    ui.horizontal(|ui| {
-                        ui.add(
-                            egui::DragValue::new(&mut cfg.history_points)
-                                .range(0..=sdroxide_types::ADSB_TRACK_MAX as u16)
-                                .suffix(" points"),
-                        );
-                        ui.label(RichText::new("history dots behind each target").size(9.5).weak());
-                    });
-                    ui.end_row();
-
-                    ui.label("Speed vector");
-                    ui.horizontal(|ui| {
-                        ui.add(
-                            egui::DragValue::new(&mut cfg.vector_minutes)
-                                .speed(0.1)
-                                .range(0.0..=10.0)
-                                .suffix(" min"),
-                        );
-                        ui.label(
-                            RichText::new("how far ahead the leader line reaches").size(9.5).weak(),
-                        );
-                    });
-                    ui.end_row();
-                    ui.label("");
-                    ui.label(
-                        RichText::new(
-                            "One minute is the usual radar convention: the line is exactly \
-                             as long as the distance the aircraft covers in that time, so \
-                             two equal leaders are two equal speeds at any zoom. Zero \
-                             switches them off.",
-                        )
-                        .size(10.0)
-                        .weak(),
-                    );
-                    ui.end_row();
-
-                    ui.label("Track at most");
-                    ui.add(
-                        egui::DragValue::new(&mut cfg.max_aircraft)
-                            .range(10..=2000)
-                            .suffix(" aircraft"),
-                    );
-                    ui.end_row();
+            crate::chrome::window_body_bg(ui);
+            egui::Grid::new("adsb-cfg").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
+                ui.label("Drop from map after");
+                ui.horizontal(|ui| {
+                    ui.add(egui::DragValue::new(&mut cfg.drop_map_s).range(2..=600).suffix(" s"));
+                    ui.label(RichText::new("without a position report").size(9.5).weak());
                 });
-                ui.separator();
+                ui.end_row();
+                ui.label("");
                 ui.label(
                     RichText::new(
-                        "Aircraft on the ground are placed against the station's own \
-                         position — a surface squitter has no unambiguous decode of its \
-                         own — so fill in My grid in the digimode setup if the airport \
-                         nearby shows nothing.",
+                        "Past this the aircraft comes off the map and its row greys. It \
+                             is not faded: a dim square at a stale position is still a claim \
+                             about where an aeroplane is, in the same ink as the true ones.",
                     )
                     .size(10.0)
                     .weak(),
                 );
+                ui.end_row();
+
+                ui.label("Drop from list after");
+                ui.horizontal(|ui| {
+                    ui.add(
+                        egui::DragValue::new(&mut cfg.drop_list_s)
+                            .range(i64::from(cfg.drop_map_s)..=3600)
+                            .suffix(" s"),
+                    );
+                    ui.label(RichText::new("with nothing heard at all").size(9.5).weak());
+                });
+                ui.end_row();
+
+                ui.label("Trail length");
+                ui.horizontal(|ui| {
+                    ui.add(
+                        egui::DragValue::new(&mut cfg.history_points)
+                            .range(0..=sdroxide_types::ADSB_TRACK_MAX as u16)
+                            .suffix(" points"),
+                    );
+                    ui.label(RichText::new("history dots behind each target").size(9.5).weak());
+                });
+                ui.end_row();
+
+                ui.label("Speed vector");
+                ui.horizontal(|ui| {
+                    ui.add(
+                        egui::DragValue::new(&mut cfg.vector_minutes)
+                            .speed(0.1)
+                            .range(0.0..=10.0)
+                            .suffix(" min"),
+                    );
+                    ui.label(
+                        RichText::new("how far ahead the leader line reaches").size(9.5).weak(),
+                    );
+                });
+                ui.end_row();
+                ui.label("");
+                ui.label(
+                    RichText::new(
+                        "One minute is the usual radar convention: the line is exactly \
+                             as long as the distance the aircraft covers in that time, so \
+                             two equal leaders are two equal speeds at any zoom. Zero \
+                             switches them off.",
+                    )
+                    .size(10.0)
+                    .weak(),
+                );
+                ui.end_row();
+
+                ui.label("Track at most");
+                ui.add(
+                    egui::DragValue::new(&mut cfg.max_aircraft)
+                        .range(10..=2000)
+                        .suffix(" aircraft"),
+                );
+                ui.end_row();
             });
+            ui.separator();
+            ui.label(
+                RichText::new(
+                    "Aircraft on the ground are placed against the station's own \
+                         position — a surface squitter has no unambiguous decode of its \
+                         own — so fill in My grid in the digimode setup if the airport \
+                         nearby shows nothing.",
+                )
+                .size(10.0)
+                .weak(),
+            );
+        });
         if let Some(r) = &resp {
             crate::chrome::paint_window_border(ctx, &r.response);
             self.adsb_setup_center_pending = false;

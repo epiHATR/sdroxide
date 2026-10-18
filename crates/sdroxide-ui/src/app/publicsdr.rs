@@ -388,143 +388,141 @@ impl SdroxideApp {
                 answer = confirm_panel(ui, blurb);
                 ui.add_space(6.0);
             }
-                ui.horizontal(|ui| {
-                    for (i, net) in PublicSdrNetwork::ALL.iter().enumerate() {
-                        if crate::chrome::chip(ui, self.public_sdr_nets_shown[i], net.label())
-                            .clicked()
-                        {
-                            self.public_sdr_nets_shown[i] = !self.public_sdr_nets_shown[i];
-                        }
+            ui.horizontal(|ui| {
+                for (i, net) in PublicSdrNetwork::ALL.iter().enumerate() {
+                    if crate::chrome::chip(ui, self.public_sdr_nets_shown[i], net.label()).clicked()
+                    {
+                        self.public_sdr_nets_shown[i] = !self.public_sdr_nets_shown[i];
                     }
-                    if crate::chrome::chip(ui, self.public_sdr_free_only, "AVAILABLE")
-                        .on_hover_text(
-                            "Hide receivers that are full, and the ones whose operator has \
+                }
+                if crate::chrome::chip(ui, self.public_sdr_free_only, "AVAILABLE")
+                    .on_hover_text(
+                        "Hide receivers that are full, and the ones whose operator has \
                              not opened any channels to apps other than a browser",
-                        )
-                        .clicked()
-                    {
-                        self.public_sdr_free_only = !self.public_sdr_free_only;
-                    }
-                    if crate::chrome::chip(ui, self.public_sdr_in_band, "IN BAND")
-                        .on_hover_text("Only receivers that cover the current dial frequency")
-                        .clicked()
-                    {
-                        self.public_sdr_in_band = !self.public_sdr_in_band;
-                    }
-                    if crate::chrome::chip(ui, self.public_sdr_low_bw, "LOW BW")
-                        .on_hover_text(
-                            "Take a SpyServer in its low-bandwidth shape: a narrow I/Q window \
+                    )
+                    .clicked()
+                {
+                    self.public_sdr_free_only = !self.public_sdr_free_only;
+                }
+                if crate::chrome::chip(ui, self.public_sdr_in_band, "IN BAND")
+                    .on_hover_text("Only receivers that cover the current dial frequency")
+                    .clicked()
+                {
+                    self.public_sdr_in_band = !self.public_sdr_in_band;
+                }
+                if crate::chrome::chip(ui, self.public_sdr_low_bw, "LOW BW")
+                    .on_hover_text(
+                        "Take a SpyServer in its low-bandwidth shape: a narrow I/Q window \
                              that follows the dial plus the server's own band view, instead of \
                              megabits of wideband I/Q. No effect on a KiwiSDR, which has only \
                              the one shape.",
-                        )
+                    )
+                    .clicked()
+                {
+                    self.public_sdr_low_bw = !self.public_sdr_low_bw;
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if crate::chrome::chip(ui, false, "⟳ REFRESH")
+                        .on_hover_text("Fetch both directories again")
                         .clicked()
                     {
-                        self.public_sdr_low_bw = !self.public_sdr_low_bw;
-                    }
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if crate::chrome::chip(ui, false, "⟳ REFRESH")
-                            .on_hover_text("Fetch both directories again")
-                            .clicked()
-                        {
-                            refresh = true;
-                        }
-                    });
-                });
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 5.0;
-                    ui.label(RichText::new("⌕").color(crate::theme::CYAN_DIM()).size(14.0));
-                    crate::chrome::field(
-                        ui,
-                        egui::TextEdit::singleline(&mut self.public_sdr_search)
-                            .desired_width(240.0)
-                            .hint_text("name, place, antenna, band")
-                            .text_color(crate::theme::TEXT_STRONG()),
-                    );
-                    if !self.public_sdr_search.trim().is_empty()
-                        && ui.button("✕").on_hover_text("Clear the search").clicked()
-                    {
-                        self.public_sdr_search.clear();
+                        refresh = true;
                     }
                 });
+            });
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 5.0;
+                ui.label(RichText::new("⌕").color(crate::theme::CYAN_DIM()).size(14.0));
+                crate::chrome::field(
+                    ui,
+                    egui::TextEdit::singleline(&mut self.public_sdr_search)
+                        .desired_width(240.0)
+                        .hint_text("name, place, antenna, band")
+                        .text_color(crate::theme::TEXT_STRONG()),
+                );
+                if !self.public_sdr_search.trim().is_empty()
+                    && ui.button("✕").on_hover_text("Clear the search").clicked()
+                {
+                    self.public_sdr_search.clear();
+                }
+            });
 
-                let Some(dir) = &directory else {
-                    ui.separator();
+            let Some(dir) = &directory else {
+                ui.separator();
+                ui.add_space(8.0);
+                ui.label(
+                    RichText::new(if self.probes_answered {
+                        "Fetching the receiver lists…"
+                    } else {
+                        "The machine this radio is attached to does not answer \
+                             device questions, so it cannot fetch the lists either."
+                    })
+                    .color(crate::theme::gray(140)),
+                );
+                return;
+            };
+
+            // Age and any source that failed, on one line: a directory that
+            // is quietly an hour old looks exactly like a fresh one.
+            ui.horizontal_wrapped(|ui| {
+                let age = if dir.fetched_unix > 0 {
+                    fmt_age(now_unix() - dir.fetched_unix)
+                } else {
+                    "—".to_string()
+                };
+                let per_net = PublicSdrNetwork::ALL
+                    .iter()
+                    .map(|n| format!("{} {}", dir.count(*n), n.label()))
+                    .collect::<Vec<_>>()
+                    .join(" · ");
+                ui.label(
+                    RichText::new(format!(
+                        "{} receivers · {per_net} · fetched {age} ago",
+                        dir.entries.len(),
+                    ))
+                    .size(11.0)
+                    .color(crate::theme::gray(150)),
+                );
+                for note in &dir.notes {
+                    ui.label(RichText::new(note).size(11.0).color(crate::theme::ALERT()));
+                }
+            });
+            ui.separator();
+
+            let rows = self.public_sdr_rows(&dir.entries, dial_hz);
+            if !self.public_sdr_search.trim().is_empty() || rows.len() > MAX_ROWS {
+                let shown = rows.len().min(MAX_ROWS);
+                let (text, colour) = match rows.len() {
+                    0 => ("no match".to_string(), crate::theme::ALERT()),
+                    n if n > MAX_ROWS => (
+                        format!("showing {shown} of {n} — search to narrow it"),
+                        crate::theme::YELLOW(),
+                    ),
+                    n => (format!("{n} match"), crate::theme::YELLOW()),
+                };
+                ui.label(RichText::new(text).color(colour).size(10.0));
+            }
+
+            egui::ScrollArea::vertical().auto_shrink([false, false]).show_themed(ui, |ui| {
+                for (e, _) in rows.iter().take(MAX_ROWS) {
+                    let km = match (my_pos, e.lat, e.lon) {
+                        (Some(me), Some(lat), Some(lon)) => {
+                            Some(sdroxide_types::distance_km(me, (f64::from(lat), f64::from(lon))))
+                        }
+                        _ => None,
+                    };
+                    if let Some(a) = entry_row(ui, e, km) {
+                        picked = Some(((*e).clone(), a));
+                    }
+                }
+                if rows.is_empty() {
                     ui.add_space(8.0);
                     ui.label(
-                        RichText::new(if self.probes_answered {
-                            "Fetching the receiver lists…"
-                        } else {
-                            "The machine this radio is attached to does not answer \
-                             device questions, so it cannot fetch the lists either."
-                        })
-                        .color(crate::theme::gray(140)),
+                        RichText::new("nothing matches — try turning a filter chip back on")
+                            .color(crate::theme::gray(120)),
                     );
-                    return;
-                };
-
-                // Age and any source that failed, on one line: a directory that
-                // is quietly an hour old looks exactly like a fresh one.
-                ui.horizontal_wrapped(|ui| {
-                    let age = if dir.fetched_unix > 0 {
-                        fmt_age(now_unix() - dir.fetched_unix)
-                    } else {
-                        "—".to_string()
-                    };
-                    let per_net = PublicSdrNetwork::ALL
-                        .iter()
-                        .map(|n| format!("{} {}", dir.count(*n), n.label()))
-                        .collect::<Vec<_>>()
-                        .join(" · ");
-                    ui.label(
-                        RichText::new(format!(
-                            "{} receivers · {per_net} · fetched {age} ago",
-                            dir.entries.len(),
-                        ))
-                        .size(11.0)
-                        .color(crate::theme::gray(150)),
-                    );
-                    for note in &dir.notes {
-                        ui.label(RichText::new(note).size(11.0).color(crate::theme::ALERT()));
-                    }
-                });
-                ui.separator();
-
-                let rows = self.public_sdr_rows(&dir.entries, dial_hz);
-                if !self.public_sdr_search.trim().is_empty() || rows.len() > MAX_ROWS {
-                    let shown = rows.len().min(MAX_ROWS);
-                    let (text, colour) = match rows.len() {
-                        0 => ("no match".to_string(), crate::theme::ALERT()),
-                        n if n > MAX_ROWS => (
-                            format!("showing {shown} of {n} — search to narrow it"),
-                            crate::theme::YELLOW(),
-                        ),
-                        n => (format!("{n} match"), crate::theme::YELLOW()),
-                    };
-                    ui.label(RichText::new(text).color(colour).size(10.0));
                 }
-
-                egui::ScrollArea::vertical().auto_shrink([false, false]).show_themed(ui, |ui| {
-                    for (e, _) in rows.iter().take(MAX_ROWS) {
-                        let km = match (my_pos, e.lat, e.lon) {
-                            (Some(me), Some(lat), Some(lon)) => Some(sdroxide_types::distance_km(
-                                me,
-                                (f64::from(lat), f64::from(lon)),
-                            )),
-                            _ => None,
-                        };
-                        if let Some(a) = entry_row(ui, e, km) {
-                            picked = Some(((*e).clone(), a));
-                        }
-                    }
-                    if rows.is_empty() {
-                        ui.add_space(8.0);
-                        ui.label(
-                            RichText::new("nothing matches — try turning a filter chip back on")
-                                .color(crate::theme::gray(120)),
-                        );
-                    }
-                });
+            });
         });
         if let Some(r) = &resp {
             crate::chrome::paint_window_border(ctx, &r.response);

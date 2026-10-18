@@ -553,9 +553,11 @@ impl SolarUi {
         let lat = hit.lat;
         let lon = hit.lon;
         // Already drawing this landing — don't restart mid-grow.
-        if self.qso_intros.iter().any(|i| {
-            !i.expired() && (i.lat - lat).abs() < 1e-4 && (i.lon - lon).abs() < 1e-4
-        }) {
+        if self
+            .qso_intros
+            .iter()
+            .any(|i| !i.expired() && (i.lat - lat).abs() < 1e-4 && (i.lon - lon).abs() < 1e-4)
+        {
             return;
         }
         // Cap so a contest pile-up cannot leave an unbounded draw list.
@@ -587,9 +589,9 @@ impl SolarUi {
     /// True while an intro is still growing toward `ll` — the full DX/preview
     /// arc should wait so the grow animation is not buried under a finished line.
     pub fn intro_growing_to(&self, ll: (f64, f64)) -> bool {
-        self.qso_intros.iter().any(|i| {
-            !i.line_done() && (i.lat - ll.0).abs() < 1e-4 && (i.lon - ll.1).abs() < 1e-4
-        })
+        self.qso_intros
+            .iter()
+            .any(|i| !i.line_done() && (i.lat - ll.0).abs() < 1e-4 && (i.lon - ll.1).abs() < 1e-4)
     }
 
     pub fn focus(&self) -> Focus {

@@ -57,11 +57,8 @@ pub fn frame_home(view: &mut crate::view::Solar3dView, b: &Bodies, qth: (f64, f6
 pub fn home_pose(b: &Bodies, qth: (f64, f64)) -> (Pose, (V3, f32)) {
     let d = b.surface_dir(qth.0, qth.1);
     let (lo, _) = dist_range(b.earth_r);
-    let pose = Pose::new(
-        yaw_of(d),
-        d.z.clamp(-1.0, 1.0).asin().clamp(-PITCH_LIMIT, PITCH_LIMIT),
-        lo,
-    );
+    let pose =
+        Pose::new(yaw_of(d), d.z.clamp(-1.0, 1.0).asin().clamp(-PITCH_LIMIT, PITCH_LIMIT), lo);
     (pose, b.focus(Focus::Earth))
 }
 
@@ -95,10 +92,7 @@ pub fn visualize_pose(
     // Bias the pivot toward the sat so the QTH lands near the frame edge.
     let t = VISUALIZE_PIVOT_SAT;
     let pivot = feet * (1.0 - t) + sat_world * t;
-    let span = (feet - pivot)
-        .len()
-        .max((sat_world - pivot).len())
-        .max(b.earth_r * SAT_MIN_SPAN);
+    let span = (feet - pivot).len().max((sat_world - pivot).len()).max(b.earth_r * SAT_MIN_SPAN);
 
     // Side-on to the locked orbit track (not to the live look angle).
     let az = (track_az_deg as f32).to_radians();
@@ -119,8 +113,7 @@ pub fn visualize_pose(
     let mid = if s.len() > 1e-4 { s.normalize() } else { side.cross(a).normalize() };
     // Same tilt as the lock view, but the stand-off axis is the track normal.
     let dir = mid * QSO_TILT.cos() + side * QSO_TILT.sin();
-    let dist =
-        (span / ((FOV_Y * 0.5).tan() * VISUALIZE_FILL)).max(b.earth_r * VISUALIZE_MIN_DIST);
+    let dist = (span / ((FOV_Y * 0.5).tan() * VISUALIZE_FILL)).max(b.earth_r * VISUALIZE_MIN_DIST);
 
     let pose = Pose::new(
         yaw_of(dir),
@@ -187,11 +180,7 @@ impl ViewFly {
     }
 
     /// Capture the current view as the flight's start.
-    pub fn begin(
-        &mut self,
-        view: &crate::view::Solar3dView,
-        from_focus: (V3, f32),
-    ) {
+    pub fn begin(&mut self, view: &crate::view::Solar3dView, from_focus: (V3, f32)) {
         self.from = Pose::new(view.yaw, view.pitch, view.dist);
         self.from_focus = from_focus;
         self.elapsed = 0.0;

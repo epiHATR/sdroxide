@@ -8,8 +8,8 @@ use eframe::egui::{self, Color32, Pos2, RichText, Sense, Stroke};
 
 use sdroxide_types::Command;
 
-use crate::app::settings::general::device_combo_width;
 use crate::app::SdroxideApp;
+use crate::app::settings::general::device_combo_width;
 use crate::chrome::StyledCombo;
 use crate::theme;
 
@@ -76,14 +76,11 @@ impl SdroxideApp {
 
     fn audio_body(&mut self, ui: &mut egui::Ui, cmds: &mut Vec<Command>) {
         let dim = |s: &str| RichText::new(s).size(10.5).color(theme::CYAN_DIM());
-        let af = dbfs_frac(self.meters.as_ref().map(|m| m.passband_dbfs).unwrap_or(f32::NEG_INFINITY));
+        let af =
+            dbfs_frac(self.meters.as_ref().map(|m| m.passband_dbfs).unwrap_or(f32::NEG_INFINITY));
         let (l, r) = (af, af);
-        let mic = self
-            .meters
-            .as_ref()
-            .and_then(|m| m.tx)
-            .map(|t| t.alc.clamp(0.0, 1.0))
-            .unwrap_or(0.0);
+        let mic =
+            self.meters.as_ref().and_then(|m| m.tx).map(|t| t.alc.clamp(0.0, 1.0)).unwrap_or(0.0);
 
         // One control-column width for every combo and meter so they share an edge.
         let control_w = (ui.available_width() - LABEL_W - 10.0).max(120.0);
@@ -188,10 +185,7 @@ impl SdroxideApp {
                 let paused = self.state.recording_paused;
                 self.sync_rec_clock(recording, paused);
 
-                row_label(
-                    ui,
-                    RichText::new("Recording").size(11.0).strong().color(theme::CYAN()),
-                );
+                row_label(ui, RichText::new("Recording").size(11.0).strong().color(theme::CYAN()));
                 ui.allocate_ui_with_layout(
                     egui::vec2(control_w, ui.spacing().interact_size.y),
                     egui::Layout::left_to_right(egui::Align::Center),
@@ -292,12 +286,8 @@ impl SdroxideApp {
                         // has neither a folder glyph nor a reliable reveal mark.
                         #[cfg(not(target_arch = "wasm32"))]
                         {
-                            let folder = crate::chrome::chip_sized(
-                                ui,
-                                false,
-                                RichText::new(""),
-                                btn,
-                            );
+                            let folder =
+                                crate::chrome::chip_sized(ui, false, RichText::new(""), btn);
                             if ui.is_rect_visible(folder.rect) {
                                 paint_folder_icon(ui, &folder);
                             }
@@ -320,11 +310,7 @@ impl SdroxideApp {
                                     .size(16.0)
                                     .strong()
                                     .color(if recording {
-                                        if paused {
-                                            theme::YELLOW()
-                                        } else {
-                                            theme::ALERT()
-                                        }
+                                        if paused { theme::YELLOW() } else { theme::ALERT() }
                                     } else {
                                         theme::CYAN_DIM()
                                     })
@@ -391,10 +377,8 @@ impl SdroxideApp {
         if paused {
             return frozen;
         }
-        let live = self
-            .audio_rec_since
-            .map(|s| (crate::time::now_unix_f64() - s).max(0.0))
-            .unwrap_or(0.0);
+        let live =
+            self.audio_rec_since.map(|s| (crate::time::now_unix_f64() - s).max(0.0)).unwrap_or(0.0);
         frozen + live
     }
 }
@@ -442,11 +426,7 @@ fn paint_folder_icon(ui: &egui::Ui, resp: &egui::Response) {
         Pos2::new(right, bottom),
         Pos2::new(left, bottom),
     ];
-    ui.painter().add(egui::Shape::convex_polygon(
-        pts.to_vec(),
-        ink,
-        Stroke::NONE,
-    ));
+    ui.painter().add(egui::Shape::convex_polygon(pts.to_vec(), ink, Stroke::NONE));
 }
 
 #[cfg(not(target_arch = "wasm32"))]

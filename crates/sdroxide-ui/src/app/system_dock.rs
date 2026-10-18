@@ -345,8 +345,7 @@ impl SdroxideApp {
             // Full-screen click/drag sink — same pattern as egui::Modal — so
             // pointer events never fall through to Middle widgets underneath.
             let bg_sense = egui::Sense::CLICK | egui::Sense::DRAG;
-            let mut backdrop =
-                ui.new_child(egui::UiBuilder::new().sense(bg_sense).max_rect(rect));
+            let mut backdrop = ui.new_child(egui::UiBuilder::new().sense(bg_sense).max_rect(rect));
             backdrop.set_min_size(rect.size());
             ui.painter().rect_filled(rect, 0.0, egui::Color32::from_black_alpha(100));
             let _ = backdrop.response();

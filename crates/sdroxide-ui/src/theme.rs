@@ -1999,11 +1999,8 @@ pub fn apply_visuals(ctx: &egui::Context) {
         // border painted by `chrome::paint_window_border` already honours
         // NoBorder; this must too or System popups keep a pink outline after
         // the operator turns the accent border off.
-        v.window_stroke = if box_style() == BoxStyle::NoBorder {
-            Stroke::NONE
-        } else {
-            Stroke::new(1.0, p.pink)
-        };
+        v.window_stroke =
+            if box_style() == BoxStyle::NoBorder { Stroke::NONE } else { Stroke::new(1.0, p.pink) };
         v.window_corner_radius = window_corner;
         v.menu_corner_radius = window_corner;
 

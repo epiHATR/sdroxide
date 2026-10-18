@@ -4294,8 +4294,12 @@ impl SdroxideApp {
                          inherit that.",
                     );
                 }
-                match crate::chrome::confirm_modal(ctx, "close-radio-local", &body, "Close this radio")
-                {
+                match crate::chrome::confirm_modal(
+                    ctx,
+                    "close-radio-local",
+                    &body,
+                    "Close this radio",
+                ) {
                     Some(crate::chrome::ConfirmChoice::Confirm) => {
                         requests.push(crate::app::RadioTabRequest::Close(id));
                         self.confirm_close_radio = None;
@@ -4317,53 +4321,58 @@ impl SdroxideApp {
                     RemoveOnStation,
                     Cancel,
                 }
-                let answered = crate::chrome::centered_modal(ctx, "close-radio-station", Answer::Cancel, |ui| {
-                    ui.label(
-                        RichText::new(format!(
-                            "Close {name}? Hang up this tab, or — if the station allows — \
+                let answered = crate::chrome::centered_modal(
+                    ctx,
+                    "close-radio-station",
+                    Answer::Cancel,
+                    |ui| {
+                        ui.label(
+                            RichText::new(format!(
+                                "Close {name}? Hang up this tab, or — if the station allows — \
                              remove the radio on {station} for everyone.",
-                        ))
-                        .size(11.5),
-                    );
-                    ui.add_space(4.0);
-                    let mut out = None;
-                    if crate::chrome::chip(ui, false, "Close this tab")
-                        .on_hover_text(format!("Hang up. The radio stays on {station}."))
-                        .clicked()
-                    {
-                        out = Some(Answer::CloseTab);
-                    }
-                    if removable {
+                            ))
+                            .size(11.5),
+                        );
                         ui.add_space(4.0);
-                        ui.separator();
-                        let mut body = format!(
-                            "Close {name} on {station}? Its configuration stays on that \
+                        let mut out = None;
+                        if crate::chrome::chip(ui, false, "Close this tab")
+                            .on_hover_text(format!("Hang up. The radio stays on {station}."))
+                            .clicked()
+                        {
+                            out = Some(Answer::CloseTab);
+                        }
+                        if removable {
+                            ui.add_space(4.0);
+                            ui.separator();
+                            let mut body = format!(
+                                "Close {name} on {station}? Its configuration stays on that \
                              machine — closing removes it from the roster, not from disk — \
                              so the setup survives. The tab here closes with it, and so \
                              does everyone else's.",
-                        );
-                        if first_of_station {
-                            body.push_str(
-                                " It currently answers at /ws there; another remaining radio \
-                                 will inherit that.",
                             );
+                            if first_of_station {
+                                body.push_str(
+                                    " It currently answers at /ws there; another remaining radio \
+                                 will inherit that.",
+                                );
+                            }
+                            ui.label(RichText::new(body).size(11.5));
+                            if crate::chrome::chip(
+                                ui,
+                                false,
+                                RichText::new(format!("Close it on {station}")).strong(),
+                            )
+                            .clicked()
+                            {
+                                out = Some(Answer::RemoveOnStation);
+                            }
                         }
-                        ui.label(RichText::new(body).size(11.5));
-                        if crate::chrome::chip(
-                            ui,
-                            false,
-                            RichText::new(format!("Close it on {station}")).strong(),
-                        )
-                        .clicked()
-                        {
-                            out = Some(Answer::RemoveOnStation);
+                        if crate::chrome::chip(ui, false, "CANCEL").clicked() {
+                            out = Some(Answer::Cancel);
                         }
-                    }
-                    if crate::chrome::chip(ui, false, "CANCEL").clicked() {
-                        out = Some(Answer::Cancel);
-                    }
-                    out
-                });
+                        out
+                    },
+                );
                 match answered {
                     Some(Answer::CloseTab) => {
                         requests.push(crate::app::RadioTabRequest::Close(id));

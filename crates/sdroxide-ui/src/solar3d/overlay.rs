@@ -1348,12 +1348,7 @@ fn pick_digi(
 }
 
 /// Small tip pinned to a clicked digi marker: call, grid, signal, path.
-fn digi_tip(
-    ui: &egui::Ui,
-    st: &SolarUi,
-    rect: egui::Rect,
-    view_proj: &[[f32; 4]; 4],
-) {
+fn digi_tip(ui: &egui::Ui, st: &SolarUi, rect: egui::Rect, view_proj: &[[f32; 4]; 4]) {
     let Some((tip, world)) = st.digi_tip.as_ref() else { return };
     let Some(anchor) = project(view_proj, rect, *world) else { return };
 
@@ -1531,228 +1526,233 @@ fn pass_window(ui: &egui::Ui, st: &mut SolarUi, data: Option<&SolarData>, sim_no
         let cache = st.sat_passes.as_ref().expect("checked above");
         let sat_name = cache.name.clone();
         egui::Window::new("PASSES")
-        .id(egui::Id::new("solar-passes-v10"))
-        .open(&mut open)
-        .collapsible(false)
-        .resizable(false)
-        .frame(frame)
-        .title_frame(
-            egui::Frame::new()
-                .fill(theme::PANEL())
-                .inner_margin(egui::Margin::symmetric(10, 6)),
-        )
-        .default_pos(ui.max_rect().center() - egui::vec2(win_w * 0.5, 120.0))
-        .default_width(win_w)
-        .min_width(win_w)
-        .max_width(win_w)
-        .max_size([win_w, 10_000.0])
-        .show(ui.ctx(), |ui| {
-            crate::chrome::window_body_bg(ui);
-            let body_w = ui.available_width();
-            ui.set_min_width(body_w);
-            ui.set_max_width(body_w);
-            ui.add(
-                egui::Label::new(
-                    RichText::new(&sat_name).color(theme::TEXT_STRONG()).size(13.0).strong(),
-                )
-                .truncate(),
-            );
-            ui.add(
-                egui::Label::new(
-                    RichText::new(format!(
-                        "from {qth_grid} · elements {} old · SGP4",
-                        timefmt::age(sat.element_age_s(sim_now) as i64)
-                    ))
-                    .color(theme::CYAN_DIM())
-                    .size(10.0),
-                )
-                .wrap(),
-            );
-            ui.add_space(4.0);
+            .id(egui::Id::new("solar-passes-v10"))
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .frame(frame)
+            .title_frame(
+                egui::Frame::new()
+                    .fill(theme::PANEL())
+                    .inner_margin(egui::Margin::symmetric(10, 6)),
+            )
+            .default_pos(ui.max_rect().center() - egui::vec2(win_w * 0.5, 120.0))
+            .default_width(win_w)
+            .min_width(win_w)
+            .max_width(win_w)
+            .max_size([win_w, 10_000.0])
+            .show(ui.ctx(), |ui| {
+                crate::chrome::window_body_bg(ui);
+                let body_w = ui.available_width();
+                ui.set_min_width(body_w);
+                ui.set_max_width(body_w);
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(&sat_name).color(theme::TEXT_STRONG()).size(13.0).strong(),
+                    )
+                    .truncate(),
+                );
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(format!(
+                            "from {qth_grid} · elements {} old · SGP4",
+                            timefmt::age(sat.element_age_s(sim_now) as i64)
+                        ))
+                        .color(theme::CYAN_DIM())
+                        .size(10.0),
+                    )
+                    .wrap(),
+                );
+                ui.add_space(4.0);
 
-            match &cache.result {
-                PassSearch::AlwaysVisible { elevation, azimuth } => {
-                    ui.add(
-                        egui::Label::new(
-                            RichText::new("Geostationary — always above your horizon.")
-                                .color(theme::GREEN())
-                                .size(12.5),
-                        )
-                        .wrap(),
-                    );
-                    ui.add(
-                        egui::Label::new(
-                            RichText::new(format!(
-                                "Point at {azimuth:.0}° ({}), elevation {elevation:.0}°.",
-                                compass(*azimuth)
-                            ))
-                            .color(theme::TEXT()),
-                        )
-                        .wrap(),
-                    );
-                }
-                PassSearch::NeverVisible => {
-                    ui.add(
-                        egui::Label::new(
-                            RichText::new("No passes in the next 48 hours from your QTH.")
-                                .color(theme::YELLOW()),
-                        )
-                        .wrap(),
-                    );
-                }
-                PassSearch::Passes(passes) => {
-                    egui::ScrollArea::horizontal()
-                        .id_salt("solar-pass-grid-scroll")
-                        .max_width(body_w)
-                        .auto_shrink([false, true])
-                        .show(ui, |ui| {
-                            egui::Grid::new("solar-pass-grid")
-                                .num_columns(6)
-                                .spacing([8.0, 3.0])
-                                .show(ui, |ui| {
-                                    for h in ["START", "END", "DUR", "AOS", "LOS", "MAX EL"] {
-                                        ui.label(
-                                            RichText::new(h)
-                                                .color(theme::CYAN_DIM())
-                                                .size(9.5)
-                                                .strong(),
-                                        );
-                                    }
-                                    ui.end_row();
-                                    for p in passes {
-                                        let soon = p.rise_unix as f64 - sim_now;
-                                        // The one happening now, or next, is the
-                                        // one the operator cares about.
-                                        let color = if soon < 0.0 {
-                                            theme::GREEN()
-                                        } else if soon < 3600.0 {
-                                            theme::YELLOW()
-                                        } else {
-                                            theme::TEXT()
-                                        };
-                                        ui.label(
-                                            RichText::new(timefmt::ymd_hm(p.rise_unix))
-                                                .color(color),
-                                        );
-                                        ui.label(RichText::new(hhmm(p.set_unix)).color(color));
-                                        ui.label(
-                                            RichText::new(format!("{} min", p.duration_s() / 60))
-                                                .color(color),
-                                        );
-                                        ui.label(
-                                            RichText::new(format!(
-                                                "{:.0}° {}",
-                                                p.rise_az,
-                                                compass(p.rise_az)
-                                            ))
-                                            .color(color),
-                                        );
-                                        ui.label(
-                                            RichText::new(format!(
-                                                "{:.0}° {}",
-                                                p.set_az,
-                                                compass(p.set_az)
-                                            ))
-                                            .color(color),
-                                        );
-                                        ui.label(
-                                            RichText::new(format!(
-                                                "{:.0}°  {}",
-                                                p.max_el,
-                                                p.quality()
-                                            ))
-                                            .color(match p.max_el {
-                                                e if e >= 30.0 => theme::GREEN(),
-                                                e if e >= 15.0 => theme::TEXT(),
-                                                _ => theme::CYAN_DIM(),
-                                            }),
-                                        );
+                match &cache.result {
+                    PassSearch::AlwaysVisible { elevation, azimuth } => {
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new("Geostationary — always above your horizon.")
+                                    .color(theme::GREEN())
+                                    .size(12.5),
+                            )
+                            .wrap(),
+                        );
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(format!(
+                                    "Point at {azimuth:.0}° ({}), elevation {elevation:.0}°.",
+                                    compass(*azimuth)
+                                ))
+                                .color(theme::TEXT()),
+                            )
+                            .wrap(),
+                        );
+                    }
+                    PassSearch::NeverVisible => {
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new("No passes in the next 48 hours from your QTH.")
+                                    .color(theme::YELLOW()),
+                            )
+                            .wrap(),
+                        );
+                    }
+                    PassSearch::Passes(passes) => {
+                        egui::ScrollArea::horizontal()
+                            .id_salt("solar-pass-grid-scroll")
+                            .max_width(body_w)
+                            .auto_shrink([false, true])
+                            .show(ui, |ui| {
+                                egui::Grid::new("solar-pass-grid")
+                                    .num_columns(6)
+                                    .spacing([8.0, 3.0])
+                                    .show(ui, |ui| {
+                                        for h in ["START", "END", "DUR", "AOS", "LOS", "MAX EL"] {
+                                            ui.label(
+                                                RichText::new(h)
+                                                    .color(theme::CYAN_DIM())
+                                                    .size(9.5)
+                                                    .strong(),
+                                            );
+                                        }
                                         ui.end_row();
-                                    }
-                                });
-                        });
-                    ui.add_space(4.0);
-                    ui.add(
-                        egui::Label::new(
-                            RichText::new("AOS/LOS are azimuths at the horizon. Times are UTC.")
+                                        for p in passes {
+                                            let soon = p.rise_unix as f64 - sim_now;
+                                            // The one happening now, or next, is the
+                                            // one the operator cares about.
+                                            let color = if soon < 0.0 {
+                                                theme::GREEN()
+                                            } else if soon < 3600.0 {
+                                                theme::YELLOW()
+                                            } else {
+                                                theme::TEXT()
+                                            };
+                                            ui.label(
+                                                RichText::new(timefmt::ymd_hm(p.rise_unix))
+                                                    .color(color),
+                                            );
+                                            ui.label(RichText::new(hhmm(p.set_unix)).color(color));
+                                            ui.label(
+                                                RichText::new(format!(
+                                                    "{} min",
+                                                    p.duration_s() / 60
+                                                ))
+                                                .color(color),
+                                            );
+                                            ui.label(
+                                                RichText::new(format!(
+                                                    "{:.0}° {}",
+                                                    p.rise_az,
+                                                    compass(p.rise_az)
+                                                ))
+                                                .color(color),
+                                            );
+                                            ui.label(
+                                                RichText::new(format!(
+                                                    "{:.0}° {}",
+                                                    p.set_az,
+                                                    compass(p.set_az)
+                                                ))
+                                                .color(color),
+                                            );
+                                            ui.label(
+                                                RichText::new(format!(
+                                                    "{:.0}°  {}",
+                                                    p.max_el,
+                                                    p.quality()
+                                                ))
+                                                .color(match p.max_el {
+                                                    e if e >= 30.0 => theme::GREEN(),
+                                                    e if e >= 15.0 => theme::TEXT(),
+                                                    _ => theme::CYAN_DIM(),
+                                                }),
+                                            );
+                                            ui.end_row();
+                                        }
+                                    });
+                            });
+                        ui.add_space(4.0);
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(
+                                    "AOS/LOS are azimuths at the horizon. Times are UTC.",
+                                )
                                 .color(theme::LINE_LIT())
                                 .size(10.0),
-                        )
-                        .wrap(),
-                    );
-                }
-            }
-
-            // LOCK (native) and VISUALIZE (everywhere): one tracks Doppler in
-            // the main window; the other draws a ground dummy + look-angle sky
-            // marker on the globe. Browser tab: no command path, so LOCK stays
-            // off; VISUALIZE is display-only and always available.
-            //
-            // Same pairing as the SAT window's LOCK chip: green fill needs
-            // [`theme::INK_ON_BRIGHT`], not the cyan-chip ink — several themes'
-            // greens wash out dark `INK_ON_CYAN`.
-            ui.add_space(6.0);
-            ui.horizontal(|ui| {
-                #[cfg(not(target_arch = "wasm32"))]
-                {
-                    let locked_here = st.sat_lock == Some(id) || st.lock_requested == Some(id);
-                    if chrome::chip_accent(
-                        ui,
-                        locked_here,
-                        if locked_here {
-                            egui::RichText::new(" ● LOCKED — UNLOCK ").strong()
-                        } else {
-                            egui::RichText::new(" LOCK ON ").strong()
-                        },
-                        theme::GREEN(),
-                        theme::INK_ON_BRIGHT(),
-                    )
-                    .on_hover_text(if locked_here {
-                        "Release the satellite lock"
-                    } else {
-                        "Track this satellite in the main window: Doppler-corrected RX and TX, \
-                         transponder-mapped uplink, rotator steering"
-                    })
-                    .clicked()
-                    {
-                        if locked_here {
-                            st.unlock_requested = true;
-                            st.lock_requested = None;
-                        } else {
-                            st.lock_requested = Some(id);
-                            st.unlock_requested = false;
-                        }
+                            )
+                            .wrap(),
+                        );
                     }
                 }
-                let visualizing = st.visualize_sat == Some(id);
-                let vis_enabled = st.qth.is_some();
-                let vis_label = if visualizing { " ● VISUALIZE " } else { " VISUALIZE " };
-                if chrome::chip_enabled(ui, vis_enabled, visualizing, vis_label)
-                    .on_hover_text(if !vis_enabled {
-                        "Set a grid locator in station settings first"
-                    } else if visualizing {
-                        "Stop the ground-dummy / look-angle view and return to your QTH"
-                    } else {
-                        "Side view at your QTH, locked 90° to this sat's orbit \
+
+                // LOCK (native) and VISUALIZE (everywhere): one tracks Doppler in
+                // the main window; the other draws a ground dummy + look-angle sky
+                // marker on the globe. Browser tab: no command path, so LOCK stays
+                // off; VISUALIZE is display-only and always available.
+                //
+                // Same pairing as the SAT window's LOCK chip: green fill needs
+                // [`theme::INK_ON_BRIGHT`], not the cyan-chip ink — several themes'
+                // greens wash out dark `INK_ON_CYAN`.
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    {
+                        let locked_here = st.sat_lock == Some(id) || st.lock_requested == Some(id);
+                        if chrome::chip_accent(
+                            ui,
+                            locked_here,
+                            if locked_here {
+                                egui::RichText::new(" ● LOCKED — UNLOCK ").strong()
+                            } else {
+                                egui::RichText::new(" LOCK ON ").strong()
+                            },
+                            theme::GREEN(),
+                            theme::INK_ON_BRIGHT(),
+                        )
+                        .on_hover_text(if locked_here {
+                            "Release the satellite lock"
+                        } else {
+                            "Track this satellite in the main window: Doppler-corrected RX and TX, \
+                         transponder-mapped uplink, rotator steering"
+                        })
+                        .clicked()
+                        {
+                            if locked_here {
+                                st.unlock_requested = true;
+                                st.lock_requested = None;
+                            } else {
+                                st.lock_requested = Some(id);
+                                st.unlock_requested = false;
+                            }
+                        }
+                    }
+                    let visualizing = st.visualize_sat == Some(id);
+                    let vis_enabled = st.qth.is_some();
+                    let vis_label = if visualizing { " ● VISUALIZE " } else { " VISUALIZE " };
+                    if chrome::chip_enabled(ui, vis_enabled, visualizing, vis_label)
+                        .on_hover_text(if !vis_enabled {
+                            "Set a grid locator in station settings first"
+                        } else if visualizing {
+                            "Stop the ground-dummy / look-angle view and return to your QTH"
+                        } else {
+                            "Side view at your QTH, locked 90° to this sat's orbit \
                          path. Ground and station stay fixed; the sat moves. \
                          Stays on after this window closes — use ✕ STOP on the \
                          globe to leave it."
-                    })
-                    .clicked()
-                {
-                    if visualizing {
-                        stop_vis = true;
-                    } else {
-                        start_vis = true;
+                        })
+                        .clicked()
+                    {
+                        if visualizing {
+                            stop_vis = true;
+                        } else {
+                            start_vis = true;
+                        }
                     }
-                }
-            });
+                });
 
-            // Operator override → SatNOGS cache → built-in curated table.
-            let mine = st.sat_cfg.freqs_for(id).is_some();
-            let owned = sdroxide_solar::satfreq::for_norad(&st.sat_cfg, id);
-            freq_table(ui, owned.as_ref(), mine, &sat_name, body_w);
-        })
+                // Operator override → SatNOGS cache → built-in curated table.
+                let mine = st.sat_cfg.freqs_for(id).is_some();
+                let owned = sdroxide_solar::satfreq::for_norad(&st.sat_cfg, id);
+                freq_table(ui, owned.as_ref(), mine, &sat_name, body_w);
+            })
     };
     if let Some(r) = &resp {
         chrome::paint_window_border(ui.ctx(), &r.response);
@@ -2984,7 +2984,9 @@ fn visualize_chip(ui: &mut egui::Ui, st: &mut SolarUi, data: Option<&SolarData>,
                         .strong(),
                 );
                 if chrome::chip(ui, true, "✕ STOP")
-                    .on_hover_text("Leave the ground-dummy / look-angle view and return to your QTH")
+                    .on_hover_text(
+                        "Leave the ground-dummy / look-angle view and return to your QTH",
+                    )
                     .clicked()
                 {
                     let sim_now = super::wall_clock_unix() + st.sim_offset_s;
@@ -3057,8 +3059,7 @@ fn apply_framed_camera(
         }
         let frame_az = st.visualize_frame_az.unwrap_or(0.0);
         let sat_world = b.earth
-            + super::math::V3::from_f64(state.dir_ecliptic)
-                * (b.earth_r * state.radii as f32);
+            + super::math::V3::from_f64(state.dir_ecliptic) * (b.earth_r * state.radii as f32);
         Some(super::camera::visualize_pose(&b, qth, frame_az, sat_world))
     } else if let Some(dx) = st.decode_fly {
         // New decode: ease onto that station's QTH. Older intro arcs keep

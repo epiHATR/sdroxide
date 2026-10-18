@@ -1293,13 +1293,7 @@ pub(crate) enum ConfirmCloseRadio {
     Local { id: u32, name: String, first_of_station: bool },
     /// A radio reached over a connection — hang up the tab, and optionally
     /// remove it from the station's roster when that is allowed from here.
-    Station {
-        id: u32,
-        name: String,
-        station: String,
-        first_of_station: bool,
-        removable: bool,
-    },
+    Station { id: u32, name: String, station: String, first_of_station: bool, removable: bool },
 }
 
 /// A radio-management action requested from inside a tab (the settings

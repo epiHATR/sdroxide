@@ -420,120 +420,116 @@ impl SdroxideApp {
             size,
         )
         .show(ctx, |ui| {
-                crate::chrome::window_body_bg(ui);
-                ui.label(RichText::new("Channels").strong());
-                ui.label(
-                    RichText::new(
-                        "Every 25 kHz slot from 136.650 to 136.975 MHz. One downconverter \
+            crate::chrome::window_body_bg(ui);
+            ui.label(RichText::new("Channels").strong());
+            ui.label(
+                RichText::new(
+                    "Every 25 kHz slot from 136.650 to 136.975 MHz. One downconverter \
                          each, all inside the same receiver window. Switching one off saves \
                          a little processor time; it does not make the others any more \
                          sensitive.",
+                )
+                .size(10.0)
+                .weak(),
+            );
+            ui.horizontal_wrapped(|ui| {
+                for (i, &hz) in sdroxide_types::VDL2_CHANNELS_HZ.iter().enumerate() {
+                    let mut on = cfg.channel_enabled(i);
+                    let label = format!("{:.3}", hz / 1e6);
+                    let what = sdroxide_types::VDL2_CHANNEL_LABELS[i];
+                    let tip = if hz == sdroxide_types::VDL2_CSC_HZ {
+                        format!(
+                            "{what} — in use worldwide, and where every link starts. \
+                                 The one to keep if you keep only one."
+                        )
+                    } else {
+                        format!(
+                            "Assigned to an {what}. Which channels carry anything \
+                                 depends on where you are: leave them all on unless you \
+                                 know otherwise."
+                        )
+                    };
+                    if ui.checkbox(&mut on, label).on_hover_text(tip).changed() {
+                        if on {
+                            cfg.channels |= 1 << i;
+                        } else {
+                            cfg.channels &= !(1 << i);
+                        }
+                    }
+                }
+            });
+            ui.add_space(6.0);
+
+            egui::Grid::new("vdl2-cfg").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
+                ui.label("Burst threshold");
+                ui.horizontal(|ui| {
+                    ui.add(egui::DragValue::new(&mut cfg.threshold_db).range(3..=40).suffix(" dB"));
+                    ui.label(
+                        RichText::new("above each channel's own noise floor").size(9.5).weak(),
+                    );
+                });
+                ui.end_row();
+                ui.label("");
+                ui.label(
+                    RichText::new(
+                        "Lower catches weaker transmissions and costs processor time on \
+                             noise; higher misses them. The floor is learned per channel and \
+                             a change here does not throw it away.",
                     )
                     .size(10.0)
                     .weak(),
                 );
-                ui.horizontal_wrapped(|ui| {
-                    for (i, &hz) in sdroxide_types::VDL2_CHANNELS_HZ.iter().enumerate() {
-                        let mut on = cfg.channel_enabled(i);
-                        let label = format!("{:.3}", hz / 1e6);
-                        let what = sdroxide_types::VDL2_CHANNEL_LABELS[i];
-                        let tip = if hz == sdroxide_types::VDL2_CSC_HZ {
-                            format!(
-                                "{what} — in use worldwide, and where every link starts. \
-                                 The one to keep if you keep only one."
-                            )
-                        } else {
-                            format!(
-                                "Assigned to an {what}. Which channels carry anything \
-                                 depends on where you are: leave them all on unless you \
-                                 know otherwise."
-                            )
-                        };
-                        if ui.checkbox(&mut on, label).on_hover_text(tip).changed() {
-                            if on {
-                                cfg.channels |= 1 << i;
-                            } else {
-                                cfg.channels &= !(1 << i);
-                            }
-                        }
-                    }
-                });
-                ui.add_space(6.0);
+                ui.end_row();
 
-                egui::Grid::new("vdl2-cfg").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
-                    ui.label("Burst threshold");
-                    ui.horizontal(|ui| {
-                        ui.add(
-                            egui::DragValue::new(&mut cfg.threshold_db).range(3..=40).suffix(" dB"),
-                        );
-                        ui.label(
-                            RichText::new("above each channel's own noise floor").size(9.5).weak(),
-                        );
-                    });
-                    ui.end_row();
-                    ui.label("");
-                    ui.label(
-                        RichText::new(
-                            "Lower catches weaker transmissions and costs processor time on \
-                             noise; higher misses them. The floor is learned per channel and \
-                             a change here does not throw it away.",
-                        )
-                        .size(10.0)
-                        .weak(),
+                ui.label("Keep in the log");
+                ui.horizontal(|ui| {
+                    ui.add(
+                        egui::DragValue::new(&mut cfg.max_messages)
+                            .range(10..=sdroxide_types::VDL2_MESSAGE_MAX)
+                            .suffix(" messages"),
                     );
-                    ui.end_row();
+                });
+                ui.end_row();
 
-                    ui.label("Keep in the log");
-                    ui.horizontal(|ui| {
-                        ui.add(
-                            egui::DragValue::new(&mut cfg.max_messages)
-                                .range(10..=sdroxide_types::VDL2_MESSAGE_MAX)
-                                .suffix(" messages"),
-                        );
-                    });
-                    ui.end_row();
+                ui.label("Track at most");
+                ui.horizontal(|ui| {
+                    ui.add(
+                        egui::DragValue::new(&mut cfg.max_stations)
+                            .range(10..=sdroxide_types::VDL2_STATION_MAX)
+                            .suffix(" stations"),
+                    );
+                    ui.label(RichText::new("the longest silent go first").size(9.5).weak());
+                });
+                ui.end_row();
 
-                    ui.label("Track at most");
-                    ui.horizontal(|ui| {
-                        ui.add(
-                            egui::DragValue::new(&mut cfg.max_stations)
-                                .range(10..=sdroxide_types::VDL2_STATION_MAX)
-                                .suffix(" stations"),
-                        );
-                        ui.label(RichText::new("the longest silent go first").size(9.5).weak());
-                    });
-                    ui.end_row();
+                ui.label("Forget a station after");
+                ui.horizontal(|ui| {
+                    ui.add(
+                        egui::DragValue::new(&mut cfg.drop_list_s).range(30..=21_600).suffix(" s"),
+                    );
+                    ui.label(RichText::new("with nothing heard from it").size(9.5).weak());
+                });
+                ui.end_row();
 
-                    ui.label("Forget a station after");
-                    ui.horizontal(|ui| {
-                        ui.add(
-                            egui::DragValue::new(&mut cfg.drop_list_s)
-                                .range(30..=21_600)
-                                .suffix(" s"),
-                        );
-                        ui.label(RichText::new("with nothing heard from it").size(9.5).weak());
-                    });
-                    ui.end_row();
-
-                    ui.label("Show unread payloads");
-                    ui.horizontal(|ui| {
-                        ui.checkbox(&mut cfg.show_other, "as hex");
-                    });
-                    ui.end_row();
-                    ui.label("");
-                    ui.label(
-                        RichText::new(
-                            "Frames carrying X.25, CLNP or the datalink applications above \
+                ui.label("Show unread payloads");
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut cfg.show_other, "as hex");
+                });
+                ui.end_row();
+                ui.label("");
+                ui.label(
+                    RichText::new(
+                        "Frames carrying X.25, CLNP or the datalink applications above \
                              them. SDRoxide names them and shows the bytes rather than \
                              reading them, and hiding them would hide how much of the \
                              traffic that is.",
-                        )
-                        .size(10.0)
-                        .weak(),
-                    );
-                    ui.end_row();
-                });
+                    )
+                    .size(10.0)
+                    .weak(),
+                );
+                ui.end_row();
             });
+        });
         if let Some(r) = &resp {
             crate::chrome::paint_window_border(ctx, &r.response);
             self.vdl2_setup_center_pending = false;

@@ -1019,8 +1019,7 @@ impl InputSettings {
     /// Actions whose *shipped* chords changed at this schema. Legacy chords for
     /// the action are dropped and the current defaults are installed, so a
     /// broken default (Shift+bracket) does not linger after the upgrade.
-    const REPLACED: &'static [(u32, Action)] =
-        &[(3, Action::FilterLo), (3, Action::FilterHi)];
+    const REPLACED: &'static [(u32, Action)] = &[(3, Action::FilterLo), (3, Action::FilterHi)];
 
     /// Bring a loaded file up to [`Self::SCHEMA`], reporting whether it had to
     /// be touched — and so whether it is worth writing back. The stamp is
@@ -1292,12 +1291,7 @@ mod tests {
                     50.0,
                 ));
                 // Operator rebound FilterLo onto a letter — that stays.
-                v.push(KeyBinding::continuous(
-                    KeyChord::plain("Z"),
-                    Action::FilterLo,
-                    1.0,
-                    50.0,
-                ));
+                v.push(KeyBinding::continuous(KeyChord::plain("Z"), Action::FilterLo, 1.0, 50.0));
                 v
             },
             schema: 2,

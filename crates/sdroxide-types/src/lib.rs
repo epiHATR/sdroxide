@@ -40,6 +40,7 @@ mod meshtastic;
 mod meters;
 mod mode;
 mod morse_trainer;
+mod mqtt;
 mod netcfg;
 mod pi4;
 mod pictures;
@@ -77,7 +78,6 @@ mod vdl2;
 mod voice;
 mod wefax;
 mod winlink;
-mod mqtt;
 mod wsjtx;
 mod wspr;
 
@@ -192,6 +192,7 @@ pub use meshtastic::{
 pub use meters::{Meters, OVERLOAD_FRACTION, PsMeter, TxMeters, TxTelemetry};
 pub use mode::{AgcMode, Mode, NrEngine, NrLevel, NrStrength, SlotTiming};
 pub use morse_trainer::{ADVANCE_RUN, Answer, KOCH_ORDER, MorseProgress, START_UNLOCKED};
+pub use mqtt::{MqttConfig, MqttTopic};
 pub use netcfg::{
     ClusterConfig, Credentials, FeedConfig, FreeDvReporterConfig, LookupProvider, NetworkConfig,
     PskConfig, RbnConfig, SondeHubConfig, WsprNetConfig,
@@ -311,7 +312,6 @@ pub use winlink::{
     DEFAULT_CMS_ADDRESS, MAIL_PAGE_MAX, MailAttachment, MailDraft, MailEntry, MailFolder,
     MailListing, MailMessage, WinlinkConfig, WinlinkGateway, WinlinkLane, WinlinkStatus,
 };
-pub use mqtt::{MqttConfig, MqttTopic};
 pub use wsjtx::{CwTextConfig, N1mmConfig, WsjtxConfig};
 pub use wspr::{
     BURST_S as WSPR_BURST_S, DEFAULT_TX_HZ as WSPR_DEFAULT_TX_HZ, POWERS_DBM as WSPR_POWERS_DBM,
