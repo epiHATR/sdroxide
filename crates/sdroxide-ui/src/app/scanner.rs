@@ -50,8 +50,10 @@ impl SdroxideApp {
                 .resizable(true)
                 .default_width(size.x)
                 .default_height(size.y)
-                .min_width(crate::layout::window_w(ctx, 320.0))
-                .min_height(crate::layout::window_h(ctx, 320.0)),
+                // Fixed floors — not `window_h` every frame — so shrinking the
+                // main window does not drag this popup's minimum with it.
+                .min_width(320.0)
+                .min_height(280.0),
             ctx,
             pending,
             size,
@@ -236,57 +238,50 @@ impl SdroxideApp {
         // skip, so the filter cannot still be holding it.
         let listed: Vec<&sdroxide_types::MemoryChannel> =
             self.memories.iter().filter(|m| cfg.scans_folder(self.filed_under(m))).collect();
-        // Leave room for the threshold grid and status row under this list so
-        // the table scrolls inside the popup instead of pushing them off-screen
-        // or overflowing its width.
-        let below = 168.0;
-        let list_h = (ui.available_height() - below).max(96.0);
+        // Fixed list viewport — do not size from `available_height`. Until the
+        // Area settles, egui reports the full main-window height there, and a
+        // ScrollArea that claimed it (esp. with auto_shrink off) made this
+        // popup keep resizing with the parent.
+        let list_h = 200.0;
         let row_w = ui.available_width();
         let skip_w = 52.0;
         let freq_w = 128.0;
         let name_w = (row_w - skip_w - freq_w - 16.0).max(48.0);
         let row_h = ui.spacing().interact_size.y;
-        egui::ScrollArea::vertical()
-            .id_salt("scan-mems")
-            .max_height(list_h)
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                egui::Grid::new("scan-mems").num_columns(3).spacing([8.0, 4.0]).show(ui, |ui| {
-                    for m in listed {
-                        let skipped = cfg.skip.contains(&m.id);
-                        if crate::chrome::chip(ui, skipped, "SKIP").clicked() {
-                            if skipped {
-                                cfg.skip.retain(|&id| id != m.id);
-                            } else {
-                                cfg.skip.push(m.id);
-                            }
-                        }
-                        let name = if m.name.is_empty() {
-                            format!("#{}", m.id)
+        egui::ScrollArea::vertical().id_salt("scan-mems").max_height(list_h).show(ui, |ui| {
+            egui::Grid::new("scan-mems").num_columns(3).spacing([8.0, 4.0]).show(ui, |ui| {
+                for m in listed {
+                    let skipped = cfg.skip.contains(&m.id);
+                    if crate::chrome::chip(ui, skipped, "SKIP").clicked() {
+                        if skipped {
+                            cfg.skip.retain(|&id| id != m.id);
                         } else {
-                            m.name.clone()
-                        };
-                        let text = RichText::new(name);
-                        ui.add_sized(
-                            egui::vec2(name_w, row_h),
-                            egui::Label::new(if skipped { text.weak() } else { text }).truncate(),
-                        );
-                        ui.add_sized(
-                            egui::vec2(freq_w, row_h),
-                            egui::Label::new(
-                                RichText::new(format!(
-                                    "{:.4} MHz  {}",
-                                    m.freq_hz / 1e6,
-                                    m.mode.label()
-                                ))
-                                .weak(),
-                            )
-                            .truncate(),
-                        );
-                        ui.end_row();
+                            cfg.skip.push(m.id);
+                        }
                     }
-                });
+                    let name =
+                        if m.name.is_empty() { format!("#{}", m.id) } else { m.name.clone() };
+                    let text = RichText::new(name);
+                    ui.add_sized(
+                        egui::vec2(name_w, row_h),
+                        egui::Label::new(if skipped { text.weak() } else { text }).truncate(),
+                    );
+                    ui.add_sized(
+                        egui::vec2(freq_w, row_h),
+                        egui::Label::new(
+                            RichText::new(format!(
+                                "{:.4} MHz  {}",
+                                m.freq_hz / 1e6,
+                                m.mode.label()
+                            ))
+                            .weak(),
+                        )
+                        .truncate(),
+                    );
+                    ui.end_row();
+                }
             });
+        });
     }
 
     /// The FAST switch: read the channels off the wideband spectrum instead of
