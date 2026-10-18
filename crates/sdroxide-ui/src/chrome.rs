@@ -134,7 +134,7 @@ pub fn paint_window_border(ctx: &egui::Context, resp: &Response) {
 }
 
 /// Multiply a colour's alpha by `a` (for fading chrome in/out).
-fn fade(c: Color32, a: f32) -> Color32 {
+pub fn fade(c: Color32, a: f32) -> Color32 {
     Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), (c.a() as f32 * a.clamp(0.0, 1.0)) as u8)
 }
 
@@ -1361,18 +1361,18 @@ fn paint_tick_box(ui: &Ui, rect: Rect, on: bool, v: &egui::style::WidgetVisuals)
 }
 
 /// The draggable divider between two regions of a panel: allocates the strip,
-/// shows the resize cursor over it, and paints three grip marks so it reads as
-/// something that can be moved. Returns the response for the caller's own drag
-/// arithmetic.
+/// shows the resize cursor over it, and paints a thin centre line plus three
+/// grip dashes so it reads as something that can be moved. Returns the
+/// response for the caller's own drag arithmetic.
 ///
-/// One helper for every splitter in the program because the grip marks are the
-/// only thing that says a divider exists at all — a handle that paints nothing
-/// until the pointer is already on it is a control nobody finds.
+/// One helper for every splitter in the program because the line and dashes are
+/// the only thing that says a divider exists at all — a handle that paints
+/// nothing until the pointer is already on it is a control nobody finds.
 ///
 /// Orientation comes from the shape: a tall, narrow strip divides two columns
-/// (grips stacked down it, horizontal resize cursor); a wide, short one divides
-/// two rows. `bg` fills the strip first, for handles that sit on the page
-/// background rather than inside a panel.
+/// (vertical line + dashes, horizontal resize cursor); a wide, short one
+/// divides two rows. `bg` fills the strip first, for handles that sit on the
+/// page background rather than inside a panel.
 pub fn split_handle(ui: &mut Ui, size: egui::Vec2, bg: Option<Color32>) -> Response {
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click_and_drag());
     // A strip taller than it is wide separates left from right.
@@ -1391,11 +1391,22 @@ pub fn split_handle(ui: &mut Ui, size: egui::Vec2, bg: Option<Color32>) -> Respo
     }
     let col = if hot { theme::CYAN() } else { theme::gray(70) };
     let (cx, cy) = (rect.center().x, rect.center().y);
-    for d in [-16.0f32, 0.0, 16.0] {
+    // Thin faded rule spans the full handle (panel height / width); dashes
+    // stay centred on top as the grab cue.
+    const DASH_OFF: f32 = 16.0;
+    const DASH_HALF: f32 = 6.0;
+    let inset = 1.0;
+    let rule = if columns {
+        [pos2(cx, rect.top() + inset), pos2(cx, rect.bottom() - inset)]
+    } else {
+        [pos2(rect.left() + inset, cy), pos2(rect.right() - inset, cy)]
+    };
+    p.line_segment(rule, Stroke::new(1.0, fade(col, 0.35)));
+    for d in [-DASH_OFF, 0.0, DASH_OFF] {
         let seg = if columns {
-            [pos2(cx, cy + d - 6.0), pos2(cx, cy + d + 6.0)]
+            [pos2(cx, cy + d - DASH_HALF), pos2(cx, cy + d + DASH_HALF)]
         } else {
-            [pos2(cx + d - 6.0, cy), pos2(cx + d + 6.0, cy)]
+            [pos2(cx + d - DASH_HALF, cy), pos2(cx + d + DASH_HALF, cy)]
         };
         p.line_segment(seg, Stroke::new(2.0, col));
     }

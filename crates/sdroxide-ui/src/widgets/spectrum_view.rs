@@ -2216,8 +2216,8 @@ pub fn show_ext(
     }
     draw_scale(&painter, view, &scale_rect);
 
-    // Resize grip: a short centred handle in the scale strip, brightening when
-    // hovered/dragged, so the divider is discoverable.
+    // Resize grip: faded full-width rule plus three centred dashes (same cue
+    // as [`crate::chrome::split_handle`]).
     {
         let cy = scale_rect.top() + 1.5;
         let cx = scale_rect.center().x;
@@ -2226,9 +2226,16 @@ pub fn show_ext(
         } else {
             crate::theme::scope_gray(70)
         };
-        for dx in [-16.0f32, 0.0, 16.0] {
+        const DASH_OFF: f32 = 16.0;
+        const DASH_HALF: f32 = 6.0;
+        let inset = 1.0;
+        painter.line_segment(
+            [pos2(scale_rect.left() + inset, cy), pos2(scale_rect.right() - inset, cy)],
+            Stroke::new(1.0, crate::chrome::fade(col, 0.35)),
+        );
+        for dx in [-DASH_OFF, 0.0, DASH_OFF] {
             painter.line_segment(
-                [pos2(cx + dx - 6.0, cy), pos2(cx + dx + 6.0, cy)],
+                [pos2(cx + dx - DASH_HALF, cy), pos2(cx + dx + DASH_HALF, cy)],
                 Stroke::new(2.0, col),
             );
         }

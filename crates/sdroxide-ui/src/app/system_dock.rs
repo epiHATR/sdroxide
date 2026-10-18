@@ -201,7 +201,7 @@ const SYSTEM_DOCK_MIN_W: f32 = 220.0;
 /// The panadapter / operating column always keeps the other half.
 const SYSTEM_DOCK_MAX_FRACTION: f32 = 0.5;
 /// Width of [`crate::chrome::split_handle`] on the dock's inner edge.
-/// Wider than the digi / JS8 7 pt strips so the three dashes sit clearly in
+/// Wider than the digi / JS8 7 pt strips so the line and dashes sit clearly in
 /// the middle of the gutter instead of hugging the main / dock edges.
 const SYSTEM_DOCK_HANDLE_W: f32 = 14.0;
 /// Header-only height for a collapsed docked overlay (triangle + title + chips).
@@ -683,7 +683,7 @@ impl SdroxideApp {
         let mut layout_col_h = 0.0_f32;
 
         // Handle sits inside the panel on the inner (main-facing) edge — egui's
-        // own Panel resize separator is a plain line, not the three-dash chrome
+        // own Panel resize separator is a plain line, not the split-handle chrome
         // used everywhere else in the app.
         egui::Panel::right(crate::layout::salted_id(ui.ctx(), "system-dock"))
             .resizable(false)
@@ -1002,10 +1002,10 @@ impl SdroxideApp {
                                                     );
                                                     body_rects.insert(kind, rect);
 
-                                                    // Horizontal three-dash grip under
-                                                    // the body. Interactive only when
-                                                    // another expanded item sits below
-                                                    // — then a drag trades height 1:1.
+                                                    // Horizontal split-handle under the
+                                                    // body. Interactive only when another
+                                                    // expanded item sits below — then a
+                                                    // drag trades height 1:1.
                                                     let next = expanded
                                                         .iter()
                                                         .skip_while(|k| **k != kind)

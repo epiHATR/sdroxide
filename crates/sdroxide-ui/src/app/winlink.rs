@@ -250,18 +250,27 @@ impl crate::app::SdroxideApp {
             self.mail.split = MailUi::SPLIT_DEFAULT;
         }
 
-        // A line with a grip in the middle, brighter while it is being used, so
-        // it reads as something to grab rather than as decoration.
+        // Faded full-width rule plus three centred dashes — same cue as
+        // [`crate::chrome::split_handle`].
         let lit = resp.hovered() || resp.dragged();
         let colour = if lit { crate::theme::CYAN() } else { crate::theme::LINE() };
         let y = rect.center().y;
-        ui.painter().hline(rect.x_range(), y, egui::Stroke::new(1.0, colour));
-        let grip = 26.0;
+        let cx = rect.center().x;
+        const DASH_OFF: f32 = 16.0;
+        const DASH_HALF: f32 = 6.0;
+        let inset = 1.0;
         ui.painter().hline(
-            (rect.center().x - grip)..=(rect.center().x + grip),
+            (rect.left() + inset)..=(rect.right() - inset),
             y,
-            egui::Stroke::new(3.0, colour),
+            egui::Stroke::new(1.0, crate::chrome::fade(colour, 0.35)),
         );
+        for d in [-DASH_OFF, 0.0, DASH_OFF] {
+            ui.painter().hline(
+                (cx + d - DASH_HALF)..=(cx + d + DASH_HALF),
+                y,
+                egui::Stroke::new(2.0, colour),
+            );
+        }
     }
 
     fn mail_header(&mut self, ui: &mut egui::Ui, cmds: &mut Vec<Command>) {
