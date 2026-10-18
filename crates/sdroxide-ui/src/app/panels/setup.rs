@@ -64,13 +64,15 @@ impl SdroxideApp {
         let pending = self.digi_setup_center_pending;
         // Stable salt (not the mode title) so raise_floating_system_popups can
         // keep this window above the modal dim across FT8 / Packet / APRS / ….
+        let id = crate::layout::salted_id(ctx, "DigiSetup");
         let resp = crate::layout::center_on_open(
             egui::Window::new(title)
-                .id(crate::layout::salted_id(ctx, "DigiSetup"))
+                .id(id)
                 .open(&mut open)
                 .frame(crate::chrome::window_frame())
                 .resizable(false)
-                .default_width(size.x),
+                .default_width(size.x)
+                .default_height(size.y),
             ctx,
             pending,
             size,
@@ -1003,7 +1005,7 @@ impl SdroxideApp {
         });
         if let Some(r) = &resp {
             crate::chrome::paint_window_border(ctx, &r.response);
-            self.digi_setup_center_pending = false;
+            crate::layout::settle_center_pending(ctx, id, &mut self.digi_setup_center_pending);
         }
         self.show_digi_settings = open;
     }

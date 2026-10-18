@@ -364,19 +364,17 @@ pub fn arm_center_on_open(open: bool, was_open: &mut bool, pending: &mut bool) {
     }
 }
 
-/// Center a System-strip window while `pending` is set; otherwise only supply a
-/// default for egui's first-ever placement.
+/// Center a System-strip / mode SETUP window while `pending` is set; otherwise
+/// only supply a default for egui's first-ever placement.
 ///
-/// Call [`arm_center_on_open`] before this, then clear `pending` when `.show()`
-/// returns `Some` (the window actually drew).
+/// Call [`arm_center_on_open`] before this, then [`settle_center_pending`] after
+/// `.show()` returns `Some`.
 ///
-/// egui 0.36's default [`egui::WindowDrag::OnTouch`] resolves to
-/// [`egui::WindowDrag::TitleBar`] on desktop. In that mode `Window::show`
-/// saves the area's pivot *before* `Area::begin` (where `current_pos` is
-/// applied) and then restores it afterward — so a plain `current_pos` is
-/// silently undone whenever the window already has persisted area state
-/// (every reopen). Switching to [`egui::WindowDrag::Anywhere`] for the
-/// pending frame skips that restore and lets the centered position stick.
+/// Pending opens use [`egui::Window::anchor`] on the viewport centre rather
+/// than a precomputed top-left: many SETUP dialogs only set `default_width`,
+/// so a `current_pos` based on the caller's height estimate sat too high.
+/// [`egui::WindowDrag::Anywhere`] on that frame also skips egui 0.36's
+/// title-bar path that would restore a stale pivot and undo the center.
 pub fn center_on_open<'a>(
     win: egui::Window<'a>,
     ctx: &egui::Context,
@@ -388,9 +386,25 @@ pub fn center_on_open<'a>(
     // Middle panel, so the open System popup stays the only interactive layer.
     let win = win.order(egui::Order::Foreground);
     if pending {
-        win.current_pos(pos).drag_area(egui::WindowDrag::Anywhere)
+        win.anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+            .drag_area(egui::WindowDrag::Anywhere)
     } else {
         win.default_pos(pos)
+    }
+}
+
+/// Clear `pending` only after the window has already been visible for a frame.
+///
+/// The first painted frame is often egui's sizing pass (wrong height). Keeping
+/// the center anchor one more frame lets the real content size decide the
+/// pivot before we stop forcing it.
+pub fn settle_center_pending(ctx: &egui::Context, window_id: egui::Id, pending: &mut bool) {
+    if !*pending {
+        return;
+    }
+    let layer = egui::LayerId::new(egui::Order::Foreground, window_id);
+    if ctx.memory(|m| m.areas().visible_last_frame(&layer)) {
+        *pending = false;
     }
 }
 

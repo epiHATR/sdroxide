@@ -514,7 +514,7 @@ impl SdroxideApp {
         });
         if let Some(r) = &resp {
             crate::chrome::paint_window_border(ctx, &r.response);
-            self.system_center_pending.memories = false;
+            crate::layout::settle_center_pending(ctx, id, &mut self.system_center_pending.memories);
         }
         if resp.as_ref().is_some_and(|r| self.system_title_pin(ctx, &r.response)) {
             self.dock_system(crate::app::SystemDock::Memories);

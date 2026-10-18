@@ -526,7 +526,7 @@ impl SdroxideApp {
         });
         if let Some(r) = &resp {
             crate::chrome::paint_window_border(ctx, &r.response);
-            self.system_center_pending.public_sdrs = false;
+            crate::layout::settle_center_pending(ctx, id, &mut self.system_center_pending.public_sdrs);
         }
         self.show_public_sdrs = open;
 

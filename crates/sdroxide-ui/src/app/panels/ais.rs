@@ -515,13 +515,15 @@ impl SdroxideApp {
         let size =
             egui::vec2(crate::layout::window_w(ctx, 420.0), crate::layout::window_h(ctx, 480.0));
         let pending = self.ais_setup_center_pending;
+        let id = crate::layout::salted_id(ctx, "AisSetup");
         let resp = crate::layout::center_on_open(
             egui::Window::new("AIS Setup")
-                .id(crate::layout::salted_id(ctx, "AisSetup"))
+                .id(id)
                 .open(&mut open)
                 .frame(crate::chrome::window_frame())
                 .resizable(false)
-                .default_width(size.x),
+                .default_width(size.x)
+                .default_height(size.y),
             ctx,
             pending,
             size,
@@ -662,7 +664,7 @@ impl SdroxideApp {
         });
         if let Some(r) = &resp {
             crate::chrome::paint_window_border(ctx, &r.response);
-            self.ais_setup_center_pending = false;
+            crate::layout::settle_center_pending(ctx, id, &mut self.ais_setup_center_pending);
         }
         let cfg = cfg.sane();
         if cfg != self.state.ais {

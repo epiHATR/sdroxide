@@ -3,7 +3,8 @@
 //! Two things an operator watches, so two columns:
 //!
 //! - **MESSAGES** — every AVLC frame decoded, newest at the bottom, with the
-//!   full card for whichever one is selected pinned below the log.
+//!   full card for whichever one is selected pinned below the log behind a
+//!   draggable split (same cue as ADS-B / AIS).
 //! - **STATIONS** — one row per 24-bit address heard, which is who is out there.
 //!
 //! No map, deliberately. VDL2 carries a position only occasionally — a ground
@@ -299,8 +300,17 @@ impl SdroxideApp {
             .collect();
 
         let card = self.vdl2_selected.and_then(|i| log.get(i));
-        let card_h = if card.is_some() { (avail_h * 0.42).clamp(130.0, 260.0) } else { 0.0 };
-        let list_h = (avail_h - card_h - 28.0).max(48.0);
+        // The card takes a draggable share of the column, but only while there
+        // is one: with nothing selected the log has the lot and there is no
+        // divider to grab.
+        const HANDLE_H: f32 = 7.0;
+        let card_h = if card.is_some() {
+            (avail_h * self.view.vdl2_card_fraction).clamp(90.0, (avail_h - 120.0).max(90.0))
+        } else {
+            0.0
+        };
+        let list_h =
+            (avail_h - card_h - 28.0 - if card.is_some() { HANDLE_H } else { 0.0 }).max(48.0);
 
         let mut pick = None;
         egui::ScrollArea::vertical()
@@ -335,7 +345,14 @@ impl SdroxideApp {
         }
 
         if let Some(m) = card {
-            ui.separator();
+            let w = ui.available_width();
+            let h = crate::chrome::split_handle(ui, egui::vec2(w, HANDLE_H), None);
+            if h.dragged() {
+                // Drag up grows the card, which is the half the pointer is
+                // heading for.
+                self.view.vdl2_card_fraction =
+                    ((card_h - h.drag_delta().y) / avail_h.max(1.0)).clamp(0.12, 0.8);
+            }
             vdl2_card(ui, m, card_h);
         }
         self.vdl2_hold = hold;
@@ -408,13 +425,15 @@ impl SdroxideApp {
         let size =
             egui::vec2(crate::layout::window_w(ctx, 420.0), crate::layout::window_h(ctx, 420.0));
         let pending = self.vdl2_setup_center_pending;
+        let id = crate::layout::salted_id(ctx, "Vdl2Setup");
         let resp = crate::layout::center_on_open(
             egui::Window::new("VDL2 Setup")
-                .id(crate::layout::salted_id(ctx, "Vdl2Setup"))
+                .id(id)
                 .open(&mut open)
                 .frame(crate::chrome::window_frame())
                 .resizable(false)
-                .default_width(size.x),
+                .default_width(size.x)
+                .default_height(size.y),
             ctx,
             pending,
             size,
@@ -532,7 +551,7 @@ impl SdroxideApp {
         });
         if let Some(r) = &resp {
             crate::chrome::paint_window_border(ctx, &r.response);
-            self.vdl2_setup_center_pending = false;
+            crate::layout::settle_center_pending(ctx, id, &mut self.vdl2_setup_center_pending);
         }
         let cfg = cfg.sane();
         if cfg != self.state.vdl2 {

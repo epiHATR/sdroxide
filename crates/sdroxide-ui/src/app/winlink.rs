@@ -178,7 +178,7 @@ impl crate::app::SdroxideApp {
         });
         if let Some(r) = &resp {
             crate::chrome::paint_window_border(ctx, &r.response);
-            self.mail.center_pending = false;
+            crate::layout::settle_center_pending(ctx, id, &mut self.mail.center_pending);
         }
         if resp.as_ref().is_some_and(|r| self.system_title_pin(ctx, &r.response)) {
             self.dock_system(crate::app::SystemDock::Mail);

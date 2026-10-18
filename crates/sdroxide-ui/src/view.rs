@@ -206,6 +206,11 @@ pub struct ViewState {
     /// the aircraft map. User-draggable.
     #[serde(default = "hfdl_split_default")]
     pub hfdl_split_fraction: f32,
+    /// Fraction of the VDL2 message column's height given to the selected
+    /// frame's detail card; the rest is the log. User-draggable, and only
+    /// divides anything while a message is selected.
+    #[serde(default = "vdl2_card_default")]
+    pub vdl2_card_fraction: f32,
     /// Fraction of the QSO area's height given to the world map; the rest is the
     /// station card + transcript + buttons. User-draggable.
     ///
@@ -601,6 +606,7 @@ impl Default for ViewState {
             rs41_split_fraction: rs41_split_default(),
             rs41_card_fraction: rs41_card_default(),
             hfdl_split_fraction: hfdl_split_default(),
+            vdl2_card_fraction: vdl2_card_default(),
             digi_map_fraction: 0.6,
             digi_pane: 0,
             sstv_tx_fraction: 0.38,
@@ -830,6 +836,12 @@ fn rs41_card_default() -> f32 {
 /// payload, where the map holds only a square and a flight number per aircraft.
 fn hfdl_split_default() -> f32 {
     0.5
+}
+
+/// Default for [`ViewState::vdl2_card_fraction`]. Matches the share the card
+/// had before the divider was draggable.
+fn vdl2_card_default() -> f32 {
+    0.42
 }
 
 /// Default for [`ViewState::js8_split_fraction`].
