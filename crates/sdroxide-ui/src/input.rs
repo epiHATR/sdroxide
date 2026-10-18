@@ -1165,7 +1165,9 @@ fn load_input_settings(_storage: Option<&dyn eframe::Storage>) -> InputSettings 
 }
 #[cfg(target_arch = "wasm32")]
 fn load_input_settings(storage: Option<&dyn eframe::Storage>) -> InputSettings {
-    storage.and_then(|s| eframe::get_value(s, "input")).unwrap_or_default()
+    crate::app::persist::load_browser_json("input")
+        .or_else(|| storage.and_then(|s| eframe::get_value(s, "input")))
+        .unwrap_or_default()
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1175,8 +1177,8 @@ fn persist_input_settings(cfg: &InputSettings) {
     }
 }
 #[cfg(target_arch = "wasm32")]
-fn persist_input_settings(_cfg: &InputSettings) {
-    // Written by eframe's periodic `save()` into localStorage.
+fn persist_input_settings(cfg: &InputSettings) {
+    crate::app::persist::persist_browser_json("input", cfg);
 }
 
 /// Move `steps` whole steps of `grid` from `hz`, landing on the grid.

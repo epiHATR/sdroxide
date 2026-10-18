@@ -1141,26 +1141,19 @@ impl eframe::App for SdroxideApp {
         // holds its own copy of these, and the last to save would otherwise
         // overwrite the tab the operator actually changed them on.
         if self.station_writer {
-            // On wasm this is the logbook's persistence; on native it's a
-            // harmless backup (the authoritative copy is written to the config
-            // dir on change).
+            // On wasm this backs up what `persist_*` already wrote eagerly to
+            // localStorage; on native it's a harmless mirror of config.toml /
+            // the JSON files written on change.
             eframe::set_value(storage, "qso_log", &self.qso_log);
-            // Same split: authoritative on native is config.toml (written on
-            // change).
             eframe::set_value(storage, "ui_settings", &self.ui_settings);
-            // Control-input bindings: authoritative on native is input.json.
+            eframe::set_value(storage, "speech_settings", self.speech.settings());
+            eframe::set_value(storage, "alerts_settings", &self.alerts.settings());
             eframe::set_value(storage, "input", &self.input.cfg);
-            // The Morse trainer's progress, so it carries to the browser build.
-            // The shared copy, which any tab may have advanced.
             let morse = super::persist::shared_morse_progress()
                 .unwrap_or_else(|| self.morse.progress.clone());
             eframe::set_value(storage, "morse_progress", &morse);
-            // The browser's only copy of the HFDL chips; native keeps them in
-            // hfdl_channels.json, written on change.
             #[cfg(target_arch = "wasm32")]
             eframe::set_value(storage, "hfdl_channels", &self.hfdl_channels);
-            // Profile layouts: native writes profile_layouts.json on change;
-            // the browser's only copy is here.
             #[cfg(target_arch = "wasm32")]
             eframe::set_value(storage, "profile_layouts", &self.profile_layouts);
         }

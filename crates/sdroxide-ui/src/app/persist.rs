@@ -84,24 +84,40 @@ pub(in crate::app) fn persist_remote_seat_eager(radio_id: u32, snap: &RemoteSeat
     let _ = (key, snap);
 }
 
+/// Browser localStorage key prefix. Shared by the remote seat and every
+/// station-wide preference that must survive a hard reload before eframe's
+/// periodic `save()` runs.
 #[cfg(target_arch = "wasm32")]
-fn local_seat_key(key: &str) -> String {
+fn browser_storage_key(key: &str) -> String {
     format!("sdroxide/{key}")
 }
 
+/// Immediate JSON write to `window.localStorage`. Used when a setting changes
+/// on wasm so a reload before the next eframe `save()` still restores it.
 #[cfg(target_arch = "wasm32")]
-fn load_remote_seat_local(key: &str) -> Option<RemoteSeatSnapshot> {
+pub(crate) fn persist_browser_json<T: Serialize>(key: &str, value: &T) {
+    let Ok(raw) = serde_json::to_string(value) else { return };
+    let Some(window) = web_sys::window() else { return };
+    let Ok(Some(storage)) = window.local_storage() else { return };
+    let _ = storage.set_item(&browser_storage_key(key), &raw);
+}
+
+/// Read a JSON value written by [`persist_browser_json`].
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn load_browser_json<T: serde::de::DeserializeOwned>(key: &str) -> Option<T> {
     let storage = web_sys::window()?.local_storage().ok()??;
-    let raw = storage.get_item(&local_seat_key(key)).ok()??;
+    let raw = storage.get_item(&browser_storage_key(key)).ok()??;
     serde_json::from_str(&raw).ok()
 }
 
 #[cfg(target_arch = "wasm32")]
+fn load_remote_seat_local(key: &str) -> Option<RemoteSeatSnapshot> {
+    load_browser_json(key)
+}
+
+#[cfg(target_arch = "wasm32")]
 fn persist_remote_seat_local(key: &str, snap: &RemoteSeatSnapshot) {
-    let Ok(raw) = serde_json::to_string(snap) else { return };
-    let Some(window) = web_sys::window() else { return };
-    let Ok(Some(storage)) = window.local_storage() else { return };
-    let _ = storage.set_item(&local_seat_key(key), &raw);
+    persist_browser_json(key, snap);
 }
 
 #[cfg(test)]
@@ -235,7 +251,9 @@ pub(in crate::app) fn load_profile_layouts(
 pub(in crate::app) fn load_profile_layouts(
     storage: Option<&dyn eframe::Storage>,
 ) -> ProfileLayouts {
-    storage.and_then(|s| eframe::get_value(s, "profile_layouts")).unwrap_or_default()
+    load_browser_json("profile_layouts")
+        .or_else(|| storage.and_then(|s| eframe::get_value(s, "profile_layouts")))
+        .unwrap_or_default()
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -249,8 +267,8 @@ pub(in crate::app) fn persist_profile_layouts(map: &ProfileLayouts) {
 }
 
 #[cfg(target_arch = "wasm32")]
-pub(in crate::app) fn persist_profile_layouts(_map: &ProfileLayouts) {
-    // Written by eframe's periodic `save()` into localStorage.
+pub(in crate::app) fn persist_profile_layouts(map: &ProfileLayouts) {
+    persist_browser_json("profile_layouts", map);
 }
 
 // ── Logbook persistence (native: config-dir JSON; wasm: eframe storage) ──────
@@ -261,7 +279,9 @@ pub(in crate::app) fn load_qso_log(_storage: Option<&dyn eframe::Storage>) -> Ve
 
 #[cfg(target_arch = "wasm32")]
 pub(in crate::app) fn load_qso_log(storage: Option<&dyn eframe::Storage>) -> Vec<QsoRecord> {
-    storage.and_then(|s| eframe::get_value(s, "qso_log")).unwrap_or_default()
+    load_browser_json("qso_log")
+        .or_else(|| storage.and_then(|s| eframe::get_value(s, "qso_log")))
+        .unwrap_or_default()
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -272,11 +292,11 @@ pub(in crate::app) fn persist_qso_log(log: &[QsoRecord]) {
 }
 
 #[cfg(target_arch = "wasm32")]
-pub(in crate::app) fn persist_qso_log(_log: &[QsoRecord]) {
-    // Written by eframe's periodic `save()` into localStorage.
+pub(in crate::app) fn persist_qso_log(log: &[QsoRecord]) {
+    persist_browser_json("qso_log", &log.to_vec());
 }
 
-// ── UI/display preferences (native: config.toml [ui]; wasm: eframe storage) ──
+// ── UI/display preferences (native: config.toml [ui]; wasm: localStorage) ──
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn load_ui_settings(
     _storage: Option<&dyn eframe::Storage>,
@@ -288,7 +308,11 @@ pub(crate) fn load_ui_settings(
 pub(crate) fn load_ui_settings(
     storage: Option<&dyn eframe::Storage>,
 ) -> sdroxide_types::UiSettings {
-    storage.and_then(|s| eframe::get_value(s, "ui_settings")).unwrap_or_default()
+    // Eager localStorage wins over eframe's periodic dump — a theme change
+    // must survive a hard reload before the next `App::save`.
+    load_browser_json("ui_settings")
+        .or_else(|| storage.and_then(|s| eframe::get_value(s, "ui_settings")))
+        .unwrap_or_default()
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -299,8 +323,8 @@ pub(in crate::app) fn persist_ui_settings(ui: &sdroxide_types::UiSettings) {
 }
 
 #[cfg(target_arch = "wasm32")]
-pub(in crate::app) fn persist_ui_settings(_ui: &sdroxide_types::UiSettings) {
-    // Written by eframe's periodic `save()` into localStorage.
+pub(in crate::app) fn persist_ui_settings(ui: &sdroxide_types::UiSettings) {
+    persist_browser_json("ui_settings", ui);
 }
 
 // ── Spoken announcements (native: config.toml [speech]) ─────────────────────
@@ -321,7 +345,9 @@ pub(in crate::app) fn load_speech_settings(
 pub(in crate::app) fn load_speech_settings(
     storage: Option<&dyn eframe::Storage>,
 ) -> sdroxide_types::SpeechSettings {
-    storage.and_then(|s| eframe::get_value(s, "speech_settings")).unwrap_or_default()
+    load_browser_json("speech_settings")
+        .or_else(|| storage.and_then(|s| eframe::get_value(s, "speech_settings")))
+        .unwrap_or_default()
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -332,8 +358,8 @@ pub(in crate::app) fn persist_speech_settings(cfg: &sdroxide_types::SpeechSettin
 }
 
 #[cfg(target_arch = "wasm32")]
-pub(in crate::app) fn persist_speech_settings(_cfg: &sdroxide_types::SpeechSettings) {
-    // Written by eframe's periodic `save()` into localStorage.
+pub(in crate::app) fn persist_speech_settings(cfg: &sdroxide_types::SpeechSettings) {
+    persist_browser_json("speech_settings", cfg);
 }
 
 // ── Audible alerts (native: config.toml [alerts]) ────────────────────────────
@@ -354,7 +380,9 @@ pub(in crate::app) fn load_alerts_settings(
 pub(in crate::app) fn load_alerts_settings(
     storage: Option<&dyn eframe::Storage>,
 ) -> sdroxide_types::AlertSettings {
-    storage.and_then(|s| eframe::get_value(s, "alerts_settings")).unwrap_or_default()
+    load_browser_json("alerts_settings")
+        .or_else(|| storage.and_then(|s| eframe::get_value(s, "alerts_settings")))
+        .unwrap_or_default()
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -365,8 +393,8 @@ pub(in crate::app) fn persist_alerts_settings(cfg: &sdroxide_types::AlertSetting
 }
 
 #[cfg(target_arch = "wasm32")]
-pub(in crate::app) fn persist_alerts_settings(_cfg: &sdroxide_types::AlertSettings) {
-    // Written by eframe's periodic `save()` into localStorage.
+pub(in crate::app) fn persist_alerts_settings(cfg: &sdroxide_types::AlertSettings) {
+    persist_browser_json("alerts_settings", cfg);
 }
 
 // ── Morse trainer progress ────────────────────────────────────────────────────
@@ -405,8 +433,9 @@ pub(in crate::app) fn load_morse_progress(
     if let Some(p) = shared_morse_progress() {
         return p;
     }
-    let p: sdroxide_types::MorseProgress =
-        storage.and_then(|s| eframe::get_value(s, "morse_progress")).unwrap_or_default();
+    let p: sdroxide_types::MorseProgress = load_browser_json("morse_progress")
+        .or_else(|| storage.and_then(|s| eframe::get_value(s, "morse_progress")))
+        .unwrap_or_default();
     set_shared_morse_progress(&p);
     p
 }
@@ -421,9 +450,8 @@ pub(in crate::app) fn persist_morse_progress(progress: &sdroxide_types::MorsePro
 
 #[cfg(target_arch = "wasm32")]
 pub(in crate::app) fn persist_morse_progress(progress: &sdroxide_types::MorseProgress) {
-    // Written by the station-writing tab's periodic `save()` into localStorage,
-    // from the shared copy, so training on any tab is kept.
     set_shared_morse_progress(progress);
+    persist_browser_json("morse_progress", progress);
 }
 
 // ── Remote-access credentials (native: config.toml [remote_access]) ──────────
@@ -497,7 +525,9 @@ pub(in crate::app) fn load_hfdl_channels(_storage: Option<&dyn eframe::Storage>)
 
 #[cfg(target_arch = "wasm32")]
 pub(in crate::app) fn load_hfdl_channels(storage: Option<&dyn eframe::Storage>) -> Vec<u32> {
-    storage.and_then(|s| eframe::get_value(s, "hfdl_channels")).unwrap_or_default()
+    load_browser_json("hfdl_channels")
+        .or_else(|| storage.and_then(|s| eframe::get_value(s, "hfdl_channels")))
+        .unwrap_or_default()
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -508,8 +538,8 @@ pub(in crate::app) fn persist_hfdl_channels(khz: &[u32]) {
 }
 
 #[cfg(target_arch = "wasm32")]
-pub(in crate::app) fn persist_hfdl_channels(_khz: &[u32]) {
-    // Written with the rest of the browser's storage in `App::save`.
+pub(in crate::app) fn persist_hfdl_channels(khz: &[u32]) {
+    persist_browser_json("hfdl_channels", &khz.to_vec());
 }
 
 // ── Band conditions ──────────────────────────────────────────────────────────
