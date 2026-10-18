@@ -50,6 +50,9 @@ impl WsjtxUdp {
             .ok_or_else(|| format!("{host}:{}: no address", cfg.port))?;
         let sock = UdpSocket::bind(if dest.is_ipv4() { "0.0.0.0:0" } else { "[::]:0" })
             .map_err(|e| e.to_string())?;
+        // Decode bursts enqueue many datagrams on the radio thread — never
+        // block that thread on a full send buffer or a slow peer.
+        sock.set_nonblocking(true).map_err(|e| e.to_string())?;
         // Multicast groups are a supported destination in WSJT-X, and a
         // datagram sent to one needs a TTL that leaves this host.
         if dest.ip().is_multicast() {

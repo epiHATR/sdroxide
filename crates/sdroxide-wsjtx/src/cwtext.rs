@@ -33,6 +33,7 @@ impl CwTextUdp {
             .ok_or_else(|| format!("{host}:{}: no address", cfg.port))?;
         let sock = UdpSocket::bind(if dest.is_ipv4() { "0.0.0.0:0" } else { "[::]:0" })
             .map_err(|e| e.to_string())?;
+        sock.set_nonblocking(true).map_err(|e| e.to_string())?;
         // A subnet broadcast address reaches every machine on the network, and
         // a socket has to be asked before the kernel will carry one.
         if dest.is_ipv4() {

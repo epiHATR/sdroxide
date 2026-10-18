@@ -2918,6 +2918,9 @@ struct Engine {
     mqtt_cfg: sdroxide_types::MqttConfig,
     /// Last Meshtastic message unix already sent to MQTT (dedupe).
     mqtt_mesh_last_unix: i64,
+    /// Cached Maidenhead for PSK / MQTT / spots. Refreshed when digi or radio
+    /// identity changes — never reloads `radio.json` on a per-decode path.
+    report_grid_cache: String,
     /// When the last WSJT-X heartbeat went out (clients time a station out
     /// without one).
     wsjtx_beat: Instant,
@@ -4332,6 +4335,7 @@ fn engine_thread(
         mqtt: sdroxide_net::MqttPublisher::default(),
         mqtt_cfg: sdroxide_types::MqttConfig::default(),
         mqtt_mesh_last_unix: 0,
+        report_grid_cache: String::new(),
         wsjtx_beat: Instant::now(),
         rigctld: None,
         rigctld_cfg: RigctldConfig::default(),
@@ -4470,6 +4474,7 @@ fn engine_thread(
     if !engine.primary {
         engine.spots.stand_down();
     }
+    engine.refresh_report_grid();
     engine.spots.set_operator(&engine.digi_config.my_call, &engine.report_grid());
     engine.net_cfg = sdroxide_config::load_network_config();
     // Hand the persisted account to the mailbox. Without this the manager keeps
@@ -9198,6 +9203,7 @@ impl Engine {
                 self.mark_shared_store_write();
                 // The network features report the same operator identity, so a
                 // callsign or grid edit reaches them from here.
+                self.refresh_report_grid();
                 self.spots.set_operator(&self.digi_config.my_call, &self.report_grid());
                 self.mqtt_refresh_identity();
                 // ...and so does the ADS-B lane, which needs the receiver's own
@@ -10359,6 +10365,7 @@ impl Engine {
                 // receptions are reported from — so an operator who has just
                 // taken a receiver on the other side of the world has moved the
                 // square every report goes out under (issue #284).
+                self.refresh_report_grid();
                 self.spots.set_operator(&self.digi_config.my_call, &self.report_grid());
                 self.mqtt_refresh_identity();
                 self.sync_adsb_home();
@@ -11413,15 +11420,21 @@ impl Engine {
     /// treats an empty locator as "do not start" — see
     /// `SpotManager::rebuild_psk_upload` — so nothing has to be refused twice.
     ///
-    /// Read from the store rather than cached: it is the same file the settings
-    /// dialog writes, and this runs at the handful of moments the identity can
-    /// change, never per block.
+    /// Returns the cache filled by [`Self::refresh_report_grid`]. Callers that
+    /// change digi call/grid or the radio's rx-site must refresh first.
     fn report_grid(&self) -> String {
-        self.store
+        self.report_grid_cache.clone()
+    }
+
+    /// Reload the report Maidenhead from `radio.json` + digi grid. Disk I/O —
+    /// only on identity / radio-config changes, never per decode.
+    fn refresh_report_grid(&mut self) {
+        self.report_grid_cache = self
+            .store
             .load_radio_config()
             .report_grid(&self.digi_config.my_grid)
             .unwrap_or_default()
-            .to_string()
+            .to_string();
     }
 
     fn sync_adsb_home(&mut self) {
@@ -15607,7 +15620,9 @@ impl Engine {
         }
         self.digi_dirty = false;
         self.mark_shared_store_write();
+        self.refresh_report_grid();
         self.spots.set_operator(&self.digi_config.my_call, &self.report_grid());
+        self.mqtt_refresh_identity();
         self.sync_adsb_home();
         self.emit_digi_status();
 
@@ -15717,7 +15732,9 @@ impl Engine {
             if let Some(d) = self.digi.as_mut() {
                 d.set_config(self.digi_config.clone());
             }
+            self.refresh_report_grid();
             self.spots.set_operator(&self.digi_config.my_call, &self.report_grid());
+            self.mqtt_refresh_identity();
             self.emit_digi_status();
         }
     }
