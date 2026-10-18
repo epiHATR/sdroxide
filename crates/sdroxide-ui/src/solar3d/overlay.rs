@@ -59,7 +59,12 @@ const LAYERS: [(u32, &str, &str); 12] = [
          the body the camera is on and anything the find box has matched stay named.",
     ),
     (layer::QSO, "QSO", "Decoded FT8/FT4 stations and the path to the station being worked"),
-    (layer::SATS, "SATS", "Amateur-radio satellites, their orbits and elevation from your QTH"),
+    (
+        layer::SATS,
+        "SATS",
+        "Amateur-radio satellites, their orbits and elevation from your QTH. \
+         With this on, the Sun module gains ALL SATS and ABOVE chips.",
+    ),
     (
         layer::AURORA,
         "AURORA",
@@ -384,14 +389,29 @@ fn sun_controls(ui: &mut egui::Ui, st: &mut SolarUi, data: Option<&SolarData>, n
         if chrome::chip(ui, false, "↻").on_hover_text("Fetch everything again now").clicked() {
             st.refresh_requested = true;
         }
-        if chrome::chip(ui, st.view.all_satellites, "ALL SATS")
-            .on_hover_text(
-                "Show every satellite in the element set, not just the popular ones. \
-                 Orbit rings stay on the curated few — ninety at once is unreadable.",
-            )
-            .clicked()
-        {
-            st.view.all_satellites = !st.view.all_satellites;
+        if st.layer(layer::SATS) {
+            if chrome::chip(ui, st.view.all_satellites, "ALL SATS")
+                .on_hover_text(
+                    "Show every satellite in the element set, not just the popular ones. \
+                     Orbit rings stay on the curated few — ninety at once is unreadable.",
+                )
+                .clicked()
+            {
+                st.view.all_satellites = !st.view.all_satellites;
+            }
+            let above_hint = if st.qth.is_some() {
+                "Only satellites currently above your QTH horizon. \
+                 A find-box pick or Doppler lock still shows even when below."
+            } else {
+                "Only satellites currently above your QTH horizon. \
+                 Set a grid locator in station settings first."
+            };
+            if chrome::chip(ui, st.view.sats_above_horizon, "ABOVE")
+                .on_hover_text(above_hint)
+                .clicked()
+            {
+                st.view.sats_above_horizon = !st.view.sats_above_horizon;
+            }
         }
 
         // Say what is actually being shown. Presenting hours-old cached data as

@@ -733,6 +733,7 @@ fn satellites(
         return;
     }
     let show_all = st.view.all_satellites;
+    let above_only = st.view.sats_above_horizon;
     // While Doppler-locked, the globe is about that one bird: every other
     // popular / ALL SATS marker is noise on the pass you are working. The
     // pending lock request counts too (native only — the browser tab has no
@@ -760,6 +761,16 @@ fn satellites(
             continue;
         }
         let Some(state) = sat.at(unix_s) else { continue };
+        // ABOVE keeps the globe to birds you can work right now. A find-box
+        // pick and a Doppler lock still draw when they are below the horizon —
+        // those are the ones the operator asked for, not the crowd.
+        if above_only && !selected && !locked {
+            match st.qth {
+                Some((lat, lon)) if state.elevation_from(lat, lon) > 0.0 => {}
+                Some(_) => continue,
+                None => {}
+            }
+        }
         let pos = place(state.dir_ecliptic, state.radii);
 
         // Geostationary orbits read differently from low ones — one is a fixed

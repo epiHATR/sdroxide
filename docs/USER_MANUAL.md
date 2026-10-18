@@ -13264,7 +13264,9 @@ default with their orbit rings — QO-100, the ISS, AO-7, FO-29, SO-50, AO-73,
 JO-97, RS-44, XW-3 and IO-117. Geostationary orbits are green, low ones cyan.
 `ALL SATS` in the Sun module adds every satellite in the subscribed listings as
 a plain dot; the orbit rings stay on the curated few, because ninety rings at
-once is unreadable.
+once is unreadable. `ABOVE` keeps only satellites currently above your QTH
+horizon (needs a grid locator); a find-box pick or Doppler lock still shows
+even when below. Both chips appear when the `SATS` layer is on.
 
 Which satellites arrive at all is set in the **TLE** settings tab
 ([6.10](#610-tle-satellites-and-their-frequencies)) — the amateur group and the

@@ -420,6 +420,9 @@ pub struct Solar3dView {
     pub cme_window_h: f32,
     /// Show every satellite in the element set rather than the curated few.
     pub all_satellites: bool,
+    /// Hide satellites currently below the QTH horizon (needs a grid locator).
+    #[serde(default)]
+    pub sats_above_horizon: bool,
     /// Activity time-lapse: how long an FT8/FT4 decode's arc stays on the
     /// globe behind the replay head, in minutes.
     pub lapse_trail_min: f32,
@@ -541,6 +544,7 @@ impl Default for Solar3dView {
             cloud_march: false,
             cme_window_h: 72.0,
             all_satellites: false,
+            sats_above_horizon: false,
             // Ten minutes of trail is about forty FT8 slots: enough for the
             // band's shape to show, short enough that one opening does not
             // smear into the next.
