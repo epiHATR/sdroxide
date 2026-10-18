@@ -15371,6 +15371,9 @@ impl Engine {
                     (chosen(&self.state.antenna_rx), chosen(&self.state.antenna_tx));
                 a
             }),
+            // The live passband, not the band-stack default: a profile is a
+            // snapshot of how the station is set up *now*, and BW is part of it.
+            filter: Some((self.state.rx[0].filter_lo, self.state.rx[0].filter_hi)),
         }
     }
 
@@ -15425,12 +15428,16 @@ impl Engine {
             self.source.select_vfo(s.active_vfo, rig_hz);
         }
         let band = Band::containing(active_hz);
-        let (filter_lo, filter_hi) = self
-            .stacks
-            .get(&band)
-            .and_then(|st| st.first())
-            .map(|e| (e.filter_lo, e.filter_hi))
-            .unwrap_or_else(|| mode.default_filter_at(active_hz));
+        // Prefer the passband saved with the profile (the live BW at Save).
+        // Older profiles have no filter field — fall back to the band stack /
+        // mode default, which is what apply did before BW was remembered.
+        let (filter_lo, filter_hi) = s.filter.unwrap_or_else(|| {
+            self.stacks
+                .get(&band)
+                .and_then(|st| st.first())
+                .map(|e| (e.filter_lo, e.filter_hi))
+                .unwrap_or_else(|| mode.default_filter_at(active_hz))
+        });
         self.apply_entry(BandStackEntry { freq_hz: active_hz, mode, filter_lo, filter_hi });
 
         // The inactive VFO has no dial of its own to retune; it is placed

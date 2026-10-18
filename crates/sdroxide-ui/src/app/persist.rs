@@ -161,6 +161,98 @@ pub(in crate::app) fn load_system_dock(
     storage.and_then(|s| eframe::get_value(s, &system_dock_key(radio_id))).unwrap_or_default()
 }
 
+// ── Per-profile UI layout (native: config-dir JSON; wasm: eframe storage) ────
+//
+// Station profiles (`profiles.json`) already carry dial, mode, levels and
+// stacks via the engine. This file is the client-side half: panadapter view
+// and the System / band dock layout, keyed by the same profile name.
+
+/// UI layout remembered with a named station profile.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ProfileLayout {
+    /// Panadapter window, spectrum/waterfall layers, levels, CTR, etc.
+    pub view: crate::view::ViewState,
+    /// Which System overlays were pinned, collapse, weights, column width.
+    pub system_dock: SystemDockSnapshot,
+    /// Whether the band/mode column was docked beside the panadapter.
+    pub band_docked: bool,
+}
+
+impl Default for ProfileLayout {
+    fn default() -> Self {
+        Self {
+            view: crate::view::ViewState::default(),
+            system_dock: SystemDockSnapshot::default(),
+            band_docked: false,
+        }
+    }
+}
+
+/// Profile name → layout. Keys keep the spelling the operator typed; lookup
+/// matches without regard to case, like the engine's profile list.
+pub type ProfileLayouts = std::collections::BTreeMap<String, ProfileLayout>;
+
+fn profile_layout_key_ci<'a>(map: &'a ProfileLayouts, name: &str) -> Option<&'a str> {
+    map.keys().find(|k| k.eq_ignore_ascii_case(name)).map(|s| s.as_str())
+}
+
+/// Insert or replace the layout for `name` (case-insensitive replace).
+pub(in crate::app) fn upsert_profile_layout(
+    map: &mut ProfileLayouts,
+    name: &str,
+    layout: ProfileLayout,
+) {
+    if let Some(k) = map.keys().find(|k| k.eq_ignore_ascii_case(name)).cloned() {
+        map.insert(k, layout);
+    } else {
+        map.insert(name.to_string(), layout);
+    }
+}
+
+pub(in crate::app) fn take_profile_layout(
+    map: &ProfileLayouts,
+    name: &str,
+) -> Option<ProfileLayout> {
+    profile_layout_key_ci(map, name).and_then(|k| map.get(k).cloned())
+}
+
+pub(in crate::app) fn remove_profile_layout(map: &mut ProfileLayouts, name: &str) {
+    if let Some(k) = map.keys().find(|k| k.eq_ignore_ascii_case(name)).cloned() {
+        map.remove(&k);
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(in crate::app) fn load_profile_layouts(
+    _storage: Option<&dyn eframe::Storage>,
+) -> ProfileLayouts {
+    let v = sdroxide_config::load_profile_layouts_json();
+    serde_json::from_value(v).unwrap_or_default()
+}
+
+#[cfg(target_arch = "wasm32")]
+pub(in crate::app) fn load_profile_layouts(
+    storage: Option<&dyn eframe::Storage>,
+) -> ProfileLayouts {
+    storage.and_then(|s| eframe::get_value(s, "profile_layouts")).unwrap_or_default()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(in crate::app) fn persist_profile_layouts(map: &ProfileLayouts) {
+    let Ok(v) = serde_json::to_value(map) else {
+        return;
+    };
+    if let Err(e) = sdroxide_config::save_profile_layouts_json(&v) {
+        eprintln!("failed to save profile layouts: {e}");
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+pub(in crate::app) fn persist_profile_layouts(_map: &ProfileLayouts) {
+    // Written by eframe's periodic `save()` into localStorage.
+}
+
 // ── Logbook persistence (native: config-dir JSON; wasm: eframe storage) ──────
 #[cfg(not(target_arch = "wasm32"))]
 pub(in crate::app) fn load_qso_log(_storage: Option<&dyn eframe::Storage>) -> Vec<QsoRecord> {

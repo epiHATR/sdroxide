@@ -1365,6 +1365,14 @@ pub struct Session {
     /// session written before this existed.
     #[serde(default)]
     pub band_gains: BandGains,
+    /// Passband of the active receiver when saved, Hz relative to the dial
+    /// (`filter_lo` .. `filter_hi`) — the BW the operator set.
+    ///
+    /// Without this, a profile apply took the band-stack / mode default instead
+    /// of the live filter, so a narrowed or widened BW was lost. `None` in a
+    /// session written before this existed; apply then keeps the old behaviour.
+    #[serde(default)]
+    pub filter: Option<(f32, f32)>,
 }
 
 /// Which antenna socket was last chosen on each band — see
@@ -1423,6 +1431,7 @@ impl Default for Session {
             // said what belongs where.
             vfo_antennas: None,
             band_gains: BandGains::new(),
+            filter: None,
         }
     }
 }
@@ -1517,6 +1526,17 @@ pub fn load_profiles() -> Vec<Profile> {
 
 pub fn save_profiles(profiles: &Vec<Profile>) -> Result<(), ConfigError> {
     save_json("profiles.json", profiles)
+}
+
+/// Client layout half of each named profile (panadapter view + docks), as a
+/// JSON object the UI owns. The engine never reads it — dial and mode live in
+/// `profiles.json`; this file is keyed by the same names.
+pub fn load_profile_layouts_json() -> serde_json::Value {
+    load_json("profile_layouts.json")
+}
+
+pub fn save_profile_layouts_json(value: &serde_json::Value) -> Result<(), ConfigError> {
+    save_json("profile_layouts.json", value)
 }
 
 fn load_json<T: serde::de::DeserializeOwned + Default>(file: &str) -> T {
@@ -2424,6 +2444,7 @@ mod tests {
                 ("M40".to_string(), vec![("LNA".to_string(), 10.0)]),
                 ("GEN_VHF".to_string(), vec![("LNA".to_string(), 40.0)]),
             ]),
+            filter: Some((-2500.0, -200.0)),
         };
         let back: Session = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
         assert_eq!(back, s);

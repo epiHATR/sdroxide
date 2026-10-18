@@ -187,6 +187,12 @@ pub struct SdroxideApp {
     /// Persistent, non-fatal operator notice (e.g. radio audio input
     /// unavailable / mono card selected for IQ). Shown as a warning banner.
     radio_notice: Option<String>,
+    /// Bottom of the top bar last frame — where the dismissible notice strip
+    /// anchors so it sits under the chrome and above every floating overlay.
+    notice_anchor_y: f32,
+    /// Height the notice strip took last frame; reserved in the Middle layout
+    /// so the panadapter does not jump under an overlaying banner.
+    notice_reserve_h: f32,
     /// A newer release published on sdroxide.com — the version string
     /// itself. Set at most once, when the startup check lands; drawn in the
     /// notice banner's clothes above the panadapter, with a Dismiss that also
@@ -301,6 +307,10 @@ pub struct SdroxideApp {
     /// re-seed from the next status, which the engine can only send after the
     /// apply, and the next edit cannot put the old callsign back.
     profile_apply_pending: bool,
+    /// Client-side layout half of each named profile (panadapter view + docks).
+    /// Dial and mode live in the engine's `profiles.json`; this map is keyed by
+    /// the same names.
+    profile_layouts: crate::app::persist::ProfileLayouts,
     /// Which logging service the Uploads tab's own strip is showing. Session-only
     /// for the same reason as `settings_tab`: it is where the operator happens to
     /// be in the dialog, not a setting.
@@ -526,6 +536,8 @@ pub struct SdroxideApp {
     skimmer_popup_since: Option<f64>,
     /// Fade clock for the SPEC popup's layer chips, like `skimmer_popup_since`.
     layers_popup_since: Option<f64>,
+    /// Fade clock for the System PROF (profiles) popup, like `layers_popup_since`.
+    prof_popup_since: Option<f64>,
     /// Fade clock for the sub-audible tone popup, like `skimmer_popup_since`.
     tone_popup_since: Option<f64>,
     /// Fade clock for the noise-reduction picker, like `tone_popup_since`.
@@ -1440,6 +1452,8 @@ impl SdroxideApp {
             retry_at: None,
             retry_backoff: RETRY_MIN_S,
             radio_notice: None,
+            notice_anchor_y: 0.0,
+            notice_reserve_h: 0.0,
             sent_cfg: None,
             desired_cfg: None,
             desired_at: 0.0,
@@ -1473,6 +1487,7 @@ impl SdroxideApp {
             profile_name_edit: String::new(),
             profiles: Vec::new(),
             profile_apply_pending: false,
+            profile_layouts: crate::app::persist::load_profile_layouts(storage),
             settings_upload_tab: sdroxide_types::UploadTarget::QrzLogbook,
             ui_settings,
             applied_look: (
@@ -1566,6 +1581,7 @@ impl SdroxideApp {
             fft_popup_since: None,
             skimmer_popup_since: None,
             layers_popup_since: None,
+            prof_popup_since: None,
             tone_popup_since: None,
             navtex_open: None,
             nr_popup_since: None,
@@ -2235,6 +2251,46 @@ impl SdroxideApp {
     /// the main window's tab area is hidden).
     pub(crate) fn show_notice(&mut self, text: String) {
         self.radio_notice = Some(text);
+    }
+
+    /// Snapshot of the client layout half of a profile: panadapter view and
+    /// System / band docks. Dial and mode are captured by the engine.
+    pub(in crate::app) fn capture_profile_layout(&self) -> crate::app::persist::ProfileLayout {
+        crate::app::persist::ProfileLayout {
+            view: self.view.clone(),
+            system_dock: self.system_dock_snapshot(),
+            band_docked: self.band_docked,
+        }
+    }
+
+    /// Remember the current layout under `name` (alongside the engine's
+    /// ProfileSave for dial / mode / levels).
+    pub(in crate::app) fn remember_profile_layout(&mut self, name: &str) {
+        let layout = self.capture_profile_layout();
+        crate::app::persist::upsert_profile_layout(&mut self.profile_layouts, name, layout);
+        crate::app::persist::persist_profile_layouts(&self.profile_layouts);
+    }
+
+    /// Put back the layout saved with `name`, if any. Missing layout is fine —
+    /// an older profile or a remote save that only hit the engine still applies
+    /// dial and mode.
+    pub(in crate::app) fn restore_profile_layout(&mut self, name: &str) {
+        let Some(layout) = crate::app::persist::take_profile_layout(&self.profile_layouts, name)
+        else {
+            return;
+        };
+        self.view = layout.view;
+        self.apply_system_dock_snapshot(&layout.system_dock);
+        self.band_docked = layout.band_docked;
+        if self.band_docked {
+            self.band_dock_visible = true;
+        }
+    }
+
+    /// Drop the layout entry when the engine profile of the same name is deleted.
+    pub(in crate::app) fn forget_profile_layout(&mut self, name: &str) {
+        crate::app::persist::remove_profile_layout(&mut self.profile_layouts, name);
+        crate::app::persist::persist_profile_layouts(&self.profile_layouts);
     }
 
     /// Whether this radio has a transmitter at all.

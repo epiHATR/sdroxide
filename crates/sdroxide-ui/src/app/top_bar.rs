@@ -803,7 +803,7 @@ impl SdroxideApp {
                         Kind::Rig => self.rig_module(ui, cmds, w),
                         Kind::Tx => self.tx_condensed(ui, cmds, w),
                         Kind::Display => self.display_condensed(ui, cmds, w),
-                        Kind::System => self.windows_condensed(ui, w),
+                        Kind::System => self.windows_condensed(ui, cmds, w),
                     }
                 }
             });
@@ -1054,7 +1054,7 @@ impl SdroxideApp {
                     let btn = crate::chrome::chip_sized(ui, false, "DISP", cell2);
                     self.disp_menu(ui, btn, cmds);
                     let btn = crate::chrome::chip_sized(ui, false, "SYS", cell2);
-                    self.sys_menu(ui, btn);
+                    self.sys_menu(ui, btn, cmds);
                 });
             },
         );
@@ -1217,7 +1217,7 @@ impl SdroxideApp {
                 MenuChip::Rig => self.rig_menu(ui, btn, cmds),
                 MenuChip::Tx => self.tx_menu(ui, btn, cmds),
                 MenuChip::Disp => self.disp_menu(ui, btn, cmds),
-                MenuChip::Sys => self.sys_menu(ui, btn),
+                MenuChip::Sys => self.sys_menu(ui, btn, cmds),
             }
         }
     }
@@ -1336,13 +1336,13 @@ impl SdroxideApp {
     }
 
     /// The SYS menu: the window buttons.
-    fn sys_menu(&mut self, ui: &mut egui::Ui, btn: egui::Response) {
+    fn sys_menu(&mut self, ui: &mut egui::Ui, btn: egui::Response, cmds: &mut Vec<Command>) {
         let btn = btn.on_hover_text(
-            "Logbook, spots, awards, memories, the scanner and settings",
+            "Logbook, spots, awards, memories, the scanner, profiles and settings",
         );
         crate::chrome::menu_popup(ui, &btn, |ui| {
             crate::chrome::menu_caption(ui, "System");
-            self.windows_controls(ui, true);
+            self.windows_controls(ui, cmds, true);
         });
     }
 
@@ -5655,8 +5655,19 @@ impl SdroxideApp {
 
     /// The remaining window chips — the condensed System box's bottom row.
     /// HFDL lives in the Digital mode row, not here.
-    fn system_chips_bottom(&mut self, ui: &mut egui::Ui, extra: f32) {
-        let [mail, mem, scan_label, grid_label, settings] = SYSTEM_CHIPS_BOTTOM;
+    ///
+    /// `narrow` marks the SYS menu, which cannot open PROF's popup (a popup
+    /// from a popup closes the outer one) — so the menu leaves the chip out
+    /// and [`Self::windows_controls`] inlines the list instead, like DISP does
+    /// for SPEC.
+    fn system_chips_bottom(
+        &mut self,
+        ui: &mut egui::Ui,
+        cmds: &mut Vec<Command>,
+        narrow: bool,
+        extra: f32,
+    ) {
+        let [mail, mem, scan_label, grid_label, prof, settings] = SYSTEM_CHIPS_BOTTOM;
         if chip_stretched(ui, self.mail.open, mail, extra)
             .on_hover_text("Winlink radio email")
             .clicked()
@@ -5704,6 +5715,9 @@ impl SdroxideApp {
         {
             self.show_grid = !self.show_grid;
         }
+        if !narrow {
+            self.profiles_button(ui, cmds, prof, extra);
+        }
         if chip_stretched(ui, self.show_settings, settings, extra)
             .on_hover_text("Settings — device gains, antennas, audio devices")
             .clicked()
@@ -5712,18 +5726,138 @@ impl SdroxideApp {
         }
     }
 
+    /// The PROF chip: saved station setups behind a popup, like SPEC.
+    /// Lit while any profiles exist, so an empty list is visible from the strip.
+    fn profiles_button(
+        &mut self,
+        ui: &mut egui::Ui,
+        cmds: &mut Vec<Command>,
+        label: &str,
+        extra: f32,
+    ) {
+        let has = !self.profiles.is_empty();
+        let btn = chip_stretched(ui, has, label, extra).on_hover_text(
+            "Profiles — save and apply named setups: dial, mode, and the current \
+             layout (panadapter view + docks). Same list as Settings → Profiles.",
+        );
+        let popup_id = egui::Popup::default_response_id(&btn);
+        let now = ui.input(|i| i.time);
+        let alpha =
+            crate::chrome::popup_fade_alpha(ui.ctx(), popup_id, now, &mut self.prof_popup_since);
+        let resp = egui::Popup::from_toggle_button_response(&btn)
+            .frame(crate::chrome::window_frame_alpha(alpha))
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+            .show(|ui| {
+                ui.set_opacity(alpha);
+                crate::chrome::window_body_bg(ui);
+                ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+                self.profiles_controls(ui, cmds);
+            });
+        if let Some(r) = &resp {
+            crate::chrome::paint_popup_cut_border(ui.ctx(), &r.response, alpha);
+            if r.response.contains_pointer() {
+                self.prof_popup_since = Some(now);
+            }
+        }
+    }
+
+    /// Body of the PROF popup (and the SYS menu's inlined copy): each saved
+    /// profile as a name with APP / REP / DEL, plus a row to create a new one.
+    fn profiles_controls(&mut self, ui: &mut egui::Ui, cmds: &mut Vec<Command>) {
+        let w = profiles_popup_w(ui);
+        crate::chrome::menu_group(ui, "Profiles", w, |ui| {
+            if self.profiles.is_empty() {
+                ui.label(
+                    RichText::new("No profiles yet — name one below and press NEW PROFILE.")
+                        .size(11.0)
+                        .weak(),
+                );
+            } else {
+                // Take the name list so we can mutate `self` for apply/seed
+                // without borrowing it for the loop.
+                let names = self.profiles.clone();
+                for name in &names {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(name).size(12.0).strong());
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if crate::chrome::chip(ui, false, "DEL")
+                                .on_hover_text(format!("Delete \u{201c}{name}\u{201d}"))
+                                .clicked()
+                            {
+                                self.forget_profile_layout(name);
+                                cmds.push(Command::ProfileDelete(name.clone()));
+                            }
+                            if crate::chrome::chip(ui, false, "REP")
+                                .on_hover_text(format!(
+                                    "Replace \u{201c}{name}\u{201d} with the station as it is \
+                                     right now — dial, mode, and the current layout"
+                                ))
+                                .clicked()
+                            {
+                                self.remember_profile_layout(name);
+                                cmds.push(Command::ProfileSave(name.clone()));
+                            }
+                            if crate::chrome::chip(ui, false, "APP")
+                                .on_hover_text(format!(
+                                    "Apply \u{201c}{name}\u{201d} — dial, mode, filters, levels, \
+                                     identity, band stacks, and the saved layout"
+                                ))
+                                .clicked()
+                            {
+                                self.restore_profile_layout(name);
+                                cmds.push(Command::ProfileApply(name.clone()));
+                                self.profile_apply_pending = true;
+                            }
+                        });
+                    });
+                }
+            }
+            ui.separator();
+            ui.horizontal(|ui| {
+                let edit = crate::chrome::field(
+                    ui,
+                    egui::TextEdit::singleline(&mut self.profile_name_edit)
+                        .desired_width((w - 120.0).max(100.0))
+                        .hint_text("profile name"),
+                );
+                let name = self.profile_name_edit.trim().to_string();
+                let can = !name.is_empty();
+                let go = ui
+                    .add_enabled_ui(can, |ui| crate::chrome::chip(ui, false, "NEW PROFILE"))
+                    .inner
+                    .on_hover_text(
+                        "Save the station as it is right now under this name. A name \
+                         already in use is overwritten.",
+                    );
+                if can
+                    && (go.clicked()
+                        || (edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))))
+                {
+                    self.remember_profile_layout(&name);
+                    cmds.push(Command::ProfileSave(name));
+                    self.profile_name_edit.clear();
+                }
+            });
+        });
+    }
+
     /// The window buttons — the body of the SYS menu. See
     /// [`crate::chrome::control_row`] for `narrow`.
-    fn windows_controls(&mut self, ui: &mut egui::Ui, narrow: bool) {
+    fn windows_controls(&mut self, ui: &mut egui::Ui, cmds: &mut Vec<Command>, narrow: bool) {
         crate::chrome::control_row(ui, narrow, |ui| {
             self.system_chips_top(ui, 0.0);
-            self.system_chips_bottom(ui, 0.0);
+            self.system_chips_bottom(ui, cmds, narrow, 0.0);
         });
+        if narrow {
+            // PROF's popup cannot open from inside SYS — inline the list.
+            crate::chrome::menu_caption(ui, "Profiles");
+            self.profiles_controls(ui, cmds);
+        }
     }
 
     /// The condensed System box: the window chips over two rows, each row's
     /// chips splitting its share of the packer's stretch evenly.
-    fn windows_condensed(&mut self, ui: &mut egui::Ui, w: f32) {
+    fn windows_condensed(&mut self, ui: &mut egui::Ui, cmds: &mut Vec<Command>, w: f32) {
         let inner = w - 2.0 * crate::chrome::MODULE_MARGIN_X;
         let (top, bottom): (&[&str], &[&str]) = (&SYSTEM_CHIPS_TOP, &SYSTEM_CHIPS_BOTTOM);
         let extra1 = ((inner - chip_row_w(ui, top)) / top.len() as f32).max(0.0);
@@ -5732,7 +5866,7 @@ impl SdroxideApp {
             ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
                 ui.spacing_mut().item_spacing = egui::vec2(MODULE_ROW_SPACING, MODULE_ROW_SPACING);
                 ui.horizontal(|ui| self.system_chips_top(ui, extra1));
-                ui.horizontal(|ui| self.system_chips_bottom(ui, extra2));
+                ui.horizontal(|ui| self.system_chips_bottom(ui, cmds, false, extra2));
             });
         });
     }
@@ -5840,7 +5974,8 @@ impl PttPress {
 const SYSTEM_CHIPS_TOP: [&str; 7] = ["LOG", "SPOTS", "AWARDS", "BANDS", "SAT", "ISM", "AUDIO"];
 
 /// The rest of them. See [`SYSTEM_CHIPS_TOP`].
-const SYSTEM_CHIPS_BOTTOM: [&str; 5] = ["MAIL", "MEM", "SCAN", "GRID", "⚙ SETTINGS"];
+const SYSTEM_CHIPS_BOTTOM: [&str; 6] =
+    ["MAIL", "MEM", "SCAN", "GRID", "PROF", "⚙ SETTINGS"];
 
 /// The Display box's top row: the solar view, then the chips that choose what
 /// the panadapter draws — the last of those only on a front end with a
@@ -6676,6 +6811,17 @@ fn detail_chip_label(d: SpectrumDetail) -> String {
         Some(c) => c.to_string(),
         None => "AUTO".to_string(),
     }
+}
+
+/// Width of the PROF popup's box: room for a profile name plus APP / REP / DEL.
+fn profiles_popup_w(ui: &egui::Ui) -> f32 {
+    let gap = ui.spacing().item_spacing.x;
+    let name = crate::chrome::text_width(ui, "WWWWWWWWWWWW", egui::FontId::proportional(12.0));
+    let chips = ["APP", "REP", "DEL"]
+        .iter()
+        .map(|l| crate::chrome::chip_width(ui, l, None) + gap)
+        .sum::<f32>();
+    (name + gap + chips).min(crate::layout::window_w(ui.ctx(), 360.0)).max(260.0)
 }
 
 /// The width both of the SPEC popup's boxes are drawn at: the widest row

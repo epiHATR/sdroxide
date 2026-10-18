@@ -96,6 +96,16 @@ pub(in crate::app) enum SettingsTab {
     Profiles,
 }
 
+/// Layout half of a Profiles-tab action, applied after the settings borrow ends.
+///
+/// Dial and mode ride the engine's `ProfileSave` / `Apply` / `Delete`; the
+/// panadapter view and docks are client-local and need `&mut SdroxideApp`.
+pub(in crate::app) enum ProfileLayoutOp {
+    Save(String),
+    Apply(String),
+    Delete(String),
+}
+
 /// A "Test connection" button's state: still asking, or an answer.
 ///
 /// The waiting half exists because the answer may come from another machine.
@@ -182,6 +192,9 @@ pub(in crate::app) struct SettingsIo<'a> {
     /// the dialog lives across taps of the tab bar, and a half-typed name is
     /// not a setting.
     profile_name: &'a mut String,
+    /// Client layout half of a profile action (view + docks), applied after
+    /// the settings borrow ends — see [`ProfileLayoutOp`].
+    profile_layout_op: &'a mut Option<ProfileLayoutOp>,
     /// Set when a profile was put on: the engine rewrites the digital
     /// identity in place, so the screen's editable copy must be re-seeded —
     /// see `SdroxideApp::profile_apply_pending`.
@@ -1033,6 +1046,7 @@ impl SdroxideApp {
         let mut audio_pick: Option<(bool, Option<String>)> = None;
         let mut routing_pick: Option<sdroxide_types::AudioRouting> = None;
         let mut profile_name = std::mem::take(&mut self.profile_name_edit);
+        let mut profile_layout_op: Option<ProfileLayoutOp> = None;
         let mut digi_reseed = false;
         let mut speech_edit = self.speech.settings().clone();
         let speech_status = self.speech.status();
@@ -1222,6 +1236,7 @@ impl SdroxideApp {
                             routing_pick: &mut routing_pick,
                             hpsdr_discover: &mut hpsdr_discover,
                             profile_name: &mut profile_name,
+                            profile_layout_op: &mut profile_layout_op,
                             digi_reseed: &mut digi_reseed,
                             rtlsdr_rescan: &mut rtlsdr_rescan,
                             rx888_rescan: &mut rx888_rescan,
@@ -1330,6 +1345,12 @@ impl SdroxideApp {
         self.settings_tab = tab;
         self.settings_upload_tab = upload_tab;
         self.profile_name_edit = profile_name;
+        match profile_layout_op {
+            Some(ProfileLayoutOp::Save(name)) => self.remember_profile_layout(&name),
+            Some(ProfileLayoutOp::Apply(name)) => self.restore_profile_layout(&name),
+            Some(ProfileLayoutOp::Delete(name)) => self.forget_profile_layout(&name),
+            None => {}
+        }
         // Not `digi_cfg_seeded` itself: that flag is true once the copy *is*
         // seeded, so writing the request into it marked a stale copy — or,
         // before any digital status had arrived, an empty default one — as

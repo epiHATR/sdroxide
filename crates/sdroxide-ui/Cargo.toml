@@ -19,6 +19,9 @@ tracing.workspace = true
 # no I/O and no clock, so it builds for wasm32 alongside everything else here.
 sdroxide-aprs = { path = "../sdroxide-aprs" }
 serde.workspace = true
+# Profile layout snapshots (`profile_layouts.json`) round-trip through JSON
+# beside the engine's radio profiles.
+serde_json.workspace = true
 # `accesskit` is one of eframe's defaults, and turning the defaults off
 # silently switched it back off: without it the whole widget tree is
 # invisible to NVDA, Orca and VoiceOver. It is native-only (it maps to
@@ -99,7 +102,6 @@ wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 rfd = "0.17.2"
 js-sys = "0.3"
-serde_json.workspace = true
 web-sys = { version = "0.3", features = ["Blob", "BlobPropertyBag", "Url", "Document", "Window", "HtmlAnchorElement", "HtmlElement", "Storage", "File", "FileList", "FileReader", "HtmlInputElement"] }
 
 [dev-dependencies]

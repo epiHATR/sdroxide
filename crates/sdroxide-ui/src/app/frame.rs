@@ -287,7 +287,7 @@ impl eframe::App for SdroxideApp {
         // layer; floating windows are raised after they show.
         self.popup_input_guard(&ctx);
 
-        egui::Panel::top(crate::layout::salted_id(&ctx, "topbar"))
+        let topbar = egui::Panel::top(crate::layout::salted_id(&ctx, "topbar"))
             .frame(
                 egui::Frame::new()
                     .fill(crate::theme::BG_DEEP())
@@ -298,52 +298,9 @@ impl eframe::App for SdroxideApp {
                     self.top_bar(ui, &mut cmds);
                 });
             });
-        // A persistent radio-audio warning (input unavailable / mono-for-IQ)
-        // rides above the panadapter with a dismiss button, so a silent RX
-        // failure is explained rather than reading as "waiting for spectrum".
-        if let Some(notice) = self.radio_notice.clone() {
-            let (wash, rule, mark, ink) = notice_banner_colors();
-            egui::Frame::new()
-                .fill(wash)
-                .stroke(egui::Stroke::new(1.0, rule))
-                .inner_margin(egui::Margin::symmetric(8, 5))
-                .show(ui, |ui| {
-                    ui.horizontal_wrapped(|ui| {
-                        ui.label(RichText::new("⚠").size(15.0).color(mark));
-                        ui.label(RichText::new(notice).size(13.0).color(ink));
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            // ⛔ A TRIPPED SWR GUARD IS NOT DISMISSIBLE, and the
-                            // distinction is the point. Plain "Dismiss" clears
-                            // the banner locally and changes nothing in the
-                            // engine, which for a latch would be the worst of
-                            // both worlds: the warning gone and transmit still
-                            // locked out, with nothing left on screen saying
-                            // why. The latch therefore gets its own button that
-                            // actually clears it in the engine.
-                            if let Some(swr) = self.state.tx.swr_tripped {
-                                if ui
-                                    .button(RichText::new("Acknowledge").size(13.0))
-                                    .on_hover_text(format!(
-                                        "Re-enables transmit after {swr:.1}:1. Check the antenna \
-                                         first: if the fault is still there, the next \
-                                         transmission stops too."
-                                    ))
-                                    .clicked()
-                                {
-                                    cmds.push(Command::ClearSwrTrip);
-                                    self.radio_notice = None;
-                                }
-                            } else if ui.small_button("Dismiss").clicked() {
-                                self.radio_notice = None;
-                            }
-                        });
-                    });
-                });
-        }
-        // The startup version check landing. At most one message ever comes:
-        // the worker only sends a release newer than this build that was not
-        // already dismissed, then hangs up — as it also does, without
-        // sending, when the site is unreachable or nothing is new.
+        self.notice_anchor_y = topbar.response.rect.bottom();
+        // Poll the update checker early so the reserve + Foreground strip see
+        // the same frame's notice.
         if let Some(rx) = &self.update_fetch {
             match rx.try_recv() {
                 Ok(v) => {
@@ -354,38 +311,18 @@ impl eframe::App for SdroxideApp {
                 Err(std::sync::mpsc::TryRecvError::Empty) => {}
             }
         }
-        // A newer release on sdroxide.com — the radio warnings' banner in
-        // the same place, but its Dismiss also remembers the version, so the
-        // banner stays away until the *next* release ships.
-        if let Some(version) = self.update_notice.clone() {
-            let (wash, rule, mark, ink) = notice_banner_colors();
-            egui::Frame::new()
-                .fill(wash)
-                .stroke(egui::Stroke::new(1.0, rule))
-                .inner_margin(egui::Margin::symmetric(8, 5))
-                .show(ui, |ui| {
-                    ui.horizontal_wrapped(|ui| {
-                        ui.label(RichText::new("⚠").size(15.0).color(mark));
-                        ui.label(
-                            RichText::new(format!(
-                                "SDRoxide {version} has been released — this is {}.",
-                                sdroxide_version::VERSION
-                            ))
-                            .size(13.0)
-                            .color(ink),
-                        );
-                        ui.hyperlink_to(
-                            RichText::new("Get it at sdroxide.com").size(13.0),
-                            "https://sdroxide.com/",
-                        );
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.small_button("Dismiss").clicked() {
-                                crate::app::persist::persist_dismissed_update(&version);
-                                self.update_notice = None;
-                            }
-                        });
-                    });
-                });
+        // Reserve Middle layout height for the notice strip; the interactive
+        // banners themselves are drawn later as Foreground so popups and the
+        // modal dim cannot cover them.
+        let want_notice = self.radio_notice.is_some() || self.update_notice.is_some();
+        if want_notice {
+            let h = self.notice_reserve_h.max(28.0);
+            egui::Panel::top(crate::layout::salted_id(&ctx, "notice-reserve"))
+                .exact_size(h)
+                .frame(egui::Frame::NONE)
+                .show(ui, |_| {});
+        } else {
+            self.notice_reserve_h = 0.0;
         }
         // Network-spot overlay (shared by voice + digital panadapter paths). A
         // clicked spot is captured here and pre-filled into a log entry below.
@@ -1019,7 +956,9 @@ impl eframe::App for SdroxideApp {
         // After every floating System / mode SETUP window: keep them above the
         // modal dim so a fresh backdrop Area cannot cover their widgets.
         self.raise_floating_system_popups(&ctx);
-        // Last, so it lands on top of everything else that opened this frame.
+        // Dismissible warnings above every floating overlay and the modal dim.
+        self.notice_banners_foreground(&ctx, &mut cmds);
+        // Last among dialogs, so the out-of-band lockout still covers the rest.
         self.oob_tx_window(&ctx);
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -1220,6 +1159,10 @@ impl eframe::App for SdroxideApp {
             // hfdl_channels.json, written on change.
             #[cfg(target_arch = "wasm32")]
             eframe::set_value(storage, "hfdl_channels", &self.hfdl_channels);
+            // Profile layouts: native writes profile_layouts.json on change;
+            // the browser's only copy is here.
+            #[cfg(target_arch = "wasm32")]
+            eframe::set_value(storage, "profile_layouts", &self.profile_layouts);
         }
     }
 }
@@ -1821,6 +1764,101 @@ impl SdroxideApp {
             #[cfg(not(target_arch = "wasm32"))]
             self.input.discard_midi();
         }
+    }
+
+    /// Dismissible radio / update banners as a Foreground strip under the top
+    /// bar — above floating windows, chip popups and the modal dim, so a
+    /// warning is never buried under a SETUP dialog.
+    fn notice_banners_foreground(&mut self, ctx: &egui::Context, cmds: &mut Vec<Command>) {
+        let radio = self.radio_notice.clone();
+        let update = self.update_notice.clone();
+        if radio.is_none() && update.is_none() {
+            self.notice_reserve_h = 0.0;
+            return;
+        }
+        let content = ctx.content_rect();
+        let id = egui::Id::new("sdroxide-notice-banners");
+        let y = self.notice_anchor_y.clamp(content.top(), content.bottom());
+        let area = egui::Area::new(id)
+            .order(egui::Order::Foreground)
+            .fixed_pos(egui::pos2(content.left(), y))
+            .constrain_to(content)
+            .sense(egui::Sense::click());
+        let resp = area.show(ctx, |ui| {
+            ui.set_min_width(content.width());
+            ui.spacing_mut().item_spacing.y = 0.0;
+            let (wash, rule, mark, ink) = notice_banner_colors();
+            if let Some(notice) = radio.as_ref() {
+                egui::Frame::new()
+                    .fill(wash)
+                    .stroke(egui::Stroke::new(1.0, rule))
+                    .inner_margin(egui::Margin::symmetric(8, 5))
+                    .show(ui, |ui| {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(RichText::new("⚠").size(15.0).color(mark));
+                            ui.label(RichText::new(notice).size(13.0).color(ink));
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    // ⛔ A TRIPPED SWR GUARD IS NOT DISMISSIBLE —
+                                    // plain Dismiss would hide the warning while
+                                    // transmit stayed locked out.
+                                    if let Some(swr) = self.state.tx.swr_tripped {
+                                        if ui
+                                            .button(RichText::new("Acknowledge").size(13.0))
+                                            .on_hover_text(format!(
+                                                "Re-enables transmit after {swr:.1}:1. Check the \
+                                                 antenna first: if the fault is still there, the \
+                                                 next transmission stops too."
+                                            ))
+                                            .clicked()
+                                        {
+                                            cmds.push(Command::ClearSwrTrip);
+                                            self.radio_notice = None;
+                                        }
+                                    } else if ui.small_button("Dismiss").clicked() {
+                                        self.radio_notice = None;
+                                    }
+                                },
+                            );
+                        });
+                    });
+            }
+            if let Some(version) = update.as_ref() {
+                egui::Frame::new()
+                    .fill(wash)
+                    .stroke(egui::Stroke::new(1.0, rule))
+                    .inner_margin(egui::Margin::symmetric(8, 5))
+                    .show(ui, |ui| {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(RichText::new("⚠").size(15.0).color(mark));
+                            ui.label(
+                                RichText::new(format!(
+                                    "SDRoxide {version} has been released — this is {}.",
+                                    sdroxide_version::VERSION
+                                ))
+                                .size(13.0)
+                                .color(ink),
+                            );
+                            ui.hyperlink_to(
+                                RichText::new("Get it at sdroxide.com").size(13.0),
+                                "https://sdroxide.com/",
+                            );
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    if ui.small_button("Dismiss").clicked() {
+                                        crate::app::persist::persist_dismissed_update(version);
+                                        self.update_notice = None;
+                                    }
+                                },
+                            );
+                        });
+                    });
+            }
+        });
+        self.notice_reserve_h = resp.response.rect.height().max(28.0);
+        ctx.move_to_top(egui::LayerId::new(egui::Order::Foreground, id));
     }
 
     /// The awards dashboard: DXCC / WAS / WAZ / grid counts (worked vs

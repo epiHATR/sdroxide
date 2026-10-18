@@ -60,7 +60,7 @@ cd sdroxide
 ```sh
 # Debian / Ubuntu
 sudo apt install build-essential pkg-config cmake autoconf automake libtool \
-  libclang-dev libasound2-dev libopus-dev
+                 libclang-dev libasound2-dev libopus-dev
 # macOS
 brew install pkg-config cmake autoconf automake libtool opus
 ```

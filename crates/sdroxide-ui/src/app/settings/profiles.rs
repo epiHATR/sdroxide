@@ -3,20 +3,20 @@
 //!
 //! A profile captures the whole working setup — the dials and VFOs, the mode
 //! and filters, the gains, drive and antennas, the callsign and message
-//! templates, and the per-band registers — and applying one restores all of
-//! it. The hardware (back end, audio devices, converters) is deliberately
-//! left out, so a profile is the way the operator works the station rather
-//! than the radio it runs on.
+//! templates, the per-band registers, and the client layout (panadapter view
+//! and docks) — and applying one restores all of it. The hardware (back end,
+//! audio devices, converters) is deliberately left out, so a profile is the
+//! way the operator works the station rather than the radio it runs on.
 //!
-//! The engine owns the store and answers every action with the fresh name
-//! list, which is all this tab ever holds: the profiles themselves live with
-//! everything else the radio remembers, wherever the radio happens to be.
+//! The engine owns the radio half and answers every action with the fresh name
+//! list; the layout half is applied after this tab returns via
+//! [`super::ProfileLayoutOp`].
 
 use eframe::egui::{self, RichText};
 
 use sdroxide_types::Command;
 
-use crate::app::settings::SettingsIo;
+use crate::app::settings::{ProfileLayoutOp, SettingsIo};
 
 pub(in crate::app) fn settings_profiles_tab(
     ui: &mut egui::Ui,
@@ -35,8 +35,8 @@ pub(in crate::app) fn settings_profiles_tab(
     ui.add_space(4.0);
     ui.label(
         RichText::new(
-            "A profile captures the whole working setup — the dials and VFOs, the mode \
-             and filters, the gains, drive and antennas, your callsign and message \
+            "A profile captures the dial and mode, the current layout (panadapter view \
+             and docks), filters, gains, drive, antennas, your callsign and message \
              templates, and the per-band registers — and applies it back in one click. \
              The hardware (back end, audio devices, converters) is deliberately left \
              alone: a profile is the way you work the station, not the radio it runs on.",
@@ -52,15 +52,17 @@ pub(in crate::app) fn settings_profiles_tab(
             egui::TextEdit::singleline(io.profile_name).hint_text("profile name"),
         );
         if !io.profile_name.trim().is_empty() && ui.button("Save").clicked() {
-            cmds.push(Command::ProfileSave(io.profile_name.trim().to_string()));
+            let name = io.profile_name.trim().to_string();
+            *io.profile_layout_op = Some(ProfileLayoutOp::Save(name.clone()));
+            cmds.push(Command::ProfileSave(name));
             io.profile_name.clear();
         }
     });
     ui.label(
         RichText::new(
-            "Applies to whatever sdroxide is attached to: dials and VFOs, mode and \
-             filters, levels, gains, drive, antennas, the digital identity and the band \
-             stacks.",
+            "Saves the dial and mode, plus the current layout (panadapter view and \
+             docks), along with filters, levels, gains, drive, antennas, the digital \
+             identity and the band stacks.",
         )
         .weak(),
     );
@@ -79,11 +81,12 @@ pub(in crate::app) fn settings_profiles_tab(
             if ui
                 .button("Apply")
                 .on_hover_text(format!(
-                    "Put the station back onto \u{201c}{name}\u{201d}: dials, VFOs, mode, filters, \
-                 gains, drive, antennas, identity and band stacks."
+                    "Put the station back onto \u{201c}{name}\u{201d}: dial, mode, layout, \
+                     filters, gains, drive, antennas, identity and band stacks."
                 ))
                 .clicked()
             {
+                *io.profile_layout_op = Some(ProfileLayoutOp::Apply(name.clone()));
                 cmds.push(Command::ProfileApply(name.clone()));
                 // The engine rewrites the digital identity in place; its answer
                 // re-seeds this screen's copy of it, or the next edit here
@@ -91,6 +94,7 @@ pub(in crate::app) fn settings_profiles_tab(
                 *io.digi_reseed = true;
             }
             if ui.button("✕").on_hover_text(format!("Delete \u{201c}{name}\u{201d}")).clicked() {
+                *io.profile_layout_op = Some(ProfileLayoutOp::Delete(name.clone()));
                 cmds.push(Command::ProfileDelete(name.clone()));
             }
         });
