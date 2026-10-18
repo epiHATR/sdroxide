@@ -206,24 +206,36 @@ impl SdroxideApp {
                         } else {
                             theme::ALERT()
                         };
-                        // ▶ start / ⏹ stop / ⏸ pause — equal icon chips.
-                        if crate::chrome::chip_accent_sized(
+                        // Painted disc (not ●) — the bundled font has no
+                        // reliable record glyph and a missing one draws as tofu.
+                        // ⏹ stop / ⏸ pause stay typed; those shapes exist.
+                        let rec = crate::chrome::chip_accent_sized(
                             ui,
                             rec_on,
-                            RichText::new("▶").size(12.0),
+                            RichText::new(""),
                             rec_fill,
                             Color32::WHITE,
                             btn,
-                        )
-                        .on_hover_text(if paused {
-                            "Resume recording"
-                        } else if recording {
-                            "Recording"
-                        } else {
-                            "Start a WAV recording — RX left, TX right (or mono if MONO is \
+                        );
+                        if ui.is_rect_visible(rec.rect) {
+                            let ink = if rec_on {
+                                Color32::WHITE
+                            } else {
+                                ui.style().interact_selectable(&rec, rec_on).fg_stroke.color
+                            };
+                            let r = (rec.rect.height() * 0.22).clamp(3.5, 5.5);
+                            ui.painter().circle_filled(rec.rect.center(), r, ink);
+                        }
+                        if rec
+                            .on_hover_text(if paused {
+                                "Resume recording"
+                            } else if recording {
+                                "Recording"
+                            } else {
+                                "Start a WAV recording — RX left, TX right (or mono if MONO is \
                              on in the top-bar REC popup)"
-                        })
-                        .clicked()
+                            })
+                            .clicked()
                         {
                             if paused {
                                 cmds.push(Command::SetRecordingPause(false));
@@ -276,18 +288,25 @@ impl SdroxideApp {
                             cmds.push(Command::SetRecordingPause(!paused));
                         }
 
-                        // Open folder — geometric reveal mark, not the folder emoji.
+                        // Open folder — painted mark (not ↗ / emoji); the font
+                        // has neither a folder glyph nor a reliable reveal mark.
                         #[cfg(not(target_arch = "wasm32"))]
-                        if crate::chrome::chip_sized(
-                            ui,
-                            false,
-                            RichText::new("↗").size(13.0),
-                            btn,
-                        )
-                        .on_hover_text("Open the folder where recordings are saved")
-                        .clicked()
                         {
-                            open_recordings_folder();
+                            let folder = crate::chrome::chip_sized(
+                                ui,
+                                false,
+                                RichText::new(""),
+                                btn,
+                            );
+                            if ui.is_rect_visible(folder.rect) {
+                                paint_folder_icon(ui, &folder);
+                            }
+                            if folder
+                                .on_hover_text("Open the folder where recordings are saved")
+                                .clicked()
+                            {
+                                open_recordings_folder();
+                            }
                         }
 
                         let clock = if recording {
@@ -395,6 +414,39 @@ fn fmt_rec_clock(secs: f64) -> String {
     let m = total_m % 60;
     let h = total_m / 60;
     format!("{h:02}:{m:02}:{s:02}:{ms:03}")
+}
+
+/// Folder silhouette for the recordings-folder chip — painted like
+/// [`crate::chrome::chip_link`], because the UI font has no folder glyph.
+#[cfg(not(target_arch = "wasm32"))]
+fn paint_folder_icon(ui: &egui::Ui, resp: &egui::Response) {
+    let ink = ui.style().interact_selectable(resp, false).fg_stroke.color;
+    let r = resp.rect;
+    let c = r.center();
+    let w = r.height() * 0.52;
+    let h = r.height() * 0.34;
+    let tab_w = w * 0.40;
+    let tab_h = h * 0.32;
+    let left = c.x - w * 0.5;
+    let right = c.x + w * 0.5;
+    let top = c.y - h * 0.28;
+    let bottom = c.y + h * 0.55;
+    let tab_right = left + tab_w;
+    let tab_top = top - tab_h;
+    let pts = [
+        Pos2::new(left, top),
+        Pos2::new(left, tab_top),
+        Pos2::new(tab_right, tab_top),
+        Pos2::new(tab_right + tab_h * 0.5, top),
+        Pos2::new(right, top),
+        Pos2::new(right, bottom),
+        Pos2::new(left, bottom),
+    ];
+    ui.painter().add(egui::Shape::convex_polygon(
+        pts.to_vec(),
+        ink,
+        Stroke::NONE,
+    ));
 }
 
 #[cfg(not(target_arch = "wasm32"))]
