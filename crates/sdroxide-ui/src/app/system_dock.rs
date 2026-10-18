@@ -920,6 +920,8 @@ impl SdroxideApp {
                                                                             "Return to a floating window",
                                                                         );
                                                                     if pin_r.clicked() {
+                                                                        // Armed here; the centered
+                                                                        // modal below confirms.
                                                                         undock = Some(kind);
                                                                     }
                                                                     if pin_r
@@ -1127,7 +1129,28 @@ impl SdroxideApp {
         if let Some(kind) = close {
             self.close_system_dock(kind);
         } else if let Some(kind) = undock {
-            self.undock_system(kind);
+            self.confirm_undock = Some(kind);
+        }
+
+        self.resolve_undock_confirm(ui.ctx());
+    }
+
+    /// Centered confirm before returning a docked overlay to a floating window.
+    fn resolve_undock_confirm(&mut self, ctx: &egui::Context) {
+        let Some(kind) = self.confirm_undock else {
+            return;
+        };
+        let body = format!(
+            "Undock {}? It leaves the dock column and opens as a floating window again.",
+            kind.title(),
+        );
+        match crate::chrome::confirm_modal(ctx, "system-undock", &body, "Undock") {
+            Some(crate::chrome::ConfirmChoice::Confirm) => {
+                self.undock_system(kind);
+                self.confirm_undock = None;
+            }
+            Some(crate::chrome::ConfirmChoice::Cancel) => self.confirm_undock = None,
+            None => {}
         }
     }
 }

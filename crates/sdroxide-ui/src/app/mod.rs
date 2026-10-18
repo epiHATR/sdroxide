@@ -623,6 +623,10 @@ pub struct SdroxideApp {
     /// Relative height weights for expanded docked bodies (default 1.0). The
     /// horizontal split handle under each item trades weight with its neighbour.
     system_dock_weights: std::collections::HashMap<system_dock::SystemDock, f32>,
+    /// Centered confirm before undocking a System-strip overlay.
+    confirm_undock: Option<system_dock::SystemDock>,
+    /// Centered confirm before closing a radio from the Settings roster.
+    confirm_close_radio: Option<ConfirmCloseRadio>,
     /// The layout in force last frame, so a change can re-apply the style
     /// metrics (chip padding, text sizes) exactly once instead of every frame.
     tier: crate::layout::Tier,
@@ -1279,6 +1283,22 @@ pub(crate) fn radio_name(roster: &[RadioChip], id: u32) -> String {
         .map_or_else(|| format!("radio {}", id + 1), |c| c.display_name().to_string())
 }
 
+/// Centered confirm armed by the Settings roster's × chip.
+#[derive(Clone)]
+pub(crate) enum ConfirmCloseRadio {
+    /// A radio on this machine — close drops it from the roster.
+    Local { id: u32, name: String, first_of_station: bool },
+    /// A radio reached over a connection — hang up the tab, and optionally
+    /// remove it from the station's roster when that is allowed from here.
+    Station {
+        id: u32,
+        name: String,
+        station: String,
+        first_of_station: bool,
+        removable: bool,
+    },
+}
+
 /// A radio-management action requested from inside a tab (the settings
 /// dialog's copy of the strip), acted on by the shell.
 pub(crate) enum RadioTabRequest {
@@ -1601,6 +1621,8 @@ impl SdroxideApp {
             system_dock_fraction: 0.35,
             system_dock_collapsed: std::collections::HashSet::new(),
             system_dock_weights: std::collections::HashMap::new(),
+            confirm_undock: None,
+            confirm_close_radio: None,
             // Corrected on the first frame, once the viewport size is known.
             tier: crate::layout::Tier::Desktop,
             ptt: Default::default(),

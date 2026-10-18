@@ -86,6 +86,8 @@ pub(in crate::app) struct SatWinState {
     /// panel. Otherwise ←/→ keep their dial / filter-edge bindings (and a
     /// docked chip must not steal them just by being on screen).
     pub(in crate::app) keys_capture: bool,
+    /// Centered confirm before removing a bird from the Watching list.
+    confirm_unwatch: Option<(u64, String)>,
 }
 
 impl Default for SatWinState {
@@ -112,6 +114,7 @@ impl Default for SatWinState {
             list_sort: ListSort::Name,
             list_sort_asc: true,
             keys_capture: false,
+            confirm_unwatch: None,
         }
     }
 }
@@ -1536,6 +1539,7 @@ impl SdroxideApp {
         );
         if !self.show_sat && !self.system_docked_as(crate::app::SystemDock::Sat) {
             self.sat_win.keys_capture = false;
+            self.sat_win.confirm_unwatch = None;
             return;
         }
         // SatNOGS freqs live next to the TLE cache; ensure they are in memory
@@ -1559,6 +1563,7 @@ impl SdroxideApp {
                     self.sat_body(ui, &mut win, &mut qo100, cmds);
                 });
             }
+            self.sat_resolve_unwatch(ctx, &mut win, cmds);
             self.sat_win = win;
             self.qo100_win = qo100;
             return;
@@ -1597,8 +1602,37 @@ impl SdroxideApp {
             self.dock_system(crate::app::SystemDock::Sat);
         }
         self.show_sat = open;
+        self.sat_resolve_unwatch(ctx, &mut win, cmds);
         self.sat_win = win;
         self.qo100_win = qo100;
+    }
+
+    /// Centered confirm for removing a satellite from the Watching list.
+    fn sat_resolve_unwatch(
+        &mut self,
+        ctx: &egui::Context,
+        win: &mut SatWinState,
+        cmds: &mut Vec<Command>,
+    ) {
+        let Some((id, name)) = win.confirm_unwatch.clone() else {
+            return;
+        };
+        let body = format!(
+            "Unwatch {name}? It leaves the Watching tab. You can watch it again from SATELLITES.",
+        );
+        match crate::chrome::confirm_modal(ctx, "sat-unwatch", &body, "Unwatch") {
+            Some(crate::chrome::ConfirmChoice::Confirm) => {
+                self.sat_toggle_watching(id, false, cmds);
+                if win.watch_selected == Some(id) {
+                    win.watch_selected = None;
+                    win.watch_peak_pin = None;
+                    win.watch_timeline = None;
+                }
+                win.confirm_unwatch = None;
+            }
+            Some(crate::chrome::ConfirmChoice::Cancel) => win.confirm_unwatch = None,
+            None => {}
+        }
     }
 
     fn sat_body(
@@ -2763,12 +2797,11 @@ impl SdroxideApp {
                     })
                     .clicked()
                     {
-                        let watch = !watching_here;
-                        self.sat_toggle_watching(id, watch, cmds);
-                        if !watch && win.watch_selected == Some(id) {
-                            win.watch_selected = None;
-                            win.watch_peak_pin = None;
-                            win.watch_timeline = None;
+                        if watching_here {
+                            win.confirm_unwatch =
+                                Some((id, list.entries[entry_idx].name.clone()));
+                        } else {
+                            self.sat_toggle_watching(id, true, cmds);
                         }
                     }
                 });

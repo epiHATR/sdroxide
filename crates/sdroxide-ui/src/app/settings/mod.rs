@@ -342,6 +342,9 @@ pub(in crate::app) struct SettingsIo<'a> {
     /// the edit commits, so the roster's per-frame republish cannot fight the
     /// keyboard — see `SdroxideApp::radio_name_edit`.
     radio_name_edit: &'a mut Option<(u32, String)>,
+    /// Centered × confirm armed by the roster strip — written here, resolved
+    /// after the window closure like the other buffers.
+    confirm_close_radio: &'a mut Option<crate::app::ConfirmCloseRadio>,
     /// Spoken announcements, edited in place and written back after the
     /// window closure like every other buffer here.
     speech_edit: &'a mut sdroxide_types::SpeechSettings,
@@ -966,6 +969,8 @@ impl SdroxideApp {
             // opens on: a dongle can be unplugged between one open and the
             // next.
             self.iface_probed = None;
+            // Closing Settings dismisses an armed × confirm with it.
+            self.confirm_close_radio = None;
             return;
         } else if !self.audio_devices_queried {
             self.audio_devices = self.ctrl.audio_devices();
@@ -1142,6 +1147,9 @@ impl SdroxideApp {
         let mut solar_cloud_march = self.solar.cloud_march();
         let mut radio_tab_reqs: Vec<crate::app::RadioTabRequest> = Vec::new();
         let mut radio_name_edit = self.radio_name_edit.take();
+        // Taken for the window pass so SettingsIo can arm the × confirm without
+        // overlapping a `&self` borrow of the whole app.
+        let mut confirm_close_radio = self.confirm_close_radio.take();
         // The window does its own scrolling, so its bar can only be themed
         // through the context style — lend the palette for the length of the
         // call and hand the body back the normal one.
@@ -1320,6 +1328,7 @@ impl SdroxideApp {
                             solar_cloud_march: None,
                             radio_tabs: &mut radio_tab_reqs,
                             radio_name_edit: &mut radio_name_edit,
+                            confirm_close_radio: &mut confirm_close_radio,
                             region_edit: &mut region_edit,
                             tx_eq_edit: &mut tx_eq_edit,
                             tab: &mut tab,
@@ -1357,6 +1366,10 @@ impl SdroxideApp {
         // current. And not cleared here either, or a status already on its way
         // from before the apply would re-seed the old callsign.
         self.profile_apply_pending |= digi_reseed;
+        // Resolve a pending × confirm before the shell drains the queue — the
+        // modal is centered and must outlive the Settings window closure.
+        self.confirm_close_radio = confirm_close_radio;
+        self.resolve_close_radio_confirm(ctx, &mut radio_tab_reqs);
         // The multi-radio shell drains these after the frame.
         self.radio_tab_requests.append(&mut radio_tab_reqs);
         {
@@ -1996,7 +2009,12 @@ impl SdroxideApp {
                 // radios are configured, and — with the main window's tab area
                 // hidden until there is more than one — where the second radio
                 // is added in the first place.
-                self.settings_radio_roster(ui, io.radio_tabs, io.radio_name_edit);
+                self.settings_radio_roster(
+                    ui,
+                    io.radio_tabs,
+                    io.radio_name_edit,
+                    io.confirm_close_radio,
+                );
                 let Some(cfg) = io.radio_edit.as_mut() else {
                     // A remote client cannot choose the server's interface or
                     // edit its config — that file lives on the other machine.
@@ -3960,6 +3978,7 @@ impl SdroxideApp {
         ui: &mut egui::Ui,
         requests: &mut Vec<crate::app::RadioTabRequest>,
         name_edit: &mut Option<(u32, String)>,
+        confirm_close: &mut Option<crate::app::ConfirmCloseRadio>,
     ) {
         // Nothing to manage: one radio, with nowhere to add a second — no
         // hardware of this machine's own to open, and no station at the far end
@@ -4091,12 +4110,25 @@ impl SdroxideApp {
                     } else {
                         "Close this tab, or close the radio on its station"
                     };
-                    let close = crate::chrome::chip(ui, false, RichText::new("×").size(11.0))
-                        .on_hover_text(closing);
-                    if chip.station.is_empty() {
-                        Self::close_local_radio_menu(ui, &close, chip, requests);
-                    } else {
-                        Self::close_station_radio_menu(ui, &close, chip, requests);
+                    if crate::chrome::chip(ui, false, RichText::new("×").size(11.0))
+                        .on_hover_text(closing)
+                        .clicked()
+                    {
+                        *confirm_close = Some(if chip.station.is_empty() {
+                            crate::app::ConfirmCloseRadio::Local {
+                                id: chip.id,
+                                name: chip.display_name().to_string(),
+                                first_of_station: chip.first_of_station,
+                            }
+                        } else {
+                            crate::app::ConfirmCloseRadio::Station {
+                                id: chip.id,
+                                name: chip.display_name().to_string(),
+                                station: station_label(&chip.station).to_string(),
+                                first_of_station: chip.first_of_station,
+                                removable: chip.roster_editable,
+                            }
+                        });
                     }
                 }
                 ui.add_space(6.0);
@@ -4219,91 +4251,118 @@ impl SdroxideApp {
         ui.add_space(6.0);
     }
 
-    /// What the "×" on a *local* radio opens: confirm close, and say why the
-    /// configuration is kept.
+    /// Centered confirm for the Settings roster's × chip.
     ///
-    /// Closing drops the roster entry and releases the device. The files under
-    /// `~/.config/sdroxide/` stay — a closed radio is not a deleted one — so
-    /// Settings → Radio setup survives and a later radio can reuse it. That is
-    /// easy to miss if "×" acted on the first click with only a hover tip.
-    fn close_local_radio_menu(
-        ui: &mut egui::Ui,
-        button: &egui::Response,
-        chip: &crate::app::RadioChip,
+    /// Closing a local radio drops the roster entry and releases the device;
+    /// the files under `~/.config/sdroxide/` stay. On a connection, "close"
+    /// means hang up the tab, or — when the station allows it — remove the
+    /// radio from that station's roster for every client.
+    fn resolve_close_radio_confirm(
+        &mut self,
+        ctx: &egui::Context,
         requests: &mut Vec<crate::app::RadioTabRequest>,
     ) {
-        crate::chrome::menu_popup(ui, button, |ui| {
-            let mut body = format!(
-                "Close {}? It leaves the roster and releases its device. Its configuration \
-                 stays on disk (~/.config/sdroxide/) — closing is not deleting the setup — \
-                 so you can add a radio later without redoing Settings → Radio.",
-                chip.display_name(),
-            );
-            if chip.first_of_station {
-                body.push_str(
-                    " This radio currently answers at /ws; another remaining radio will \
-                     inherit that.",
+        let Some(ask) = self.confirm_close_radio.clone() else {
+            return;
+        };
+        match ask {
+            crate::app::ConfirmCloseRadio::Local { id, name, first_of_station } => {
+                let mut body = format!(
+                    "Close {name}? It leaves the roster and releases its device. Its \
+                     configuration stays on disk (~/.config/sdroxide/) — closing is not \
+                     deleting the setup — so you can add a radio later without redoing \
+                     Settings → Radio.",
                 );
+                if first_of_station {
+                    body.push_str(
+                        " This radio currently answers at /ws; another remaining radio will \
+                         inherit that.",
+                    );
+                }
+                match crate::chrome::confirm_modal(ctx, "close-radio-local", &body, "Close this radio")
+                {
+                    Some(crate::chrome::ConfirmChoice::Confirm) => {
+                        requests.push(crate::app::RadioTabRequest::Close(id));
+                        self.confirm_close_radio = None;
+                    }
+                    Some(crate::chrome::ConfirmChoice::Cancel) => self.confirm_close_radio = None,
+                    None => {}
+                }
             }
-            ui.label(RichText::new(body).size(11.5));
-            ui.add_space(4.0);
-            if ui.button(RichText::new("Close this radio").strong()).clicked() {
-                requests.push(crate::app::RadioTabRequest::Close(chip.id));
-                ui.close();
+            crate::app::ConfirmCloseRadio::Station {
+                id,
+                name,
+                station,
+                first_of_station,
+                removable,
+            } => {
+                #[derive(Clone, Copy)]
+                enum Answer {
+                    CloseTab,
+                    RemoveOnStation,
+                    Cancel,
+                }
+                let answered = crate::chrome::centered_modal(ctx, "close-radio-station", Answer::Cancel, |ui| {
+                    ui.label(
+                        RichText::new(format!(
+                            "Close {name}? Hang up this tab, or — if the station allows — \
+                             remove the radio on {station} for everyone.",
+                        ))
+                        .size(11.5),
+                    );
+                    ui.add_space(4.0);
+                    let mut out = None;
+                    if crate::chrome::chip(ui, false, "Close this tab")
+                        .on_hover_text(format!("Hang up. The radio stays on {station}."))
+                        .clicked()
+                    {
+                        out = Some(Answer::CloseTab);
+                    }
+                    if removable {
+                        ui.add_space(4.0);
+                        ui.separator();
+                        let mut body = format!(
+                            "Close {name} on {station}? Its configuration stays on that \
+                             machine — closing removes it from the roster, not from disk — \
+                             so the setup survives. The tab here closes with it, and so \
+                             does everyone else's.",
+                        );
+                        if first_of_station {
+                            body.push_str(
+                                " It currently answers at /ws there; another remaining radio \
+                                 will inherit that.",
+                            );
+                        }
+                        ui.label(RichText::new(body).size(11.5));
+                        if crate::chrome::chip(
+                            ui,
+                            false,
+                            RichText::new(format!("Close it on {station}")).strong(),
+                        )
+                        .clicked()
+                        {
+                            out = Some(Answer::RemoveOnStation);
+                        }
+                    }
+                    if crate::chrome::chip(ui, false, "CANCEL").clicked() {
+                        out = Some(Answer::Cancel);
+                    }
+                    out
+                });
+                match answered {
+                    Some(Answer::CloseTab) => {
+                        requests.push(crate::app::RadioTabRequest::Close(id));
+                        self.confirm_close_radio = None;
+                    }
+                    Some(Answer::RemoveOnStation) => {
+                        requests.push(crate::app::RadioTabRequest::RemoveFromStation(id));
+                        self.confirm_close_radio = None;
+                    }
+                    Some(Answer::Cancel) => self.confirm_close_radio = None,
+                    None => {}
+                }
             }
-        });
-    }
-
-    /// What the "×" on a *connection's* chip opens: hang up, or close the radio
-    /// on the station it lives at.
-    ///
-    /// Two answers rather than one, because "close" means two different things
-    /// to a radio on somebody else's machine and neither is obviously the one
-    /// meant. Hanging up is the first entry and acts at once — it is what "×"
-    /// has always done, and it changes nothing anywhere else. Taking the radio
-    /// out of the station's roster is the second, and asks again: it reaches
-    /// across the network, every other client on that station sees it, and its
-    /// device is released. The station refuses only when it would be left with
-    /// no radios at all.
-    fn close_station_radio_menu(
-        ui: &mut egui::Ui,
-        button: &egui::Response,
-        chip: &crate::app::RadioChip,
-        requests: &mut Vec<crate::app::RadioTabRequest>,
-    ) {
-        let where_ = station_label(&chip.station).to_string();
-        let removable = chip.roster_editable;
-        crate::chrome::menu_popup(ui, button, |ui| {
-            if ui
-                .button("Close this tab")
-                .on_hover_text(format!("Hang up. The radio stays on {where_}."))
-                .clicked()
-            {
-                requests.push(crate::app::RadioTabRequest::Close(chip.id));
-                ui.close();
-            }
-            if !removable {
-                return;
-            }
-            ui.separator();
-            let mut body = format!(
-                "Close {} on {where_}? Its configuration stays on that machine — closing \
-                 removes it from the roster, not from disk — so the setup survives. The \
-                 tab here closes with it, and so does everyone else's.",
-                chip.display_name(),
-            );
-            if chip.first_of_station {
-                body.push_str(
-                    " It currently answers at /ws there; another remaining radio will \
-                     inherit that.",
-                );
-            }
-            ui.label(RichText::new(body).size(11.5));
-            if ui.button(RichText::new(format!("Close it on {where_}")).strong()).clicked() {
-                requests.push(crate::app::RadioTabRequest::RemoveFromStation(chip.id));
-                ui.close();
-            }
-        });
+        }
     }
 }
 

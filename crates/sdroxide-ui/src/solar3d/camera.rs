@@ -42,12 +42,9 @@ pub fn dist_range(focus_radius: f32) -> (f32, f32) {
 /// the tour's station hops so an operator-asked move settles promptly.
 pub const VIEW_FLY_S: f32 = 2.6;
 
-/// Point the orbit camera straight at the operator's QTH and pull in as close
-/// as the Earth clamp allows — what the 3D view's **My QTH** chip and the
-/// open-window fly do. (VISUALIZE uses a separate limb / edge framing.)
-///
-/// Cancels AUTO: a menu that flies the camera somewhere the operator asked for
-/// has to win over the tour that would take it away again next frame.
+/// Snap the camera onto [`home_pose`] without easing — used by the unit tests.
+/// The live UI flies there via [`ViewFly`] + [`home_pose`] instead.
+#[cfg(test)]
 pub fn frame_home(view: &mut crate::view::Solar3dView, b: &Bodies, qth: (f64, f64)) {
     let (pose, _) = home_pose(b, qth);
     pose.apply(view);
@@ -66,28 +63,6 @@ pub fn home_pose(b: &Bodies, qth: (f64, f64)) -> (Pose, (V3, f32)) {
         lo,
     );
     (pose, b.focus(Focus::Earth))
-}
-
-/// Side-on framing for pass **VISUALIZE**: QTH and the satellite both in
-/// frame, orbit path running left–right across the sky.
-///
-/// `track_az_deg` is the **orbit-track** bearing (clockwise from north). The
-/// camera stands 90° off that track so the path is edge-on. Distance and pivot
-/// follow the live QTH–sat chord so both ends stay on screen.
-///
-/// Returns the `(pivot, radius)` pair for [`SolarUi::focus_override`].
-pub fn frame_visualize(
-    view: &mut crate::view::Solar3dView,
-    b: &Bodies,
-    qth: (f64, f64),
-    track_az_deg: f64,
-    sat_world: V3,
-) -> (V3, f32) {
-    let (pose, focus) = visualize_pose(b, qth, track_az_deg, sat_world);
-    pose.apply(view);
-    view.focus = Focus::Earth.to_id();
-    view.auto = false;
-    focus
 }
 
 /// How much of the FOV the QTH–sat chord should fill in VISUALIZE. Higher than

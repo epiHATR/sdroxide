@@ -501,6 +501,70 @@ pub fn row_tail<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
     }
 }
 
+/// Answer from [`confirm_modal`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfirmChoice {
+    Confirm,
+    Cancel,
+}
+
+/// Centered modal over a dimmed backdrop. Content returns [`Some`] when the
+/// operator has answered; backdrop click / Escape yields `on_dismiss`.
+///
+/// Confirmations use this rather than a chip-anchored [`menu_popup`], so the
+/// question sits in the middle of the screen instead of next to the control
+/// that armed it.
+pub fn centered_modal<R>(
+    ctx: &egui::Context,
+    id: impl Into<egui::Id>,
+    on_dismiss: R,
+    add: impl FnOnce(&mut Ui) -> Option<R>,
+) -> Option<R> {
+    let resp = egui::Modal::new(id.into()).frame(egui::Frame::NONE).show(ctx, |ui| {
+        let framed = window_frame().show(ui, |ui| {
+            window_body_bg(ui);
+            ui.set_max_width(crate::layout::window_w(ctx, 420.0));
+            ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
+            add(ui)
+        });
+        paint_cut_border(ui.painter(), framed.response.rect, theme::PINK(), theme::PANEL());
+        framed.inner
+    });
+    if let Some(v) = resp.inner {
+        Some(v)
+    } else if resp.should_close() {
+        Some(on_dismiss)
+    } else {
+        None
+    }
+}
+
+/// One-question centered confirm: body text, a confirm chip, and CANCEL.
+///
+/// Call each frame while the question is open. Returns [`Some`] when the
+/// operator answers (confirm, cancel, Escape, or click outside).
+pub fn confirm_modal(
+    ctx: &egui::Context,
+    id: impl Into<egui::Id>,
+    body: &str,
+    confirm_label: &str,
+) -> Option<ConfirmChoice> {
+    centered_modal(ctx, id, ConfirmChoice::Cancel, |ui| {
+        ui.label(RichText::new(body).size(11.5));
+        ui.add_space(4.0);
+        let mut choice = None;
+        ui.horizontal(|ui| {
+            if chip(ui, false, RichText::new(confirm_label).strong()).clicked() {
+                choice = Some(ConfirmChoice::Confirm);
+            }
+            if chip(ui, false, "CANCEL").clicked() {
+                choice = Some(ConfirmChoice::Cancel);
+            }
+        });
+        choice
+    })
+}
+
 /// A tap-to-open menu popup wearing the app's cut-corner chrome.
 ///
 /// Full opacity and no auto-fade — a menu is read, not glanced at, and on a

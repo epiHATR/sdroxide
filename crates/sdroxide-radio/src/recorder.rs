@@ -10,7 +10,7 @@
 //! to the file. Encoding and file I/O never touch the real-time audio thread.
 //!
 //! A fixed channel count for the life of the recording (chosen at
-//! [`Recorder::start`]), so WFM stereo coming and going, or the sub receiver
+//! start), so WFM stereo coming and going, or the sub receiver
 //! being switched on, never has to reinitialise the encoder mid-file.
 
 use std::fs::File;
@@ -114,10 +114,9 @@ pub enum RecorderFault {
 }
 
 impl Recorder {
-    /// Start recording interleaved audio arriving at `in_rate` Hz per channel
-    /// to `path`, with `channels` interleaved channels per frame. Returns the
-    /// recorder plus the producer the caller feeds frames into. Fails only if
-    /// the file can't be created (encoder setup happens on the worker thread).
+    /// Start an MP3 recording. Convenience for tests; the engine always calls
+    /// [`Self::start_format`] so the operator's format choice is honoured.
+    #[cfg(test)]
     pub fn start(
         path: PathBuf,
         in_rate: f64,
@@ -126,7 +125,7 @@ impl Recorder {
         Self::start_format(path, in_rate, channels, RecordingFormat::Mp3)
     }
 
-    /// Like [`Self::start`], choosing MP3 or PCM WAV.
+    /// Start a recording as MP3 or PCM WAV.
     pub fn start_format(
         path: PathBuf,
         in_rate: f64,
