@@ -147,23 +147,26 @@ impl SdroxideApp {
                 );
             }
 
-            ui.separator();
-            if crate::chrome::chip(ui, self.show_vdl2_setup, "SETUP")
-                .on_hover_text(
-                    "Which channels to listen on, how hard a burst has to be, \
-                                and how much log to keep",
-                )
-                .clicked()
-            {
-                self.show_vdl2_setup = !self.show_vdl2_setup;
-            }
-            crate::app::panels::save_text_chip(
-                ui,
-                !st.messages.is_empty(),
-                "sdroxide-vdl2-log.txt",
-                "Save the VDL2 message log to a file",
-                || crate::app::save_text::vdl2_log_text(&st.messages),
-            );
+            // SETUP first in the RTL tail so it sits on the right edge; SAVE
+            // lands just left of it.
+            crate::chrome::row_tail(ui, |ui| {
+                if crate::chrome::chip(ui, self.show_vdl2_setup, "⚙ SETUP")
+                    .on_hover_text(
+                        "Which channels to listen on, how hard a burst has to be, \
+                                    and how much log to keep",
+                    )
+                    .clicked()
+                {
+                    self.show_vdl2_setup = !self.show_vdl2_setup;
+                }
+                crate::app::panels::save_text_chip(
+                    ui,
+                    !st.messages.is_empty(),
+                    "sdroxide-vdl2-log.txt",
+                    "Save the VDL2 message log to a file",
+                    || crate::app::save_text::vdl2_log_text(&st.messages),
+                );
+            });
         });
 
         // The channel strip. Fourteen of them, so a glance says which are being

@@ -254,6 +254,8 @@ fn read_json_loop(stdout: impl std::io::Read, tx: mpsc::Sender<PhyPacket>) {
                 bytes,
                 snr_db,
                 rssi_dbm: None,
+                // lorarx only emits lines with `crc >= 1`.
+                crc_ok: Some(true),
             })
             .is_err()
         {

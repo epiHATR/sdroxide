@@ -22,5 +22,5 @@ pub mod track;
 
 pub use controller::{MeshtasticAction, MeshtasticController};
 pub use lora::{LoraRxPhy, LongFastDemod, PhyPacket, LORARX_MISSING};
-pub use mesh::{CryptoKey, DEFAULT_PSK, PacketHeader, decode_airframe};
+pub use mesh::{AirframeError, CryptoKey, DEFAULT_PSK, PacketHeader, decode_airframe};
 pub use track::{Tracker, TrackerUpdate};

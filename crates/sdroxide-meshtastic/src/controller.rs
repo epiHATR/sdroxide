@@ -13,7 +13,7 @@ use sdroxide_types::{MeshtasticSettings, MeshtasticStatus};
 use tracing::{info, warn};
 
 use crate::lora::LoraRxPhy;
-use crate::mesh::{CryptoKey, decode_airframe};
+use crate::mesh::{AirframeError, CryptoKey, PacketHeader, decode_airframe};
 use crate::track::Tracker;
 
 const EMIT_INTERVAL: Duration = Duration::from_millis(500);
@@ -225,7 +225,7 @@ impl Worker {
         for pkt in packets {
             match decode_airframe(&pkt.bytes, &self.key, Some(pkt.snr_db), pkt.rssi_dbm, unix)
             {
-                Some(dec) => {
+                Ok(dec) => {
                     if self.is_duplicate(dec.header.from, dec.header.id) {
                         continue;
                     }
@@ -239,20 +239,38 @@ impl Worker {
                             .collect::<String>(),
                     };
                     info!(
-                        from = %crate::mesh::PacketHeader::format_node(dec.header.from),
+                        from = %PacketHeader::format_node(dec.header.from),
                         ch = dec.header.channel,
                         snr_db = ?pkt.snr_db,
+                        crc_ok = ?pkt.crc_ok,
                         bytes = pkt.bytes.len(),
                         preview = %preview,
                         "meshtastic packet decoded"
                     );
                     self.tracker.apply(dec.update);
                 }
-                None => {
+                Err(AirframeError::Truncated { bytes }) => {
                     warn!(
-                        bytes = pkt.bytes.len(),
+                        bytes,
                         snr_db = ?pkt.snr_db,
-                        "meshtastic PHY bytes but mesh decode failed (PSK/header?)"
+                        crc_ok = ?pkt.crc_ok,
+                        "meshtastic PHY bytes but shorter than mesh header"
+                    );
+                }
+                Err(AirframeError::BadPayload { header, want_ch }) => {
+                    let ch_match = header.channel == want_ch[0] || header.channel == want_ch[1];
+                    warn!(
+                        from = %PacketHeader::format_node(header.from),
+                        to = %PacketHeader::format_node(header.to),
+                        id = format!("{:08x}", header.id),
+                        ch = header.channel,
+                        want_ch = ?want_ch,
+                        ch_match,
+                        broadcast = header.is_broadcast(),
+                        snr_db = ?pkt.snr_db,
+                        crc_ok = ?pkt.crc_ok,
+                        bytes = pkt.bytes.len(),
+                        "meshtastic PHY bytes but mesh decode failed (PSK/bit errors?)"
                     );
                 }
             }

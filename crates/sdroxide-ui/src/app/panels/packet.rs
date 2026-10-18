@@ -47,9 +47,8 @@ pub(super) fn packet_monitor_header(
                      or a signal too weak to read.",
                 );
         }
+        // SETUP first in the RTL tail so it sits on the right edge.
         crate::chrome::row_tail(ui, |ui| {
-            super::clear_rx_chip_at(ui, cmds, true);
-            super::save_rx_chip_for(ui, status);
             // The only route to the packet settings there is. Everything
             // this mode needs before it can transmit at all — the station
             // callsign above all — lives in that window, and until this
@@ -65,6 +64,8 @@ pub(super) fn packet_monitor_header(
             {
                 setup = true;
             }
+            super::clear_rx_chip_at(ui, cmds, true);
+            super::save_rx_chip_for(ui, status);
         });
     });
     setup
@@ -86,17 +87,23 @@ impl SdroxideApp {
         // ourselves on it is not.
         let tx_ok = self.tx_capable();
         let mode = self.digi_status.as_ref().map_or(Mode::Packet, |s| s.mode);
+        // Same height anchor APRS / ADS-B use: `panel_h` from the digi split,
+        // less chrome. Without it the columns shrink to content and leave the
+        // operating panel half empty (PACKET / PACKET-HF).
+        let content_bottom = ui.cursor().top() + panel_h - 26.0;
         let pane = self.phone_pane(ui, mode);
+        let avail_h = (content_bottom - ui.cursor().top()).max(80.0);
+        let full_w = ui.available_width();
 
-        ui.horizontal(|ui| {
+        ui.horizontal_top(|ui| {
             // ── MONITOR ───────────────────────────────────────────────────
             if pane.is_none_or(|p| p == 0) {
-                ui.vertical(|ui| {
-                    if pane.is_none() {
-                        ui.set_width(ui.available_width() * 0.55);
-                    }
-                    self.packet_monitor(ui, cmds, &st, panel_h);
-                });
+                let mon_w = if pane.is_some() { full_w } else { full_w * 0.55 };
+                ui.allocate_ui_with_layout(
+                    egui::vec2(mon_w, avail_h),
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| self.packet_monitor(ui, cmds, &st),
+                );
             }
 
             if pane.is_none() {
@@ -105,28 +112,31 @@ impl SdroxideApp {
 
             // ── TERMINAL ──────────────────────────────────────────────────
             if pane.is_none_or(|p| p == 1) {
-                ui.vertical(|ui| {
-                    self.packet_terminal(ui, cmds, &st, panel_h, tx_ok);
-                });
+                let term_w = ui.available_width();
+                ui.allocate_ui_with_layout(
+                    egui::vec2(term_w, avail_h),
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| self.packet_terminal(ui, cmds, &st, tx_ok),
+                );
             }
         });
     }
 
     /// Every frame on the channel, ours in a different colour.
-    fn packet_monitor(
-        &mut self,
-        ui: &mut egui::Ui,
-        cmds: &mut Vec<Command>,
-        st: &PacketStatus,
-        panel_h: f32,
-    ) {
+    fn packet_monitor(&mut self, ui: &mut egui::Ui, cmds: &mut Vec<Command>, st: &PacketStatus) {
         if packet_monitor_header(ui, st, self.digi_status.as_ref(), self.show_digi_settings, cmds) {
             self.show_digi_settings = !self.show_digi_settings;
         }
 
+        // Fill the column: the parent allocated a fixed height, so
+        // `available_height` is the room under the header — not a fudge off
+        // the whole panel.
+        let list_h = ui.available_height().max(48.0);
         egui::ScrollArea::vertical()
             .id_salt("packet-monitor")
-            .max_height(panel_h - 40.0)
+            .max_height(list_h)
+            .min_scrolled_height(list_h)
+            .auto_shrink([false, false])
             .stick_to_bottom(true)
             .show(ui, |ui| {
                 if st.heard.is_empty() {
@@ -172,7 +182,6 @@ impl SdroxideApp {
         ui: &mut egui::Ui,
         cmds: &mut Vec<Command>,
         st: &PacketStatus,
-        panel_h: f32,
         tx_ok: bool,
     ) {
         let link = st.link.clone().unwrap_or_default();
@@ -342,10 +351,14 @@ impl SdroxideApp {
         }
 
         // ── scrollback ────────────────────────────────────────────────────
-        let input_h = 26.0;
+        // Leave room for the input row under this list; size from whatever the
+        // column still has (parent already fixed the column height).
+        let input_h = 28.0;
+        let scroll_h = (ui.available_height() - input_h - 4.0).max(60.0);
         egui::ScrollArea::vertical()
             .id_salt("packet-term")
-            .max_height((panel_h - 76.0 - input_h).max(60.0))
+            .max_height(scroll_h)
+            .min_scrolled_height(scroll_h)
             .stick_to_bottom(true)
             .auto_shrink([false, false])
             .show(ui, |ui| {

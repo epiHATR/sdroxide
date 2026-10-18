@@ -18,6 +18,19 @@ pub struct DecodedPacket {
     pub rssi_dbm: Option<f32>,
 }
 
+/// Why [`decode_airframe`] could not turn PHY bytes into a tracker update.
+#[derive(Debug, Clone)]
+pub enum AirframeError {
+    /// Shorter than the 16-byte Meshtastic header.
+    Truncated { bytes: usize },
+    /// Header parsed, but AES unwrap / protobuf `Data` did not.
+    BadPayload {
+        header: PacketHeader,
+        /// LongFast / Default channel hashes for the configured key.
+        want_ch: [u8; 2],
+    },
+}
+
 /// Try to turn raw LoRa payload bytes into a [`DecodedPacket`].
 ///
 /// `payload` is the bytes after Semtech PHY CRC (Meshtastic header + ciphertext).
@@ -27,8 +40,10 @@ pub fn decode_airframe(
     snr_db: Option<f32>,
     rssi_dbm: Option<f32>,
     unix: i64,
-) -> Option<DecodedPacket> {
-    let header = PacketHeader::parse(payload)?;
+) -> Result<DecodedPacket, AirframeError> {
+    let header = PacketHeader::parse(payload).ok_or(AirframeError::Truncated {
+        bytes: payload.len(),
+    })?;
     let hashes = public_channel_hashes(key);
     if header.channel != hashes[0] && header.channel != hashes[1] {
         // Still try — operator may be on a named channel with matching PSK but
@@ -41,7 +56,12 @@ pub fn decode_airframe(
     aes_ctr_inplace(key, header.from, header.id, &mut body);
     let data = match parse_data(&body) {
         Some(d) if d.portnum != 0 || !d.payload.is_empty() => d,
-        _ => parse_data(&payload[PacketHeader::LEN..])?,
+        _ => parse_data(&payload[PacketHeader::LEN..]).ok_or_else(|| {
+            AirframeError::BadPayload {
+                header,
+                want_ch: hashes,
+            }
+        })?,
     };
     let from = PacketHeader::format_node(header.from);
     let to = PacketHeader::format_node(header.to);
@@ -113,7 +133,7 @@ pub fn decode_airframe(
         hops,
     };
 
-    Some(DecodedPacket {
+    Ok(DecodedPacket {
         header,
         update,
         snr_db,

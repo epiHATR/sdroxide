@@ -191,7 +191,7 @@ impl SdroxideApp {
             slot(ui, 72.0, lamp, ink);
 
             crate::chrome::row_tail(ui, |ui| {
-                if crate::chrome::chip(ui, self.show_meshtastic_setup, "SETUP")
+                if crate::chrome::chip(ui, self.show_meshtastic_setup, "⚙ SETUP")
                     .on_hover_text("Region default and channel PSK")
                     .clicked()
                 {

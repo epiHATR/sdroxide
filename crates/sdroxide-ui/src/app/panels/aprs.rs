@@ -140,13 +140,13 @@ impl SdroxideApp {
                     );
             }
 
+            // SETUP first in the RTL tail so it sits on the right edge; beacon
+            // / clear / save land just left of it.
             crate::chrome::row_tail(ui, |ui| {
-                self.clear_rx_chip(ui, cmds);
-                self.save_rx_chip(ui);
                 if crate::chrome::chip(
                     ui,
                     self.show_digi_settings,
-                    RichText::new("SETUP").size(9.5),
+                    RichText::new("⚙ SETUP").size(9.5),
                 )
                 .on_hover_text("Callsign, symbol, digipeater path, position and beacon")
                 .clicked()
@@ -207,6 +207,8 @@ impl SdroxideApp {
                     cmds.push(Command::AprsBeacon);
                 }
                 aprs_tx_slot(ui, st, transmitting);
+                self.clear_rx_chip(ui, cmds);
+                self.save_rx_chip(ui);
             });
         });
     }

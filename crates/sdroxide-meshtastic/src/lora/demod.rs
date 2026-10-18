@@ -39,6 +39,8 @@ pub struct PhyPacket {
     pub bytes: Vec<u8>,
     pub snr_db: f32,
     pub rssi_dbm: Option<f32>,
+    /// Semtech payload CRC when the PHY checked it (`None` if unknown).
+    pub crc_ok: Option<bool>,
 }
 
 /// Streaming LongFast demod: feed window-rate I/Q, drain packets.
@@ -545,6 +547,7 @@ impl LongFastDemod {
                 bytes,
                 snr_db: snr_db.clamp(-20.0, 30.0),
                 rssi_dbm: None,
+                crc_ok: Some(crc_ok),
             })
         } else {
             info!(

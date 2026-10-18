@@ -803,7 +803,7 @@ impl SdroxideApp {
                         Kind::Rig => self.rig_module(ui, cmds, w),
                         Kind::Tx => self.tx_condensed(ui, cmds, w),
                         Kind::Display => self.display_condensed(ui, cmds, w),
-                        Kind::System => self.windows_condensed(ui, w, cmds),
+                        Kind::System => self.windows_condensed(ui, w),
                     }
                 }
             });
@@ -1054,7 +1054,7 @@ impl SdroxideApp {
                     let btn = crate::chrome::chip_sized(ui, false, "DISP", cell2);
                     self.disp_menu(ui, btn, cmds);
                     let btn = crate::chrome::chip_sized(ui, false, "SYS", cell2);
-                    self.sys_menu(ui, btn, cmds);
+                    self.sys_menu(ui, btn);
                 });
             },
         );
@@ -1217,7 +1217,7 @@ impl SdroxideApp {
                 MenuChip::Rig => self.rig_menu(ui, btn, cmds),
                 MenuChip::Tx => self.tx_menu(ui, btn, cmds),
                 MenuChip::Disp => self.disp_menu(ui, btn, cmds),
-                MenuChip::Sys => self.sys_menu(ui, btn, cmds),
+                MenuChip::Sys => self.sys_menu(ui, btn),
             }
         }
     }
@@ -1336,13 +1336,13 @@ impl SdroxideApp {
     }
 
     /// The SYS menu: the window buttons.
-    fn sys_menu(&mut self, ui: &mut egui::Ui, btn: egui::Response, cmds: &mut Vec<Command>) {
+    fn sys_menu(&mut self, ui: &mut egui::Ui, btn: egui::Response) {
         let btn = btn.on_hover_text(
             "Logbook, spots, awards, memories, the scanner and settings",
         );
         crate::chrome::menu_popup(ui, &btn, |ui| {
             crate::chrome::menu_caption(ui, "System");
-            self.windows_controls(ui, true, cmds);
+            self.windows_controls(ui, true);
         });
     }
 
@@ -5654,8 +5654,9 @@ impl SdroxideApp {
     }
 
     /// The remaining window chips — the condensed System box's bottom row.
-    fn system_chips_bottom(&mut self, ui: &mut egui::Ui, extra: f32, cmds: &mut Vec<Command>) {
-        let [mail, mem, scan_label, hfdl_label, grid_label, settings] = SYSTEM_CHIPS_BOTTOM;
+    /// HFDL lives in the Digital mode row, not here.
+    fn system_chips_bottom(&mut self, ui: &mut egui::Ui, extra: f32) {
+        let [mail, mem, scan_label, grid_label, settings] = SYSTEM_CHIPS_BOTTOM;
         if chip_stretched(ui, self.mail.open, mail, extra)
             .on_hover_text("Winlink radio email")
             .clicked()
@@ -5695,44 +5696,6 @@ impl SdroxideApp {
         {
             self.show_scanner = !self.show_scanner;
         }
-        // HFDL: shortwave aircraft ground network. It opens HFDL's own mode,
-        // whose panel docks under the waterfall; accented while the decoder
-        // runs, like the ISM chip, because it spends a downconverter and a
-        // worker thread whether or not the panel is on screen.
-        let hfdl_mode = self.state.rx[0].mode.is_hfdl();
-        let hfdl_running = self.state.hfdl.enabled;
-        let hfdl_chip = if hfdl_running {
-            accent_chip_stretched(
-                ui,
-                true,
-                hfdl_label,
-                crate::theme::GREEN(),
-                crate::theme::INK_ON_BRIGHT(),
-                extra,
-            )
-        } else {
-            chip_stretched(ui, hfdl_mode, hfdl_label, extra)
-        };
-        if hfdl_chip
-            .on_hover_text(if hfdl_mode {
-                "HFDL ground network — the decode log and aircraft map, below the \
-                 waterfall. Switch the decoder on with LISTEN inside the panel."
-            } else if hfdl_running {
-                "HFDL ground network — decoding now. Open the panel."
-            } else {
-                "HFDL ground network — the aircraft shortwave data link, one \
-                 listening channel at a time"
-            })
-            .clicked()
-        {
-            // The lane follows its own chosen frequency; bring the dial with it
-            // so the panadapter shows the signal being decoded.
-            cmds.push(Command::SetMode { rx: RxId::Main, mode: Mode::Hfdl });
-            cmds.push(Command::SetVfo {
-                vfo: self.state.active_vfo,
-                hz: self.state.hfdl.frequency_hz,
-            });
-        }
         // Grid tracker: the worked squares on a map, with a HEARD layer for
         // what is on the air now.
         if chip_stretched(ui, self.show_grid, grid_label, extra)
@@ -5751,16 +5714,16 @@ impl SdroxideApp {
 
     /// The window buttons — the body of the SYS menu. See
     /// [`crate::chrome::control_row`] for `narrow`.
-    fn windows_controls(&mut self, ui: &mut egui::Ui, narrow: bool, cmds: &mut Vec<Command>) {
+    fn windows_controls(&mut self, ui: &mut egui::Ui, narrow: bool) {
         crate::chrome::control_row(ui, narrow, |ui| {
             self.system_chips_top(ui, 0.0);
-            self.system_chips_bottom(ui, 0.0, cmds);
+            self.system_chips_bottom(ui, 0.0);
         });
     }
 
     /// The condensed System box: the window chips over two rows, each row's
     /// chips splitting its share of the packer's stretch evenly.
-    fn windows_condensed(&mut self, ui: &mut egui::Ui, w: f32, cmds: &mut Vec<Command>) {
+    fn windows_condensed(&mut self, ui: &mut egui::Ui, w: f32) {
         let inner = w - 2.0 * crate::chrome::MODULE_MARGIN_X;
         let (top, bottom): (&[&str], &[&str]) = (&SYSTEM_CHIPS_TOP, &SYSTEM_CHIPS_BOTTOM);
         let extra1 = ((inner - chip_row_w(ui, top)) / top.len() as f32).max(0.0);
@@ -5769,7 +5732,7 @@ impl SdroxideApp {
             ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
                 ui.spacing_mut().item_spacing = egui::vec2(MODULE_ROW_SPACING, MODULE_ROW_SPACING);
                 ui.horizontal(|ui| self.system_chips_top(ui, extra1));
-                ui.horizontal(|ui| self.system_chips_bottom(ui, extra2, cmds));
+                ui.horizontal(|ui| self.system_chips_bottom(ui, extra2));
             });
         });
     }
@@ -5877,7 +5840,7 @@ impl PttPress {
 const SYSTEM_CHIPS_TOP: [&str; 7] = ["LOG", "SPOTS", "AWARDS", "BANDS", "SAT", "ISM", "AUDIO"];
 
 /// The rest of them. See [`SYSTEM_CHIPS_TOP`].
-const SYSTEM_CHIPS_BOTTOM: [&str; 6] = ["MAIL", "MEM", "SCAN", "HFDL", "GRID", "⚙ SETTINGS"];
+const SYSTEM_CHIPS_BOTTOM: [&str; 5] = ["MAIL", "MEM", "SCAN", "GRID", "⚙ SETTINGS"];
 
 /// The Display box's top row: the solar view, then the chips that choose what
 /// the panadapter draws — the last of those only on a front end with a

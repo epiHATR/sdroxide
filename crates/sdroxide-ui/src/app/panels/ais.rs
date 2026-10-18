@@ -185,15 +185,16 @@ impl SdroxideApp {
                 );
             }
 
-            ui.separator();
-            if crate::chrome::chip(ui, self.show_ais_setup, "SETUP")
-                .on_hover_text(
-                    "Channels, timeouts, trail length and how far ahead the vectors reach",
-                )
-                .clicked()
-            {
-                self.show_ais_setup = !self.show_ais_setup;
-            }
+            crate::chrome::row_tail(ui, |ui| {
+                if crate::chrome::chip(ui, self.show_ais_setup, "⚙ SETUP")
+                    .on_hover_text(
+                        "Channels, timeouts, trail length and how far ahead the vectors reach",
+                    )
+                    .clicked()
+                {
+                    self.show_ais_setup = !self.show_ais_setup;
+                }
+            });
         });
 
         if let Some(why) = &st.unavailable {

@@ -125,7 +125,14 @@ impl SdroxideApp {
                 );
             }
 
+            // SETUP first in the RTL tail so it sits on the right edge.
             crate::chrome::row_tail(ui, |ui| {
+                if crate::chrome::chip(ui, self.show_rs41_setup, "⚙ SETUP")
+                    .on_hover_text("Sonde type, decoder timeouts, trail length and table size")
+                    .clicked()
+                {
+                    self.show_rs41_setup = !self.show_rs41_setup;
+                }
                 let up = self.net_cfg_edit.sondehub.upload;
                 if crate::chrome::chip(ui, up, "UPLOAD")
                     .on_hover_text(
@@ -136,12 +143,6 @@ impl SdroxideApp {
                 {
                     self.net_cfg_edit.sondehub.upload = !up;
                     cmds.push(Command::SetNetworkConfig(self.net_cfg_edit.clone()));
-                }
-                if crate::chrome::chip(ui, self.show_rs41_setup, "SETUP")
-                    .on_hover_text("Sonde type, decoder timeouts, trail length and table size")
-                    .clicked()
-                {
-                    self.show_rs41_setup = !self.show_rs41_setup;
                 }
             });
         });
