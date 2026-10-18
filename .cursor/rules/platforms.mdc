@@ -21,7 +21,7 @@ cargo run -- --connect host:4950
 
 Default features: `soapy` (links libSoapySDR) and `rtl433` (CMake + submodules). `cargo build --no-default-features` is the CAT/native-USB build CI ships. Release CI (`.github/workflows/release.yml`) builds linux x86_64, linux aarch64, glibc-2.35 `-compat` of both, windows x86_64 (MinGW gnu, not MSVC), macOS aarch64, macOS x86_64 — each as `soapy` and `cat`.
 
-Linux needs a C toolchain, CMake, pkg-config, ALSA, and optionally `libopus-dev` (else export `CMAKE_POLICY_VERSION_MINIMUM=3.5`). macOS: `brew install pkg-config cmake autoconf automake libtool opus`. First build wants network for the RADE Opus fetch. `git submodule update --init --recursive` before a default build.
+Linux needs a C toolchain, CMake, pkg-config, ALSA, and optionally `libopus-dev` (else export `CMAKE_POLICY_VERSION_MINIMUM=3.5`). macOS: `brew install pkg-config cmake autoconf automake libtool opus`. First build wants network for the RADE Opus DNN weights (~175 MB); they land in `~/.cache/sdroxide/opus_models/` so `cargo clean` does not re-fetch. Override with `SDROXIDE_OPUS_MODEL_CACHE`. `git submodule update --init --recursive` before a default build.
 
 DSP-hot crates are `opt-level = 2` even in dev. A UI-only change: `cargo run -p sdroxide -- --siggen`. A types/dsp change: `cargo test -p <crate>`.
 

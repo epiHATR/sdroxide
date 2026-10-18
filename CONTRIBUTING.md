@@ -164,7 +164,11 @@ git submodule update --init --recursive
 ```
 
 The first native build also compiles a patched Opus for RADE and needs network
-access. Later builds reuse that tree.
+access to fetch ~175 MB of DNN weights from `media.xiph.org`. That archive is
+cached under `~/.cache/sdroxide/opus_models/` (or `$XDG_CACHE_HOME/…`, or
+`SDROXIDE_OPUS_MODEL_CACHE`) and copied into each build, so `cargo clean` does
+not download it again. Later builds reuse both that cache and the `target/`
+Opus tree.
 
 ## 5. Run the desktop app
 

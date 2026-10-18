@@ -5,7 +5,12 @@
 //! autotools-builds the patched Opus that carries the vocoder
 //! (`--enable-osce --enable-dred`, plus rade_c's two `opus-nnet.*.diff`
 //! patches), so the first build needs network access and
-//! autoconf/automake/libtool; later builds reuse the `OUT_DIR` tree.
+//! autoconf/automake/libtool.
+//!
+//! Opus's `autogen.sh` fetches ~175 MB of DNN weights from
+//! `media.xiph.org`. That archive is kept outside `target/` (see
+//! [`opus_model_cache_dir`]) and copied into each Opus source tree before
+//! configure, so `cargo clean` does not force another download.
 //!
 //! Upstream builds `librade` as a shared object. We want it static — a shared
 //! library would have to be shipped and found next to the executable on three
@@ -13,7 +18,13 @@
 //! adds a second target over *the same source list*, read back off upstream's
 //! own target rather than copied, so it cannot drift when the submodule moves.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+/// SHA-256 of the DNN weight tarball pinned by Opus `autogen.sh` at the
+/// commit `BuildOpus.cmake` fetches (`940d4e5a…`). Bump both together when
+/// the submodule moves Opus.
+const OPUS_MODEL_HASH: &str = "4ed9445b96698bad25d852e912b41495ddfa30c8dbc8a55f9cde5826ed793453";
 
 fn main() {
     let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
@@ -29,12 +40,17 @@ fn main() {
     }
     let rade_c = rade_c.canonicalize().expect("canonicalize vendor/rade_c");
 
+    let opus_model = ensure_opus_model(&manifest);
+    println!("cargo:rerun-if-env-changed=SDROXIDE_OPUS_MODEL_CACHE");
+    println!("cargo:rerun-if-env-changed=XDG_CACHE_HOME");
+
     let wrapper = write_wrapper_project(&out, &rade_c);
 
     // Always Release: the neural encoder/decoder is unusably slow unoptimized,
     // including under a plain `cargo build`.
     let dst = cmake::Config::new(&wrapper)
         .define("RADE_C_DIR", rade_c.to_string_lossy().as_ref())
+        .define("OPUS_MODEL_TAR", opus_model.to_string_lossy().as_ref())
         .profile("Release")
         .build_target("rade_static")
         .build();
@@ -103,21 +119,185 @@ fn main() {
     println!("cargo:rerun-if-changed={}", rade_c.join("cmake").display());
 }
 
+/// Durable directory for the Opus DNN weight tarball. Survives `cargo clean`.
+///
+/// Order: `SDROXIDE_OPUS_MODEL_CACHE`, `$XDG_CACHE_HOME/sdroxide/opus_models`,
+/// `~/.cache/sdroxide/opus_models`, `%LOCALAPPDATA%\sdroxide\opus_models`,
+/// then the repo's gitignored `.cache/opus_models`.
+fn opus_model_cache_dir(manifest: &Path) -> PathBuf {
+    if let Ok(p) = std::env::var("SDROXIDE_OPUS_MODEL_CACHE") {
+        return PathBuf::from(p);
+    }
+    if let Ok(xdg) = std::env::var("XDG_CACHE_HOME") {
+        return PathBuf::from(xdg).join("sdroxide").join("opus_models");
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        return PathBuf::from(home).join(".cache/sdroxide/opus_models");
+    }
+    if let Ok(local) = std::env::var("LOCALAPPDATA") {
+        return PathBuf::from(local).join("sdroxide").join("opus_models");
+    }
+    manifest.join("../../.cache/opus_models")
+}
+
+fn opus_model_name() -> String {
+    format!("opus_data-{OPUS_MODEL_HASH}.tar.gz")
+}
+
+/// Ensure the weight tarball is on disk under the durable cache and return its path.
+fn ensure_opus_model(manifest: &Path) -> PathBuf {
+    let cache_dir = opus_model_cache_dir(manifest);
+    std::fs::create_dir_all(&cache_dir).unwrap_or_else(|e| {
+        panic!("create Opus model cache {}: {e}", cache_dir.display());
+    });
+    let dest = cache_dir.join(opus_model_name());
+    if dest.is_file() && sha256_hex(&dest).as_deref() == Some(OPUS_MODEL_HASH) {
+        return dest;
+    }
+    if dest.is_file() {
+        let _ = std::fs::remove_file(&dest);
+    }
+
+    // Promote a good copy left under target/ from an earlier build.
+    if let Some(found) = find_cached_opus_model(manifest) {
+        std::fs::copy(&found, &dest).unwrap_or_else(|e| {
+            panic!("copy {} -> {}: {e}", found.display(), dest.display());
+        });
+        println!(
+            "cargo:warning=promoted Opus DNN weights from {} to {}",
+            found.display(),
+            dest.display()
+        );
+        return dest;
+    }
+
+    let url = format!("https://media.xiph.org/opus/models/{}", opus_model_name());
+    println!("cargo:warning=downloading Opus DNN weights to {} (~175 MB, once)", dest.display());
+    download(&url, &dest);
+    match sha256_hex(&dest) {
+        Some(h) if h == OPUS_MODEL_HASH => dest,
+        Some(h) => panic!(
+            "Opus model checksum mismatch for {}\n  expected {OPUS_MODEL_HASH}\n  got      {h}\n\
+             delete that file and rebuild",
+            dest.display()
+        ),
+        None => panic!(
+            "could not verify checksum of {} (need sha256sum or shasum)",
+            dest.display()
+        ),
+    }
+}
+
+fn find_cached_opus_model(manifest: &Path) -> Option<PathBuf> {
+    let name = opus_model_name();
+    let workspace = manifest.join("../..");
+    for profile in ["debug", "release"] {
+        let builds = workspace.join(format!("target/{profile}/build"));
+        let Ok(entries) = std::fs::read_dir(&builds) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry
+                .path()
+                .join("out/build/build_opus-prefix/src/build_opus")
+                .join(&name);
+            if path.is_file() && sha256_hex(&path).as_deref() == Some(OPUS_MODEL_HASH) {
+                return Some(path);
+            }
+        }
+    }
+    // Repo-local fallback (gitignored).
+    let local = workspace.join(".cache/opus_models").join(&name);
+    if local.is_file() && sha256_hex(&local).as_deref() == Some(OPUS_MODEL_HASH) {
+        return Some(local);
+    }
+    None
+}
+
+fn sha256_hex(path: &Path) -> Option<String> {
+    let attempts = [
+        ("sha256sum", vec![path.as_os_str().to_os_string()]),
+        (
+            "shasum",
+            vec![
+                std::ffi::OsString::from("-a"),
+                std::ffi::OsString::from("256"),
+                path.as_os_str().to_os_string(),
+            ],
+        ),
+    ];
+    for (prog, args) in attempts {
+        let output = Command::new(prog).args(&args).output().ok()?;
+        if !output.status.success() {
+            continue;
+        }
+        let text = String::from_utf8_lossy(&output.stdout);
+        let hash = text.split_whitespace().next()?.to_ascii_lowercase();
+        if hash.len() == 64 && hash.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Some(hash);
+        }
+    }
+    None
+}
+
+fn download(url: &str, dest: &Path) {
+    let partial = dest.with_extension("tar.gz.partial");
+    let _ = std::fs::remove_file(&partial);
+    let status = if Command::new("curl").arg("--version").output().is_ok() {
+        Command::new("curl")
+            .args(["-fL", "--retry", "5", "--retry-delay", "2", "-o"])
+            .arg(&partial)
+            .arg(url)
+            .status()
+    } else {
+        Command::new("wget")
+            .args(["-O"])
+            .arg(&partial)
+            .arg(url)
+            .status()
+    };
+    match status {
+        Ok(s) if s.success() => {
+            std::fs::rename(&partial, dest).unwrap_or_else(|e| {
+                panic!("rename {} -> {}: {e}", partial.display(), dest.display());
+            });
+        }
+        Ok(s) => panic!("download of {url} failed with {s}"),
+        Err(e) => panic!("download of {url} failed (need curl or wget): {e}"),
+    }
+}
+
 /// Generate the wrapper CMake project into `OUT_DIR` and return its path.
 ///
 /// It mirrors rade_c's own top-level `CMakeLists.txt` (include `BuildOpus`,
 /// then add `src`) and adds one static target built from upstream's own source
 /// list. `BuildOpus.cmake` resolves its Opus patches relative to
 /// `CMAKE_SOURCE_DIR`, which is now *this* project, so the two `.diff` files
-/// are copied in alongside. On Windows the C sources are copied into the build
-/// tree as well — see the comment in the generated file.
-fn write_wrapper_project(out: &std::path::Path, rade_c: &std::path::Path) -> PathBuf {
+/// are copied in alongside. A patched copy of `BuildOpus.cmake` seeds the
+/// cached DNN tarball into the Opus source tree before `autogen.sh` runs.
+/// On Windows the C sources are copied into the build tree as well — see the
+/// comment in the generated file.
+fn write_wrapper_project(out: &Path, rade_c: &Path) -> PathBuf {
     let wrapper = out.join("wrapper");
-    std::fs::create_dir_all(wrapper.join("src")).expect("create wrapper dir");
+    std::fs::create_dir_all(wrapper.join("cmake")).expect("create wrapper cmake dir");
+    std::fs::create_dir_all(wrapper.join("src")).expect("create wrapper src dir");
     for diff in ["opus-nnet.h.diff", "opus-nnet.c.diff"] {
         std::fs::copy(rade_c.join("src").join(diff), wrapper.join("src").join(diff))
             .unwrap_or_else(|e| panic!("copy {diff}: {e}"));
     }
+
+    let upstream = std::fs::read_to_string(rade_c.join("cmake/BuildOpus.cmake"))
+        .expect("read vendor/rade_c/cmake/BuildOpus.cmake");
+    let patched = patch_build_opus_cmake(&upstream);
+    if patched == upstream {
+        panic!(
+            "failed to patch BuildOpus.cmake PATCH_COMMAND to seed Opus DNN weights — \
+             did upstream change the patch line?"
+        );
+    }
+    std::fs::write(wrapper.join("cmake/BuildOpus.cmake"), patched)
+        .expect("write patched BuildOpus.cmake");
+
     std::fs::write(
         wrapper.join("CMakeLists.txt"),
         r#"# Generated by sdroxide-rade/build.rs — do not edit.
@@ -126,9 +306,15 @@ project(sdroxide_rade C)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
+if(NOT DEFINED OPUS_MODEL_TAR)
+    message(FATAL_ERROR "OPUS_MODEL_TAR must be set (path to opus_data-*.tar.gz cache)")
+endif()
+
 # Fetches and patches the FARGAN/LPCNet-enabled Opus, and defines the imported
 # `opus` target plus its include directories for everything below.
-include(${RADE_C_DIR}/cmake/BuildOpus.cmake)
+# Local copy of rade_c's BuildOpus.cmake with PATCH_COMMAND extended to seed
+# OPUS_MODEL_TAR so media.xiph.org is not hit on every clean build.
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/BuildOpus.cmake)
 
 # Upstream's own targets, unmodified. We never build its shared `rade`; we only
 # borrow the target's source list.
@@ -163,4 +349,15 @@ target_link_libraries(rade_static opus m)
     )
     .expect("write wrapper CMakeLists.txt");
     wrapper
+}
+
+/// Extend every `PATCH_COMMAND` so the cached DNN tarball is present before
+/// Opus `autogen.sh` runs `dnn/download_model.sh`.
+fn patch_build_opus_cmake(upstream: &str) -> String {
+    let old = r#"PATCH_COMMAND sh -c "patch dnn/nnet.h < ${CMAKE_SOURCE_DIR}/src/opus-nnet.h.diff && patch dnn/nnet.c < ${CMAKE_SOURCE_DIR}/src/opus-nnet.c.diff""#;
+    let new = format!(
+        "PATCH_COMMAND ${{CMAKE_COMMAND}} -E copy \"${{OPUS_MODEL_TAR}}\" \"opus_data-{OPUS_MODEL_HASH}.tar.gz\"\n\
+    COMMAND sh -c \"patch dnn/nnet.h < ${{CMAKE_SOURCE_DIR}}/src/opus-nnet.h.diff && patch dnn/nnet.c < ${{CMAKE_SOURCE_DIR}}/src/opus-nnet.c.diff\""
+    );
+    upstream.replace(old, &new)
 }
