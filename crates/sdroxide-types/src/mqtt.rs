@@ -6,8 +6,8 @@
 //! the broker can touch the radio.
 //!
 //! Each decode kind has its own topic string. Defaults are `sdroxide/DIGI`,
-//! `sdroxide/WSPR`, `sdroxide/SONDE`, and `sdroxide/MESH`. An empty topic means
-//! that kind does not publish, even while MQTT is enabled.
+//! `sdroxide/FT8`, `sdroxide/WSPR`, `sdroxide/SONDE`, and `sdroxide/MESH`. An
+//! empty topic means that kind does not publish, even while MQTT is enabled.
 
 use serde::{Deserialize, Serialize};
 
@@ -47,13 +47,17 @@ pub struct MqttConfig {
     pub client_id: String,
     /// 0 or 1 (capped at 1 by the publisher).
     pub qos: u8,
-    /// FT8-family digi decodes.
+    /// All slotted digi decodes (FT8, FT4, JS8, …).
     pub digi: MqttTopic,
     pub wspr: MqttTopic,
     /// Radiosonde / RS41 packages.
     pub sonde: MqttTopic,
     /// Meshtastic mesh messages.
     pub mesh: MqttTopic,
+    /// FT8-only stream (same payload as digi, only while the radio is in FT8).
+    /// Appended last for postcard layout of [`crate::StationConfig`].
+    #[serde(default)]
+    pub ft8: MqttTopic,
 }
 
 impl Default for MqttConfig {
@@ -72,6 +76,7 @@ impl Default for MqttConfig {
             wspr: MqttTopic { topic: "sdroxide/WSPR".into() },
             sonde: MqttTopic { topic: "sdroxide/SONDE".into() },
             mesh: MqttTopic { topic: "sdroxide/MESH".into() },
+            ft8: MqttTopic { topic: "sdroxide/FT8".into() },
         }
     }
 }

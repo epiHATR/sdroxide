@@ -6570,31 +6570,33 @@ impl Engine {
 
     /// Connect or disconnect the MQTT decode publisher to match its config.
     fn sync_mqtt(&mut self) {
-        self.mqtt.apply(self.mqtt_cfg.clone(), &self.digi_config.my_call);
+        let grid = self.report_grid();
+        self.mqtt.apply(self.mqtt_cfg.clone(), &self.digi_config.my_call, &grid);
+    }
+
+    /// Stamp MQTT payloads with the current call / report grid. Disk I/O stays
+    /// here (identity changes), never on the per-decode publish path.
+    fn mqtt_refresh_identity(&mut self) {
+        let grid = self.report_grid();
+        self.mqtt.set_identity(&self.digi_config.my_call, &grid);
     }
 
     fn mqtt_publish_digi(&self, decodes: &[sdroxide_types::Decode], dial_hz: f64) {
         let mode = self.digi.as_ref().map(|d| d.mode().label().to_string()).unwrap_or_default();
-        let call = self.digi_config.my_call.as_str();
-        let grid = self.report_grid();
         for d in decodes {
-            self.mqtt.publish_digi(d, &mode, dial_hz, call, &grid);
+            self.mqtt.publish_digi(d, &mode, dial_hz);
         }
     }
 
     fn mqtt_publish_wspr(&self, spots: &[sdroxide_types::WsprSpot]) {
-        let call = self.digi_config.my_call.as_str();
-        let grid = self.report_grid();
         for s in spots {
-            self.mqtt.publish_wspr(s, call, &grid);
+            self.mqtt.publish_wspr(s);
         }
     }
 
     fn mqtt_publish_sonde(&self, sondes: &[sdroxide_types::Rs41Sonde]) {
-        let call = self.digi_config.my_call.as_str();
-        let grid = self.report_grid();
         for s in sondes {
-            self.mqtt.publish_sonde(s, call, &grid);
+            self.mqtt.publish_sonde(s);
         }
     }
 
@@ -6603,14 +6605,12 @@ impl Engine {
         messages: &[sdroxide_types::MeshtasticMessage],
         last_unix: &mut i64,
     ) {
-        let call = self.digi_config.my_call.as_str();
-        let grid = self.report_grid();
         let mut newest = *last_unix;
         for m in messages {
             if m.unix <= *last_unix {
                 continue;
             }
-            self.mqtt.publish_mesh(m, call, &grid);
+            self.mqtt.publish_mesh(m);
             newest = newest.max(m.unix);
         }
         *last_unix = newest;
@@ -9199,6 +9199,7 @@ impl Engine {
                 // The network features report the same operator identity, so a
                 // callsign or grid edit reaches them from here.
                 self.spots.set_operator(&self.digi_config.my_call, &self.report_grid());
+                self.mqtt_refresh_identity();
                 // ...and so does the ADS-B lane, which needs the receiver's own
                 // position to place an aircraft on the ground.
                 self.sync_adsb_home();
@@ -10359,6 +10360,7 @@ impl Engine {
                 // taken a receiver on the other side of the world has moved the
                 // square every report goes out under (issue #284).
                 self.spots.set_operator(&self.digi_config.my_call, &self.report_grid());
+                self.mqtt_refresh_identity();
                 self.sync_adsb_home();
                 if reopen {
                     self.reopen_source();

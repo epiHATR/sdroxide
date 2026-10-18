@@ -596,7 +596,7 @@ pub(in crate::app) fn settings_mqtt_tab(
     }
     ui.label(
         RichText::new(
-            "Publishes decoded traffic as JSON to an MQTT broker — digi, WSPR, radiosonde and \
+            "Publishes decoded traffic as JSON to an MQTT broker — digi, FT8, WSPR, radiosonde and \
              Meshtastic. Output only: nothing on the broker can touch the radio. Leave a topic \
              empty to skip that kind.",
         )
@@ -663,6 +663,7 @@ pub(in crate::app) fn settings_mqtt_tab(
         egui::Grid::new("mqtt-topics-grid").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
             for (label, topic, hint) in [
                 ("DIGI", &mut cfg.digi.topic, "sdroxide/DIGI"),
+                ("FT8", &mut cfg.ft8.topic, "sdroxide/FT8"),
                 ("WSPR", &mut cfg.wspr.topic, "sdroxide/WSPR"),
                 ("SONDE", &mut cfg.sonde.topic, "sdroxide/SONDE"),
                 ("MESH", &mut cfg.mesh.topic, "sdroxide/MESH"),

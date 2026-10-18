@@ -1,7 +1,8 @@
 //! MQTT decode publisher: push digi / WSPR / sonde / mesh JSON to a broker.
 //!
-//! A dedicated thread runs rumqttc's connection loop; the engine enqueues
-//! publish jobs on a bounded channel so a dead broker never stalls decode.
+//! A dedicated thread runs rumqttc's connection loop; the engine only
+//! `try_send`s typed jobs. JSON encoding and broker I/O happen off the radio
+//! thread so a slow or dead broker never stalls decode.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -15,24 +16,47 @@ use serde::Serialize;
 use tracing::{info, warn};
 
 const MAX_PENDING: usize = 256;
+/// rumqttc request-channel capacity. Oversized so a brief broker stall does
+/// not immediately force drops; overflow still drops via [`Client::try_publish`].
+const MQTT_REQUEST_CAP: usize = 256;
 
-#[derive(Debug, Clone)]
-struct Job {
-    topic: String,
-    payload: Vec<u8>,
+#[derive(Debug)]
+enum Job {
+    Digi { topics: Vec<String>, body: DigiPayload },
+    Json { topic: String, body: JsonBody },
+}
+
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+enum JsonBody {
+    Wspr(WsprPayload),
+    Sonde(SondePayload),
+    Mesh(MeshPayload),
 }
 
 /// Running MQTT publisher, or a no-op stub when disabled.
 pub struct MqttPublisher {
     cfg: MqttConfig,
+    rx_call: String,
+    rx_grid: String,
     tx: Option<Sender<Job>>,
+    /// Cloned into shutdown so we can wake `connection.iter` / `recv_timeout`.
+    client: Option<Client>,
     stop: Option<Arc<AtomicBool>>,
     join: Option<JoinHandle<()>>,
 }
 
 impl Default for MqttPublisher {
     fn default() -> Self {
-        Self { cfg: MqttConfig::default(), tx: None, stop: None, join: None }
+        Self {
+            cfg: MqttConfig::default(),
+            rx_call: String::new(),
+            rx_grid: String::new(),
+            tx: None,
+            client: None,
+            stop: None,
+            join: None,
+        }
     }
 }
 
@@ -43,7 +67,15 @@ impl Drop for MqttPublisher {
 }
 
 impl MqttPublisher {
-    pub fn apply(&mut self, cfg: MqttConfig, rx_call: &str) {
+    /// Update the call/grid stamped on every payload. Cheap; call whenever
+    /// station identity or the radio's report grid changes.
+    pub fn set_identity(&mut self, rx_call: &str, rx_grid: &str) {
+        self.rx_call = rx_call.to_string();
+        self.rx_grid = rx_grid.to_string();
+    }
+
+    pub fn apply(&mut self, cfg: MqttConfig, rx_call: &str, rx_grid: &str) {
+        self.set_identity(rx_call, rx_grid);
         // Topic-only edits must not bounce the broker connection.
         let reconnect = self.cfg.enabled != cfg.enabled
             || self.cfg.host != cfg.host
@@ -75,11 +107,24 @@ impl MqttPublisher {
         } else {
             cfg.client_id.trim().to_string()
         };
+        let (client, connection) = {
+            let mut opts = MqttOptions::new(&client_id, cfg.host.trim(), cfg.port);
+            opts.set_keep_alive(Duration::from_secs(30));
+            if !cfg.user.is_empty() {
+                opts.set_credentials(&cfg.user, &cfg.password);
+            }
+            if cfg.tls {
+                opts.set_transport(Transport::tls_with_default_config());
+            }
+            Client::new(opts, MQTT_REQUEST_CAP)
+        };
+        let client_worker = client.clone();
         let join = std::thread::Builder::new()
             .name("sdroxide-mqtt".into())
-            .spawn(move || worker(cfg, client_id, rx, stop_t))
+            .spawn(move || worker(cfg, client_worker, connection, rx, stop_t))
             .expect("spawn mqtt worker");
         self.tx = Some(tx);
+        self.client = Some(client);
         self.stop = Some(stop);
         self.join = Some(join);
         info!(host = %self.cfg.host, port = self.cfg.port, "mqtt publisher started");
@@ -89,22 +134,41 @@ impl MqttPublisher {
         if let Some(stop) = self.stop.take() {
             stop.store(true, Ordering::SeqCst);
         }
+        // Wake the event loop so `recv_timeout` / reconnect wait returns.
+        if let Some(client) = self.client.take() {
+            let _ = client.try_disconnect();
+        }
         self.tx = None;
         if let Some(j) = self.join.take() {
-            let _ = j.join();
+            // Never block the radio thread on a stuck broker — detach after a
+            // short wait; the stop flag + disconnect already asked it to exit.
+            let deadline = std::time::Instant::now() + Duration::from_millis(500);
+            loop {
+                if j.is_finished() {
+                    let _ = j.join();
+                    break;
+                }
+                if std::time::Instant::now() >= deadline {
+                    warn!("mqtt worker still stopping — detaching");
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
         }
     }
 
-    pub fn publish_digi(
-        &self,
-        d: &Decode,
-        mode: &str,
-        dial_hz: f64,
-        rx_call: &str,
-        rx_grid: &str,
-    ) {
-        let Some(topic) = self.cfg.digi.trimmed() else { return };
-        if self.tx.is_none() {
+    pub fn publish_digi(&self, d: &Decode, mode: &str, dial_hz: f64) {
+        let Some(tx) = &self.tx else { return };
+        let mut topics = Vec::with_capacity(2);
+        if let Some(t) = self.cfg.digi.trimmed() {
+            topics.push(t.to_string());
+        }
+        if mode.eq_ignore_ascii_case("FT8")
+            && let Some(t) = self.cfg.ft8.trimmed()
+        {
+            topics.push(t.to_string());
+        }
+        if topics.is_empty() {
             return;
         }
         let body = DigiPayload {
@@ -119,15 +183,16 @@ impl MqttPublisher {
             to: d.to.clone(),
             grid: d.grid.clone(),
             is_cq: d.is_cq,
-            rx_call: rx_call.to_string(),
-            rx_grid: rx_grid.to_string(),
+            rx_call: self.rx_call.clone(),
+            rx_grid: self.rx_grid.clone(),
         };
-        self.enqueue(topic, &body);
+        self.try_enqueue(tx, Job::Digi { topics, body });
     }
 
-    pub fn publish_wspr(&self, s: &WsprSpot, rx_call: &str, rx_grid: &str) {
+    pub fn publish_wspr(&self, s: &WsprSpot) {
         let Some(topic) = self.cfg.wspr.trimmed() else { return };
-        if self.tx.is_none() || s.is_heard_by_other() {
+        let Some(tx) = &self.tx else { return };
+        if s.is_heard_by_other() {
             return;
         }
         let body = WsprPayload {
@@ -139,17 +204,18 @@ impl MqttPublisher {
             drift: s.drift_hz,
             freq_hz: s.freq_hz,
             power_dbm: s.power_dbm,
-            rx_call: rx_call.to_string(),
-            rx_grid: rx_grid.to_string(),
+            rx_call: self.rx_call.clone(),
+            rx_grid: self.rx_grid.clone(),
         };
-        self.enqueue(topic, &body);
+        self.try_enqueue(
+            tx,
+            Job::Json { topic: topic.to_string(), body: JsonBody::Wspr(body) },
+        );
     }
 
-    pub fn publish_sonde(&self, s: &Rs41Sonde, rx_call: &str, rx_grid: &str) {
+    pub fn publish_sonde(&self, s: &Rs41Sonde) {
         let Some(topic) = self.cfg.sonde.trimmed() else { return };
-        if self.tx.is_none() {
-            return;
-        }
+        let Some(tx) = &self.tx else { return };
         let body = SondePayload {
             ts: s.last_at,
             serial: s.serial.clone(),
@@ -161,17 +227,18 @@ impl MqttPublisher {
             freq_hz: s.frequency_hz,
             temp_c: s.temperature_c,
             humidity_pct: s.humidity_pct,
-            rx_call: rx_call.to_string(),
-            rx_grid: rx_grid.to_string(),
+            rx_call: self.rx_call.clone(),
+            rx_grid: self.rx_grid.clone(),
         };
-        self.enqueue(topic, &body);
+        self.try_enqueue(
+            tx,
+            Job::Json { topic: topic.to_string(), body: JsonBody::Sonde(body) },
+        );
     }
 
-    pub fn publish_mesh(&self, m: &MeshtasticMessage, rx_call: &str, rx_grid: &str) {
+    pub fn publish_mesh(&self, m: &MeshtasticMessage) {
         let Some(topic) = self.cfg.mesh.trimmed() else { return };
-        if self.tx.is_none() {
-            return;
-        }
+        let Some(tx) = &self.tx else { return };
         let body = MeshPayload {
             ts: m.unix,
             from: m.from.clone(),
@@ -179,22 +246,16 @@ impl MqttPublisher {
             text: m.text.clone(),
             raw: m.raw.clone(),
             snr_db: m.snr_db,
-            rx_call: rx_call.to_string(),
-            rx_grid: rx_grid.to_string(),
+            rx_call: self.rx_call.clone(),
+            rx_grid: self.rx_grid.clone(),
         };
-        self.enqueue(topic, &body);
+        self.try_enqueue(
+            tx,
+            Job::Json { topic: topic.to_string(), body: JsonBody::Mesh(body) },
+        );
     }
 
-    fn enqueue<T: Serialize>(&self, topic: &str, body: &T) {
-        let Some(tx) = &self.tx else { return };
-        let payload = match serde_json::to_vec(body) {
-            Ok(p) => p,
-            Err(e) => {
-                warn!(error = %e, "mqtt json encode failed");
-                return;
-            }
-        };
-        let job = Job { topic: topic.to_string(), payload };
+    fn try_enqueue(&self, tx: &Sender<Job>, job: Job) {
         match tx.try_send(job) {
             Ok(()) => {}
             Err(TrySendError::Full(_)) => {
@@ -205,18 +266,13 @@ impl MqttPublisher {
     }
 }
 
-fn worker(cfg: MqttConfig, client_id: String, rx: Receiver<Job>, stop: Arc<AtomicBool>) {
-    let mut opts = MqttOptions::new(client_id, cfg.host.trim(), cfg.port);
-    opts.set_keep_alive(Duration::from_secs(30));
-    if !cfg.user.is_empty() {
-        opts.set_credentials(&cfg.user, &cfg.password);
-    }
-    if cfg.tls {
-        opts.set_transport(Transport::tls_with_default_config());
-    }
-
-    let (client, mut connection) = Client::new(opts, 32);
-
+fn worker(
+    cfg: MqttConfig,
+    client: Client,
+    mut connection: rumqttc::Connection,
+    rx: Receiver<Job>,
+    stop: Arc<AtomicBool>,
+) {
     let qos = if cfg.qos >= 1 { QoS::AtLeastOnce } else { QoS::AtMostOnce };
     let client_pub = client.clone();
     let stop_pub = Arc::clone(&stop);
@@ -225,13 +281,7 @@ fn worker(cfg: MqttConfig, client_id: String, rx: Receiver<Job>, stop: Arc<Atomi
         .spawn(move || {
             while !stop_pub.load(Ordering::SeqCst) {
                 match rx.recv_timeout(Duration::from_millis(200)) {
-                    Ok(job) => {
-                        if let Err(e) =
-                            client_pub.publish(&job.topic, qos, false, job.payload.as_slice())
-                        {
-                            warn!(error = %e, topic = %job.topic, "mqtt publish failed");
-                        }
-                    }
+                    Ok(job) => publish_job(&client_pub, qos, job),
                     Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
                     Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
                 }
@@ -239,16 +289,23 @@ fn worker(cfg: MqttConfig, client_id: String, rx: Receiver<Job>, stop: Arc<Atomi
         })
         .ok();
 
-    for notification in connection.iter() {
-        if stop.load(Ordering::SeqCst) {
-            break;
-        }
-        if let Err(e) = notification {
-            warn!(error = %e, "mqtt connection error");
-            // Brief pause then rumqttc will reconnect via the iterator.
-            std::thread::sleep(Duration::from_secs(2));
+    // `recv_timeout` (not `iter`) so the stop flag is honoured promptly —
+    // otherwise shutdown waits up to keep-alive for the next notification.
+    while !stop.load(Ordering::SeqCst) {
+        match connection.recv_timeout(Duration::from_millis(200)) {
+            Ok(Ok(_event)) => {}
+            Ok(Err(e)) => {
+                warn!(error = %e, "mqtt connection error");
+                if stop.load(Ordering::SeqCst) {
+                    break;
+                }
+                std::thread::sleep(Duration::from_secs(2));
+            }
+            Err(rumqttc::RecvTimeoutError::Timeout) => {}
+            Err(rumqttc::RecvTimeoutError::Disconnected) => break,
         }
     }
+    let _ = client.try_disconnect();
     drop(client);
     if let Some(j) = pub_thread {
         let _ = j.join();
@@ -256,7 +313,42 @@ fn worker(cfg: MqttConfig, client_id: String, rx: Receiver<Job>, stop: Arc<Atomi
     info!("mqtt publisher stopped");
 }
 
-#[derive(Serialize)]
+fn publish_job(client: &Client, qos: QoS, job: Job) {
+    match job {
+        Job::Digi { topics, body } => {
+            let payload = match serde_json::to_vec(&body) {
+                Ok(p) => p,
+                Err(e) => {
+                    warn!(error = %e, "mqtt json encode failed");
+                    return;
+                }
+            };
+            for topic in topics {
+                try_publish(client, &topic, qos, &payload);
+            }
+        }
+        Job::Json { topic, body } => {
+            let payload = match serde_json::to_vec(&body) {
+                Ok(p) => p,
+                Err(e) => {
+                    warn!(error = %e, "mqtt json encode failed");
+                    return;
+                }
+            };
+            try_publish(client, &topic, qos, &payload);
+        }
+    }
+}
+
+fn try_publish(client: &Client, topic: &str, qos: QoS, payload: &[u8]) {
+    // Never use blocking `publish`: rumqttc's request channel applies
+    // backpressure and can stall this thread when the broker is slow.
+    if let Err(e) = client.try_publish(topic, qos, false, payload) {
+        warn!(error = %e, topic, "mqtt publish dropped");
+    }
+}
+
+#[derive(Debug, Serialize)]
 struct DigiPayload {
     ts: i64,
     mode: String,
@@ -273,7 +365,7 @@ struct DigiPayload {
     rx_grid: String,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 struct WsprPayload {
     ts: i64,
     call: String,
@@ -287,7 +379,7 @@ struct WsprPayload {
     rx_grid: String,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 struct SondePayload {
     ts: i64,
     serial: String,
@@ -304,7 +396,7 @@ struct SondePayload {
     rx_grid: String,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 struct MeshPayload {
     ts: i64,
     from: String,
