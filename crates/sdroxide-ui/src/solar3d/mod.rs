@@ -224,6 +224,12 @@ impl Solar3d {
         self.lock().view.cloud_march = on;
     }
 
+    /// Grow a path from the QTH to a newly decoded station, then land the
+    /// destination marker.
+    pub fn push_qso_intro(&self, hit: &crate::digi_map::DigiHit) {
+        self.lock().push_qso_intro(hit);
+    }
+
     /// The published band conditions, if this window's feed has fetched them.
     ///
     /// The one product of this feed the *main* window reads, because it is the
@@ -290,6 +296,9 @@ impl Solar3d {
         {
             let mut st = self.lock();
             st.set_qth(grid);
+            // Grow-arc intros are queued from new located decodes in
+            // `digi_traffic`, not from the DX/preview highlight (those are a
+            // completed or selected QSO, not a fresh decode).
             st.digi = traffic;
             st.awards = awards;
             st.prop = prop;
@@ -474,7 +483,7 @@ impl Solar3d {
 
 /// Seconds since the Unix epoch. The ephemeris takes an explicit timestamp
 /// everywhere, so the whole scene can be scrubbed by offsetting this.
-fn wall_clock_unix() -> f64 {
+pub(crate) fn wall_clock_unix() -> f64 {
     crate::time::now_unix_f64()
 }
 

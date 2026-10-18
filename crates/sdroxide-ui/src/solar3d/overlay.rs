@@ -225,6 +225,8 @@ fn menu_bar(
                 {
                     st.visualize_sat = None;
                     st.visualize_frame_az = None;
+                    st.decode_fly = None;
+                    st.decode_fly_restart = false;
                     st.view.auto = false;
                     begin_view_fly(st, wall + st.sim_offset_s);
                 }
@@ -800,6 +802,10 @@ fn scene(ui: &mut egui::Ui, st: &mut SolarUi, data: Option<&SolarData>) {
     let dt =
         if st.last_frame_time <= 0.0 { 1.0 / 60.0 } else { (anim - st.last_frame_time) as f32 };
     st.last_frame_time = anim;
+    st.advance_qso_intros(dt);
+    if !st.qso_intros.is_empty() {
+        crate::repaint::animate(ui.ctx());
+    }
     advance_tour(ui, st, data, sim_now, dt);
     advance_lapse(ui, st, dt);
     reframe(st, sim_now);
@@ -811,6 +817,7 @@ fn scene(ui: &mut egui::Ui, st: &mut SolarUi, data: Option<&SolarData>) {
     // out before the rest of the scene is handed to the paint callback.
     let labels = std::mem::take(&mut scene.labels);
     let picks = std::mem::take(&mut scene.picks);
+    let digi_picks = std::mem::take(&mut scene.digi_picks);
     let qso_apex = scene.qso_apex;
     let view_proj = scene.globals.view_proj;
 
@@ -868,13 +875,17 @@ fn scene(ui: &mut egui::Ui, st: &mut SolarUi, data: Option<&SolarData>) {
     ));
 
     let took_click = draw_labels(ui, st, rect, &view_proj, &labels, &resp);
-    // Only if a label did not already take it: a name sits on top of its own
-    // body, and clicking the text should not be ambiguous.
+    // Digi markers before bodies: a station on the Earth should win over a
+    // click that would otherwise reframe the planet.
+    let took_click = pick_digi(ui, st, rect, &view_proj, &digi_picks, &resp, took_click);
+    // Only if a label / digi marker did not already take it: a name sits on
+    // top of its own body, and clicking the text should not be ambiguous.
     pick_bodies(ui, st, rect, &view_proj, &picks, &resp, took_click);
     // After the labels, so the contact reads over the traffic around it rather
     // than through it — a callsign printed across the card is the one place on
     // this globe where decluttering by rank is not enough.
     qso_card(ui, st, rect, &view_proj, qso_apex, anim);
+    digi_tip(ui, st, rect, &view_proj);
     // A phone puts the space weather behind the menu bar's WEATHER chip instead
     // of down the right-hand edge; see [`Place`].
     //
@@ -1284,6 +1295,115 @@ fn typed_chars(elapsed: f64, line: usize, total: usize) -> Option<usize> {
     Some(if t >= 1.0 { total } else { ((t * total as f64).ceil() as usize).min(total) })
 }
 
+/// Click a digi station marker to pin a small tip (grid, SNR, …). Click the
+/// same marker again — or empty sky — to dismiss it.
+fn pick_digi(
+    ui: &egui::Ui,
+    st: &mut SolarUi,
+    rect: egui::Rect,
+    view_proj: &[[f32; 4]; 4],
+    picks: &[super::scene::DigiPick],
+    resp: &egui::Response,
+    consumed: bool,
+) -> bool {
+    let Some(pointer) = ui.input(|i| i.pointer.interact_pos()) else { return consumed };
+    if !rect.contains(pointer) {
+        return consumed;
+    }
+
+    let mut best: Option<(f32, &super::scene::DigiPick, egui::Pos2)> = None;
+    for pick in picks {
+        let Some(pos) = project(view_proj, rect, pick.world) else { continue };
+        let d = pos.distance(pointer);
+        if d > pick.radius_px {
+            continue;
+        }
+        let score = d / pick.radius_px;
+        if best.as_ref().is_none_or(|(b, _, _)| score < *b) {
+            best = Some((score, pick, pos));
+        }
+    }
+    let Some((_, pick, pos)) = best else {
+        // Empty click clears a pinned tip so it does not linger after the
+        // operator has moved on.
+        if resp.clicked() && !consumed {
+            st.digi_tip = None;
+        }
+        return consumed;
+    };
+
+    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    let r = pick.radius_px.clamp(8.0, 28.0);
+    ui.painter().circle_stroke(pos, r, egui::Stroke::new(1.2, theme::CYAN().gamma_multiply(0.85)));
+    if resp.clicked() && !consumed {
+        let same = st.digi_tip.as_ref().is_some_and(|(t, _)| {
+            t.lat == pick.tip.lat
+                && t.lon == pick.tip.lon
+                && t.call.as_deref() == pick.tip.call.as_deref()
+        });
+        st.digi_tip = if same { None } else { Some((pick.tip.clone(), pick.world)) };
+        return true;
+    }
+    consumed
+}
+
+/// Small tip pinned to a clicked digi marker: call, grid, signal, path.
+fn digi_tip(
+    ui: &egui::Ui,
+    st: &SolarUi,
+    rect: egui::Rect,
+    view_proj: &[[f32; 4]; 4],
+) {
+    let Some((tip, world)) = st.digi_tip.as_ref() else { return };
+    let Some(anchor) = project(view_proj, rect, *world) else { return };
+
+    let head_font = egui::FontId::monospace(12.0);
+    let font = egui::FontId::monospace(11.0);
+    let mut lines: Vec<(String, egui::FontId, egui::Color32)> = Vec::new();
+    if let Some(call) = tip.call.as_deref() {
+        lines.push((call.to_string(), head_font, theme::CYAN()));
+    }
+    let mut row = |label: &str, value: String| {
+        lines.push((format!("{label:<5}{value}"), font.clone(), theme::TEXT()));
+    };
+    row("GRID", tip.grid.clone());
+    if let Some(s) = tip.snr_db {
+        row("SIG", format!("{s:+} dB"));
+    }
+    if let Some(b) = tip.band {
+        row("BAND", b.label().to_string());
+    }
+    if let Some(home) = st.qth {
+        let km = sdroxide_types::distance_km(home, (tip.lat, tip.lon));
+        let bear = sdroxide_types::bearing_deg(home, (tip.lat, tip.lon));
+        row("PATH", format!("{km:.0} km · {bear:.0}°"));
+    }
+
+    let p = ui.painter();
+    let galleys: Vec<_> =
+        lines.iter().map(|(t, f, c)| p.layout_no_wrap(t.clone(), f.clone(), *c)).collect();
+    const PAD: egui::Vec2 = egui::vec2(9.0, 6.0);
+    let w = galleys.iter().map(|g| g.size().x).fold(0.0, f32::max) + PAD.x * 2.0;
+    let h = galleys.iter().map(|g| g.size().y + 1.0).sum::<f32>() + PAD.y * 2.0;
+    let Some((card, above)) = card_rect(rect, anchor, egui::vec2(w, h)) else { return };
+
+    let foot = egui::pos2(
+        anchor.x.clamp(card.left() + 6.0, card.right() - 6.0),
+        if above { card.bottom() } else { card.top() },
+    );
+    p.line_segment([foot, anchor], egui::Stroke::new(1.0, theme::CYAN().gamma_multiply(0.7)));
+    p.circle_filled(anchor, 2.0, theme::CYAN());
+    p.rect_filled(card, 0, theme::BG_DEEP().gamma_multiply(0.88));
+    chrome::paint_cut_border(p, card, theme::CYAN(), egui::Color32::TRANSPARENT);
+
+    let mut y = card.top() + PAD.y;
+    let x = card.left() + PAD.x;
+    for ((_, _, color), g) in lines.iter().zip(&galleys) {
+        p.galley(egui::pos2(x, y), g.clone(), *color);
+        y += g.size().y + 1.0;
+    }
+}
+
 /// Let the bodies themselves be clicked, not only their names.
 ///
 /// Picking is done in screen space against the projected centres rather than by
@@ -1642,6 +1762,8 @@ fn pass_window(ui: &egui::Ui, st: &mut SolarUi, data: Option<&SolarData>, sim_no
     } else if start_vis {
         st.visualize_sat = Some(id);
         st.visualize_frame_az = None;
+        st.decode_fly = None;
+        st.decode_fly_restart = false;
         st.view.auto = false;
         begin_view_fly(st, sim_now);
     }
@@ -2877,6 +2999,8 @@ fn visualize_chip(ui: &mut egui::Ui, st: &mut SolarUi, data: Option<&SolarData>,
 fn stop_visualize(st: &mut SolarUi, sim_now: f64) {
     st.visualize_sat = None;
     st.visualize_frame_az = None;
+    st.decode_fly = None;
+    st.decode_fly_restart = false;
     if st.qth.is_some() {
         begin_view_fly(st, sim_now);
     } else {
@@ -2893,7 +3017,7 @@ fn begin_view_fly(st: &mut SolarUi, sim_now: f64) {
     st.view.auto = false;
 }
 
-/// Ease / hold VISUALIZE (orbit-side at QTH) or a pending My QTH / stop→home
+/// Ease / hold VISUALIZE, a decode landing, or a pending My QTH / stop→home
 /// flight. The sky marker still follows the live look angle once framed.
 fn apply_framed_camera(
     ui: &egui::Ui,
@@ -2906,6 +3030,8 @@ fn apply_framed_camera(
     // on the default system-wide camera.
     if std::mem::take(&mut st.fly_home_pending) {
         if st.qth.is_some() {
+            st.decode_fly = None;
+            st.decode_fly_restart = false;
             begin_view_fly(st, sim_now);
         } else {
             st.set_focus(super::state::Focus::Earth);
@@ -2934,6 +3060,13 @@ fn apply_framed_camera(
             + super::math::V3::from_f64(state.dir_ecliptic)
                 * (b.earth_r * state.radii as f32);
         Some(super::camera::visualize_pose(&b, qth, frame_az, sat_world))
+    } else if let Some(dx) = st.decode_fly {
+        // New decode: ease onto that station's QTH. Older intro arcs keep
+        // growing on the globe; only the camera target moves.
+        if std::mem::take(&mut st.decode_fly_restart) {
+            begin_view_fly(st, sim_now);
+        }
+        Some(super::camera::home_pose(&b, dx))
     } else if st.view_fly.active() {
         st.qth.map(|qth| super::camera::home_pose(&b, qth))
     } else {
@@ -2948,9 +3081,9 @@ fn apply_framed_camera(
         let (pivot, flying) = fly.step(&mut st.view, dt, pose, focus);
         st.focus_override = Some(pivot);
         flying
-    } else if st.visualize_sat.is_some() {
-        // Settled: keep side-on aim + edge-biased pivot. Zoom in is allowed
-        // all the way to the focus clamp (past the auto-fit); zoom out free.
+    } else if st.visualize_sat.is_some() || st.decode_fly.is_some() {
+        // Settled on VISUALIZE or the latest decode QTH — hold the framing.
+        // Zoom in is allowed all the way to the focus clamp; zoom out free.
         let dist = st.view.dist;
         pose.apply_aim(&mut st.view);
         let (lo, hi) = super::camera::dist_range(focus.1);
@@ -3088,6 +3221,10 @@ fn interact(ui: &egui::Ui, st: &mut SolarUi, resp: &egui::Response) {
     if touched {
         st.view.auto = false;
         st.view_fly.cancel();
+        st.decode_fly = None;
+        st.decode_fly_restart = false;
+        st.focus_override = None;
+        st.digi_tip = None;
     }
     // Continuous repaint only while something is actually moving; otherwise the
     // window idles and is woken by input or by the data feed.

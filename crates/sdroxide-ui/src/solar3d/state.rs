@@ -202,6 +202,11 @@ pub struct SolarUi {
     pub data: Option<Arc<Mutex<SolarData>>>,
     /// FT8/FT4 traffic to plot on the globe.
     pub digi: DigiTraffic,
+    /// Logged-QSO intro arcs: grow from the QTH, then pop the far-end dot.
+    /// Timed with egui's frame clock (`started` is `Context::input.time`).
+    pub qso_intros: Vec<QsoArcIntro>,
+    /// Station tip pinned to a clicked digi marker (grid, SNR, …).
+    pub digi_tip: Option<(crate::digi_map::DigiTip, [f32; 3])>,
     /// Which contact the QSO card is typing out, and when it began typing.
     ///
     /// The key is the callsign and the contact's start time together, so
@@ -288,6 +293,12 @@ pub struct SolarUi {
     pub visualize_frame_az: Option<f64>,
     /// One-shot ease into VISUALIZE / My QTH / stop→home from the current view.
     pub view_fly: super::camera::ViewFly,
+    /// Far-end lat/lon of the latest FT8 decode the camera should ease onto
+    /// (and hold). Other intro arcs keep growing while this is set.
+    pub decode_fly: Option<(f64, f64)>,
+    /// Start a fresh [`ViewFly`] toward [`Self::decode_fly`] on the next
+    /// framed-camera pass (set when a new decode lands).
+    pub decode_fly_restart: bool,
     /// Next overlay frame should ease the camera onto the operator's QTH
     /// (window just opened, or the browser tab just started).
     pub fly_home_pending: bool,
@@ -367,6 +378,78 @@ pub struct DigiTraffic {
     pub history: std::sync::Arc<Vec<crate::digi_map::DigiHit>>,
 }
 
+/// One contact being introduced on the globe: the path draws first, then the
+/// destination marker appears.
+///
+/// Advanced only while the solar viewport paints (`progress` / `hold_s`), so a
+/// late first frame cannot skip the grow — wall-clock timing did that when the
+/// 3D window was not continuously redrawing.
+#[derive(Clone, Debug)]
+pub struct QsoArcIntro {
+    pub lat: f64,
+    pub lon: f64,
+    pub call: Option<String>,
+    /// Maidenhead locator that placed the landing, for the click tip.
+    pub grid: String,
+    /// SNR of the decode that spawned this intro, when known.
+    pub snr_db: Option<i16>,
+    /// Linear 0…1 grow of the curve. Eased when drawn.
+    pub progress: f32,
+    /// Seconds the destination has been held after the line finished (0 while
+    /// still growing).
+    pub hold_s: f32,
+}
+
+/// Seconds for the curve to grow from home to the far end.
+pub const QSO_INTRO_DRAW_S: f32 = 2.0;
+/// Seconds the destination dot holds at full presence after the line lands.
+pub const QSO_INTRO_HOLD_S: f32 = 2.5;
+
+impl QsoArcIntro {
+    pub fn new(
+        lat: f64,
+        lon: f64,
+        call: Option<String>,
+        grid: String,
+        snr_db: Option<i16>,
+    ) -> Self {
+        QsoArcIntro { lat, lon, call, grid, snr_db, progress: 0.0, hold_s: 0.0 }
+    }
+
+    pub fn tip(&self) -> crate::digi_map::DigiTip {
+        crate::digi_map::DigiTip {
+            call: self.call.as_deref().map(std::sync::Arc::from),
+            grid: self.grid.clone(),
+            snr_db: self.snr_db,
+            band: None,
+            lat: self.lat,
+            lon: self.lon,
+        }
+    }
+
+    /// 0…1 eased for drawing (ease-out cubic).
+    pub fn draw_progress(&self) -> f32 {
+        let t = self.progress.clamp(0.0, 1.0);
+        1.0 - (1.0 - t).powi(3)
+    }
+
+    pub fn line_done(&self) -> bool {
+        self.progress >= 1.0
+    }
+
+    pub fn expired(&self) -> bool {
+        self.progress >= 1.0 && self.hold_s >= QSO_INTRO_HOLD_S
+    }
+
+    fn advance(&mut self, dt: f32) {
+        if self.progress < 1.0 {
+            self.progress = (self.progress + dt / QSO_INTRO_DRAW_S).min(1.0);
+        } else {
+            self.hold_s += dt;
+        }
+    }
+}
+
 /// The contact in progress, as the card over the arc's apex reports it.
 ///
 /// Assembled where the traffic layer is built, because that is the one place
@@ -424,6 +507,8 @@ impl SolarUi {
             sim_offset_s: 0.0,
             data: None,
             digi: DigiTraffic::default(),
+            qso_intros: Vec::new(),
+            digi_tip: None,
             qso_card: None,
             awards: Default::default(),
             prop: Default::default(),
@@ -442,6 +527,8 @@ impl SolarUi {
             visualize_sat: None,
             visualize_frame_az: None,
             view_fly: super::camera::ViewFly::default(),
+            decode_fly: None,
+            decode_fly_restart: false,
             fly_home_pending: true,
             sat_passes: None,
             focus_override: None,
@@ -459,6 +546,50 @@ impl SolarUi {
         }
         self.qth_grid = grid.to_string();
         self.qth = sdroxide_types::grid_to_latlon(grid);
+    }
+
+    /// Queue the "draw path, then destination" celebration for a located decode.
+    pub fn push_qso_intro(&mut self, hit: &crate::digi_map::DigiHit) {
+        let lat = hit.lat;
+        let lon = hit.lon;
+        // Already drawing this landing — don't restart mid-grow.
+        if self.qso_intros.iter().any(|i| {
+            !i.expired() && (i.lat - lat).abs() < 1e-4 && (i.lon - lon).abs() < 1e-4
+        }) {
+            return;
+        }
+        // Cap so a contest pile-up cannot leave an unbounded draw list.
+        if self.qso_intros.len() >= 24 {
+            self.qso_intros.remove(0);
+        }
+        self.qso_intros.push(QsoArcIntro::new(
+            lat,
+            lon,
+            hit.call.as_ref().map(|c| c.to_string()),
+            hit.grid.clone(),
+            hit.snr_db,
+        ));
+        // Newest landing wins the camera — older intros keep drawing.
+        self.decode_fly = Some((lat, lon));
+        self.decode_fly_restart = true;
+    }
+
+    /// Step intros with the solar viewport's frame `dt` (capped so a hitch
+    /// cannot finish the grow in one paint).
+    pub fn advance_qso_intros(&mut self, dt: f32) {
+        let dt = dt.clamp(0.0, 1.0 / 30.0);
+        for i in &mut self.qso_intros {
+            i.advance(dt);
+        }
+        self.qso_intros.retain(|i| !i.expired());
+    }
+
+    /// True while an intro is still growing toward `ll` — the full DX/preview
+    /// arc should wait so the grow animation is not buried under a finished line.
+    pub fn intro_growing_to(&self, ll: (f64, f64)) -> bool {
+        self.qso_intros.iter().any(|i| {
+            !i.line_done() && (i.lat - ll.0).abs() < 1e-4 && (i.lon - ll.1).abs() < 1e-4
+        })
     }
 
     pub fn focus(&self) -> Focus {

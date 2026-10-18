@@ -367,6 +367,14 @@ pub struct Pick {
     pub focus: Focus,
 }
 
+/// A digi station marker the pointer can click for a grid / SNR tip.
+pub struct DigiPick {
+    pub world: [f32; 3],
+    /// Screen radius of the grab area, pixels.
+    pub radius_px: f32,
+    pub tip: crate::digi_map::DigiTip,
+}
+
 #[derive(Default)]
 pub struct Scene {
     pub globals: Globals,
@@ -375,6 +383,7 @@ pub struct Scene {
     pub sprites: Vec<SpriteInst>,
     pub labels: Vec<Label>,
     pub picks: Vec<Pick>,
+    pub digi_picks: Vec<DigiPick>,
     /// The star field is a static buffer on the GPU, so it is a flag here
     /// rather than 1500 instances rebuilt every frame.
     pub draw_stars: bool,
@@ -2303,8 +2312,23 @@ fn digi_traffic(s: &mut Scene, st: &SolarUi, b: &Bodies, cam: &Camera, now: f64,
             if d.fade <= 0.0 {
                 continue;
             }
+            // Destination dot waits until the intro curve finishes.
+            if st.intro_growing_to((d.lat, d.lon)) {
+                continue;
+            }
+            let world = to_world(ephem::geodetic_to_body(d.lat, d.lon), MARK_LIFT);
+            // Only near-side markers are clickable — same rule as station labels.
+            let dir = b.surface_dir(d.lat, d.lon);
+            if faces_camera(cam, dir, world) {
+                s.digi_picks.push(DigiPick {
+                    world: world.arr(),
+                    // Larger than the painted dot so a 4 px marker is still a target.
+                    radius_px: (12.0 + 4.0 * d.fade).min(earth_px * 1.2).max(10.0),
+                    tip: d.tip(),
+                });
+            }
             s.sprites.push(SpriteInst {
-                center: to_world(ephem::geodetic_to_body(d.lat, d.lon), MARK_LIFT).arr(),
+                center: world.arr(),
                 size_px: (4.0 + 3.0 * d.fade).min(earth_px * 0.9),
                 color: lin(ink::TEXT_STRONG, 0.85 * d.fade * fade),
                 params: [SPRITE_DOT, 0.0, 0.0, 0.0],
@@ -2340,6 +2364,9 @@ fn digi_traffic(s: &mut Scene, st: &SolarUi, b: &Bodies, cam: &Camera, now: f64,
 
     lapse_arcs(s, st, b, cam, &to_world, home, earth_px, fade, now, anim_t, names);
 
+    // New QSO / DX / preview: the path grows from home, then the far-end dot.
+    qso_intro_arcs(s, st, b, cam, &to_world, home, earth_px, fade, names);
+
     // The contact being worked, and the decode clicked but not yet answered.
     //
     // Green for the live path: it is the one arc on the globe that is *this*
@@ -2347,10 +2374,16 @@ fn digi_traffic(s: &mut Scene, st: &SolarUi, b: &Bodies, cam: &Camera, now: f64,
     // ring under one end of it is the same colour. Everything else the QSO
     // layer draws is cyan cooling to violet, so the contact never has to
     // compete with the traffic for attention.
+    //
+    // While an intro is still growing to the same landing, skip the full arc
+    // so the grow animation is visible (preview and DX alike).
     for (target, color, width, active) in
         [(st.digi.dx, ink::GREEN, 5.2, true), (st.digi.preview, ink::YELLOW, 1.6, false)]
     {
         let Some(dx) = target else { continue };
+        if st.intro_growing_to(dx) {
+            continue;
+        }
         arc(
             s,
             b,
@@ -2409,6 +2442,97 @@ fn digi_traffic(s: &mut Scene, st: &SolarUi, b: &Bodies, cam: &Camera, now: f64,
     }
 }
 
+/// Celebrate a QSO: grow the great-circle from the QTH, then land a destination
+/// marker once the tip arrives.
+#[allow(clippy::too_many_arguments)]
+fn qso_intro_arcs(
+    s: &mut Scene,
+    st: &SolarUi,
+    b: &Bodies,
+    cam: &Camera,
+    to_world: &impl Fn(sdroxide_solar::Vec3, f32) -> V3,
+    home: (f64, f64),
+    earth_px: f32,
+    fade: f32,
+    names: bool,
+) {
+    const STEPS: usize = 96;
+    for intro in &st.qso_intros {
+        let progress = intro.draw_progress();
+        if progress <= 0.0 {
+            continue;
+        }
+        let dest = (intro.lat, intro.lon);
+        let Some(pts) = arc_points(to_world, home, dest, STEPS, 1.0) else { continue };
+        // pts has STEPS+1 vertices; grow through the first `n` segments.
+        let n = ((progress * STEPS as f32).ceil() as usize).clamp(1, STEPS);
+        let color = ink::GREEN;
+        for w in 0..n {
+            let mid = (w as f32 + 0.5) / STEPS as f32;
+            s.lines.push(seg(
+                pts[w],
+                pts[w + 1],
+                5.5,
+                lin(color, (0.16 + 0.12 * mid) * fade),
+            ));
+        }
+        for w in 0..n {
+            s.lines.push(seg(
+                pts[w],
+                pts[w + 1],
+                3.2,
+                lin(color, (0.6 + 0.35 * progress) * fade),
+            ));
+        }
+        // Tip glow while the line is still growing.
+        if !intro.line_done() {
+            s.sprites.push(SpriteInst {
+                center: pts[n].arr(),
+                size_px: 20.0,
+                color: lin(mix(color, ink::TEXT_STRONG, 0.5), 0.95 * fade),
+                params: [SPRITE_GLOW, 0.0, 0.0, 0.0],
+            });
+        } else {
+            // Destination lands only after the curve completes — a short pop.
+            let pop = (1.0 + 0.55 * (-intro.hold_s * 6.0).exp()).min(1.7);
+            let world = to_world(ephem::geodetic_to_body(dest.0, dest.1), MARK_LIFT);
+            let dir = b.surface_dir(dest.0, dest.1);
+            if faces_camera(cam, dir, world) {
+                s.digi_picks.push(DigiPick {
+                    world: world.arr(),
+                    radius_px: (14.0 * pop).min(earth_px * 1.2).max(12.0),
+                    tip: intro.tip(),
+                });
+            }
+            s.sprites.push(SpriteInst {
+                center: world.arr(),
+                size_px: (10.0 * pop).min(earth_px * 0.85),
+                color: lin(color, 0.95 * fade),
+                params: [SPRITE_DOT, 0.0, 0.0, 0.0],
+            });
+            s.sprites.push(SpriteInst {
+                center: world.arr(),
+                size_px: (20.0 * pop).min(earth_px * 1.2),
+                color: lin(color, 0.4 * fade),
+                params: [SPRITE_RING, 0.0, 0.0, 0.0],
+            });
+            if names
+                && let Some(call) = intro.call.as_deref()
+            {
+                station_label(
+                    s,
+                    b,
+                    cam,
+                    dest,
+                    call,
+                    lin_color(color, 0.95 * fade),
+                    RANK_ALWAYS,
+                );
+            }
+        }
+    }
+}
+
 /// The last hour of decodes as fading arcs, newest first.
 ///
 /// Walking the history backwards is what makes the cap honest: what gets
@@ -2444,6 +2568,11 @@ fn lapse_arcs(
         }
         if age > trail {
             break; // ordered, so everything further back is older still
+        }
+        // An intro growing to this landing owns the path — a full history arc
+        // underneath would make the grow look like it never happened.
+        if st.intro_growing_to((hit.lat, hit.lon)) {
+            continue;
         }
         let k = (1.0 - age / trail) as f32; // 1 at the head, 0 at the tail
         let alpha = k * k * fade;
@@ -3453,11 +3582,26 @@ mod tests {
     const NEW_YORK: (f64, f64) = (40.7, -74.0);
 
     fn station((lat, lon): (f64, f64), fade: f32, call: &str) -> crate::digi_map::DigiStation {
-        crate::digi_map::DigiStation { lat, lon, fade, call: Some(call.into()), band: None }
+        crate::digi_map::DigiStation {
+            lat,
+            lon,
+            fade,
+            call: Some(call.into()),
+            grid: sdroxide_types::latlon_to_grid(lat, lon),
+            snr_db: Some(-10),
+            band: None,
+        }
     }
 
     fn hit((lat, lon): (f64, f64), slot_utc: i64, call: &str) -> crate::digi_map::DigiHit {
-        crate::digi_map::DigiHit { lat, lon, slot_utc, call: Some(call.into()) }
+        crate::digi_map::DigiHit {
+            lat,
+            lon,
+            slot_utc,
+            call: Some(call.into()),
+            grid: sdroxide_types::latlon_to_grid(lat, lon),
+            snr_db: Some(-10),
+        }
     }
 
     /// Framed on the Earth, with a contact on the other side of the planet.

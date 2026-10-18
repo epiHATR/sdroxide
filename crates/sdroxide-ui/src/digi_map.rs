@@ -51,6 +51,10 @@ pub struct DigiHit {
     /// than copied: the same call recurs in slot after slot, and the whole
     /// history is republished into the globe every frame.
     pub call: Option<Arc<str>>,
+    /// Maidenhead locator that placed this hit (as reported in the decode).
+    pub grid: String,
+    /// SNR of that slot, when the feed carried one.
+    pub snr_db: Option<i16>,
 }
 
 /// One station currently on the map: where it is, how brightly, and who it is.
@@ -63,6 +67,10 @@ pub struct DigiStation {
     /// The callsign heard there. `None` for a mode that placed a station
     /// without naming one.
     pub call: Option<Arc<str>>,
+    /// Maidenhead locator of the newest reception that lit this dot.
+    pub grid: String,
+    /// SNR of that newest reception, when the feed carried one.
+    pub snr_db: Option<i16>,
     /// The band the reception was on, where the feed carries a frequency.
     ///
     /// Only WSPR fills this in, and only because it is the one mode whose map
@@ -71,6 +79,45 @@ pub struct DigiStation {
     /// (issue #316). A mode that stays on one band all evening gains nothing
     /// from a hue, so it leaves this `None` and keeps the neutral dot.
     pub band: Option<sdroxide_types::Band>,
+}
+
+/// What a click on a digi marker shows: call, grid, signal, and where it sits.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DigiTip {
+    pub call: Option<Arc<str>>,
+    pub grid: String,
+    pub snr_db: Option<i16>,
+    pub band: Option<sdroxide_types::Band>,
+    pub lat: f64,
+    pub lon: f64,
+}
+
+impl DigiStation {
+    /// Tip payload for a click on this station's marker.
+    pub fn tip(&self) -> DigiTip {
+        DigiTip {
+            call: self.call.clone(),
+            grid: self.grid.clone(),
+            snr_db: self.snr_db,
+            band: self.band,
+            lat: self.lat,
+            lon: self.lon,
+        }
+    }
+}
+
+impl DigiHit {
+    /// Tip payload for a click on this history / intro landing.
+    pub fn tip(&self) -> DigiTip {
+        DigiTip {
+            call: self.call.clone(),
+            grid: self.grid.clone(),
+            snr_db: self.snr_db,
+            band: None,
+            lat: self.lat,
+            lon: self.lon,
+        }
+    }
 }
 
 /// What is known about one station between decodes.
@@ -82,6 +129,8 @@ struct Seen {
     lat: f64,
     lon: f64,
     call: Option<Arc<str>>,
+    grid: String,
+    snr_db: Option<i16>,
     band: Option<sdroxide_types::Band>,
 }
 
@@ -104,6 +153,9 @@ pub struct DigiStations {
     recorded: HashSet<(String, i64)>,
     /// How long a station stays lit after it was last heard.
     fade_s: f64,
+    /// Located decodes not yet handed to the 3D grow-arc intro. Drained by
+    /// [`DigiStations::take_arc_intros`].
+    pending_intros: Vec<DigiHit>,
 }
 
 impl Default for DigiStations {
@@ -113,6 +165,7 @@ impl Default for DigiStations {
             history: Arc::new(Vec::new()),
             recorded: HashSet::new(),
             fade_s: STATION_FADE_S,
+            pending_intros: Vec::new(),
         }
     }
 }
@@ -140,7 +193,16 @@ impl DigiStations {
         let mut fresh: Vec<DigiHit> = Vec::new();
         for d in decodes {
             let Some(grid) = d.grid.as_deref() else { continue };
-            self.note(d.from.as_deref(), grid, None, d.slot_utc, now_t, now_utc, &mut fresh);
+            self.note(
+                d.from.as_deref(),
+                grid,
+                None,
+                Some(d.snr_db),
+                d.slot_utc,
+                now_t,
+                now_utc,
+                &mut fresh,
+            );
         }
         self.retire(fresh, now_t, cutoff(now_utc));
     }
@@ -152,6 +214,7 @@ impl DigiStations {
         call: Option<&str>,
         grid: &str,
         band: Option<sdroxide_types::Band>,
+        snr_db: Option<i16>,
         slot_utc: i64,
         now_t: f64,
         now_utc: i64,
@@ -167,6 +230,8 @@ impl DigiStations {
             lat,
             lon,
             call: None,
+            grid: grid.to_string(),
+            snr_db: None,
             band: None,
         });
         if slot_utc > e.slot {
@@ -176,6 +241,8 @@ impl DigiStations {
             e.at = now_t;
             e.lat = lat;
             e.lon = lon;
+            e.grid = grid.to_string();
+            e.snr_db = snr_db;
             // Only re-allocate when the name actually changed: on a busy band
             // this runs a few hundred times a slot for calls that never move.
             if e.call.as_deref() != call {
@@ -197,7 +264,14 @@ impl DigiStations {
         let recorded = (key.to_string(), slot_utc);
         if !self.recorded.contains(&recorded) {
             self.recorded.insert(recorded);
-            fresh.push(DigiHit { lat, lon, slot_utc, call: hit_call });
+            fresh.push(DigiHit {
+                lat,
+                lon,
+                slot_utc,
+                call: hit_call,
+                grid: grid.to_string(),
+                snr_db,
+            });
         }
     }
 
@@ -226,7 +300,7 @@ impl DigiStations {
             // another region can land there.
             let band = Some(sdroxide_types::Band::containing(s.freq_hz))
                 .filter(|b| *b != sdroxide_types::Band::Gen);
-            self.note(call, grid, band, s.slot_utc, now_t, now_utc, &mut fresh);
+            self.note(call, grid, band, Some(s.snr_db), s.slot_utc, now_t, now_utc, &mut fresh);
         }
         self.retire(fresh, now_t, cutoff(now_utc));
     }
@@ -243,6 +317,13 @@ impl DigiStations {
             // appending: the history is oldest-first, and the globe walks it
             // backwards to take the newest arcs.
             fresh.sort_by_key(|h| h.slot_utc);
+            // Newest first for the globe intro — a busy slot should animate
+            // what just arrived, not the oldest of the batch.
+            self.pending_intros.extend(fresh.iter().rev().cloned());
+            if self.pending_intros.len() > 48 {
+                let n = self.pending_intros.len() - 48;
+                self.pending_intros.drain(0..n);
+            }
             let h = Arc::make_mut(&mut self.history);
             if expired {
                 h.retain(|e| e.slot_utc > cutoff);
@@ -252,6 +333,11 @@ impl DigiStations {
                 self.recorded.retain(|(_, slot)| *slot > cutoff);
             }
         }
+    }
+
+    /// Drain located decodes waiting for a 3D grow-arc intro.
+    pub fn take_arc_intros(&mut self) -> Vec<DigiHit> {
+        std::mem::take(&mut self.pending_intros)
     }
 
     /// The last hour of located decodes, oldest first.
@@ -270,6 +356,8 @@ impl DigiStations {
                     lon: e.lon,
                     fade,
                     call: e.call.clone(),
+                    grid: e.grid.clone(),
+                    snr_db: e.snr_db,
                     band: e.band,
                 })
             })
@@ -563,6 +651,10 @@ mod tests {
         s.observe(&[decode("FN42", 0)], 0.0, NOW);
         assert_eq!(s.stations(0.0)[0].call.as_deref(), Some("TEFN42"));
         assert_eq!(s.history()[0].call.as_deref(), Some("TEFN42"));
+        assert_eq!(s.stations(0.0)[0].grid, "FN42");
+        assert_eq!(s.stations(0.0)[0].snr_db, Some(-10));
+        assert_eq!(s.history()[0].grid, "FN42");
+        assert_eq!(s.history()[0].snr_db, Some(-10));
     }
 
     /// Two operators in one square are two stations. Keying on the square would

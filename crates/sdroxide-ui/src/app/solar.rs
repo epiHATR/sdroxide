@@ -25,7 +25,17 @@ impl SdroxideApp {
     /// place that knows a decode is new. Outside the digital modes the map
     /// simply ages out and empties.
     #[cfg(not(target_arch = "wasm32"))]
-    pub(in crate::app) fn digi_traffic(&self, now_t: f64) -> crate::solar3d::DigiTraffic {
+    pub(in crate::app) fn digi_traffic(&mut self, now_t: f64) -> crate::solar3d::DigiTraffic {
+        // A newly located FT8/FT4/… decode grows a path on the globe — not a
+        // completed logbook QSO, and not the sequencer's DX highlight.
+        if self.solar.open {
+            for hit in self.digi_stations.take_arc_intros() {
+                self.solar.push_qso_intro(&hit);
+            }
+        } else {
+            // Closed window: drop the queue so it cannot grow without a viewer.
+            let _ = self.digi_stations.take_arc_intros();
+        }
         let status = self.digi_status.as_ref();
         let mut traffic = self.digi_stations.traffic(
             now_t,
