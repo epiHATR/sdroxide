@@ -20,6 +20,7 @@
 //! `pub(in crate::app)`, which is as wide as anything here ever gets.
 
 pub(in crate::app) mod alerts;
+pub(in crate::app) mod audio;
 pub(in crate::app) mod awards;
 pub(in crate::app) mod bands;
 pub(in crate::app) mod drm;
@@ -132,6 +133,8 @@ pub(in crate::app) struct SystemWasOpen {
     pub bands: bool,
     pub sat: bool,
     pub ism: bool,
+    pub audio: bool,
+    /// Floating Public SDR browser (no longer a System-strip chip / dock).
     pub public_sdrs: bool,
     pub memories: bool,
     pub scanner: bool,
@@ -390,6 +393,14 @@ pub struct SdroxideApp {
     /// back with nothing.
     public_sdrs: Option<sdroxide_types::PublicSdrDirectory>,
     show_public_sdrs: bool,
+    /// System AUDIO panel (speakers / mic / WAV record).
+    show_audio: bool,
+    /// Wall-clock start of the current AF recording, for the Audio panel timer.
+    /// `None` while idle; set the first frame `state.recording` is true.
+    audio_rec_since: Option<f64>,
+    /// Seconds already accumulated on the Audio panel clock before the current
+    /// pause began — so a pause freezes the display and a resume continues.
+    audio_rec_elapsed_before_pause: f64,
     /// Asked once per opening of the window, so reopening it after an hour does
     /// not go on showing an hour-old list.
     public_sdrs_asked: bool,
@@ -1485,6 +1496,9 @@ impl SdroxideApp {
             kiwi_test_result: None,
             public_sdrs: None,
             show_public_sdrs: false,
+            show_audio: false,
+            audio_rec_since: None,
+            audio_rec_elapsed_before_pause: 0.0,
             public_sdrs_asked: false,
             public_sdr_search: String::new(),
             // Both on: the point of the window is to show what is out there.

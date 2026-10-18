@@ -74,6 +74,12 @@ impl LocalController {
         match result {
             Ok((input, consumer)) => {
                 let rate = input.sample_rate;
+                // Align the combo with what actually opened (stale saved names
+                // fall back to the host default and must not keep showing).
+                if self.in_name != input.device {
+                    self.in_name = input.device.clone();
+                    self.persist_selection();
+                }
                 self.mic_in = Some(input);
                 let _ = self.swap_tx.send(EngineSwap::Input(Some(MicParams { consumer, rate })));
             }
@@ -151,6 +157,7 @@ impl RadioController for LocalController {
             match sdroxide_audio::start_output(name.as_deref(), 48_000, self.routing) {
                 Ok((out, producer)) => {
                     let out_rate = out.sample_rate;
+                    self.out_name = out.device.clone();
                     self.audio_out = Some(out);
                     let _ = self
                         .swap_tx
@@ -158,17 +165,17 @@ impl RadioController for LocalController {
                 }
                 Err(e) => {
                     warn!("audio output {name:?}: {e}; running silent");
+                    self.out_name = name;
                     let _ = self.swap_tx.send(EngineSwap::Output(None));
                 }
             }
-            self.out_name = name;
         } else {
             // Release the old device and take the engine off it first, then
             // open the new one in the background: the operator picked from a
             // list, and that click must not freeze the UI for however long the
             // sound stack takes to answer. Assigning `pending_mic` drops any
             // open still in flight, so an earlier pick can never land on top of
-            // this one.
+            // this one. `in_name` is corrected when the open lands.
             self.mic_in = None;
             let _ = self.swap_tx.send(EngineSwap::Input(None));
             self.pending_mic = Some(sdroxide_audio::start_input_background(name.clone(), 48_000));

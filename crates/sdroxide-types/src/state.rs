@@ -594,6 +594,16 @@ pub struct RadioState {
     /// numbers fields by position.
     #[serde(default)]
     pub meshtastic: crate::MeshtasticSettings,
+    /// Prefer WAV over MP3 for the next audio recording — see
+    /// [`crate::Command::SetRecordingWav`]. Appended last: postcard numbers
+    /// fields by position.
+    #[serde(default)]
+    pub recording_wav: bool,
+    /// An active audio recording is paused (file stays open; no samples are
+    /// written). Cleared when recording stops. Appended last: postcard numbers
+    /// fields by position.
+    #[serde(default)]
+    pub recording_paused: bool,
 }
 
 impl Default for RadioState {
@@ -646,6 +656,8 @@ impl Default for RadioState {
             hfdl: crate::HfdlSettings::default(),
             rs41: crate::Rs41Settings::default(),
             meshtastic: crate::MeshtasticSettings::default(),
+            recording_wav: false,
+            recording_paused: false,
         }
     }
 }

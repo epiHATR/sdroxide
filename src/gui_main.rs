@@ -26,18 +26,19 @@ fn build_controller(
     rade: &Arc<RadeWatch>,
     tr: &Arc<TrSwitch>,
 ) -> LocalController {
-    let (audio_out, audio_params) = match sdroxide_audio::start_output(
+    let (audio_out, audio_params, out_name) = match sdroxide_audio::start_output(
         settings.audio_output.as_deref(),
         48_000,
         settings.audio_routing,
     ) {
         Ok((out, producer)) => {
             let rate = out.sample_rate;
-            (Some(out), Some(AudioParams { producer, out_rate: rate }))
+            let name = out.device.clone();
+            (Some(out), Some(AudioParams { producer, out_rate: rate }), name)
         }
         Err(e) => {
             warn!("no audio output ({e}); running silent");
-            (None, None)
+            (None, None, settings.audio_output.clone())
         }
     };
     // Opening the microphone is a blocking call into the sound stack, and that
@@ -73,11 +74,20 @@ fn build_controller(
         record_iq: boot.record_iq.clone(),
     };
     let handles = start_engine(boot.source, boot.caps, cfg);
+    // Heal a saved name that fell back to the host default so the Audio combo
+    // matches what is actually playing.
+    if out_name != settings.audio_output {
+        let mut s = settings.clone();
+        s.audio_output = out_name.clone();
+        if let Err(e) = s.save() {
+            warn!("saving corrected audio output selection: {e}");
+        }
+    }
     LocalController::new(
         handles,
         audio_out,
         pending_mic,
-        settings.audio_output.clone(),
+        out_name,
         settings.audio_input.clone(),
         settings.audio_routing,
         boot.store,
@@ -263,6 +273,7 @@ impl CpalBridge {
         self.out = None;
         match sdroxide_audio::start_output(self.out_name.as_deref(), 48_000, self.routing) {
             Ok((o, p)) => {
+                self.out_name = o.device.clone();
                 self._out = Some(o);
                 self.out = Some(p);
             }
@@ -285,6 +296,14 @@ impl CpalBridge {
         self.pending_mic = None;
         match result {
             Ok((i, c)) => {
+                if self.in_name != i.device {
+                    self.in_name = i.device.clone();
+                    let mut s = sdroxide_config::Settings::load();
+                    s.audio_input = self.in_name.clone();
+                    if let Err(e) = s.save() {
+                        warn!("saving corrected audio input selection: {e}");
+                    }
+                }
                 self.mic_resampler = sdroxide_dsp::MonoResampler::new(i.sample_rate, 48_000.0);
                 self._mic = Some(i);
                 self.mic = Some(c);
@@ -331,10 +350,10 @@ impl sdroxide_ui::AudioBridge for CpalBridge {
     fn set_device(&mut self, output: bool, name: Option<String>) {
         if output {
             self.out_name = name;
-            self.open_output();
+            self.open_output(); // corrects out_name to what actually opened
         } else {
             self.in_name = name;
-            self.open_input();
+            self.open_input(); // corrects in_name when the open lands
         }
         // Same persisted selection as the local app (same machine).
         let mut s = sdroxide_config::Settings::load();

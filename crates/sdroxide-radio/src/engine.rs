@@ -1433,6 +1433,9 @@ struct StereoMixer {
     /// Whether `rec_tap` was opened for a mono recording (one channel) rather
     /// than stereo (two) — must match what `Recorder::start` configured.
     rec_mono: bool,
+    /// Operator paused the recording: drain the tap queues but write nothing,
+    /// so the file stays open across the gap.
+    rec_paused: bool,
     /// Whether the recording's right channel has a source of its own: a sub
     /// receiver, or a stereo broadcast (WFM or DRM). When it hasn't, a stereo recording would be
     /// half silence — one ear of RX and, over on the other side, one ear of
@@ -1517,6 +1520,7 @@ impl StereoMixer {
             tx_rec_scratch: Vec::new(),
             rx_rec_enabled: true,
             rec_mono: false,
+            rec_paused: false,
             rec_split: false,
             duck: 1.0,
             tx_muted: false,
@@ -1591,9 +1595,10 @@ impl StereoMixer {
             // Recording tap: RX left, sub receiver (if any) right — and the
             // same RX in both when there is no second receiver to put there,
             // rather than a file with one silent ear. Suppressed by
-            // rx_rec_enabled while transmitting.
+            // rx_rec_enabled while transmitting. A pause drains the queues
+            // without writing, so the file stays open across the gap.
             self.rec_split = rec_dual;
-            if self.rx_rec_enabled {
+            if self.rx_rec_enabled && !self.rec_paused {
                 if let Some(rec) = self.rec_tap.as_mut() {
                     let need = if self.rec_mono { 1 } else { 2 };
                     for i in 0..rec_n {
@@ -1673,7 +1678,7 @@ impl StereoMixer {
     /// second receiver to keep them apart — see `rec_split`). Resampled from
     /// `TX_MONITOR_RATE` to match `rec_tap`.
     fn push_tx(&mut self, tx: &[f32]) {
-        if self.rec_tap.is_none() {
+        if self.rec_tap.is_none() || self.rec_paused {
             return;
         }
         let samples: &[f32] = match self.tx_rec_rs.as_mut() {
@@ -8537,6 +8542,15 @@ impl Engine {
                 }
             }
             SetRecordingMono(on) => self.state.recording_mono = on,
+            SetRecordingWav(on) => self.state.recording_wav = on,
+            SetRecordingPause(on) => {
+                if self.state.recording {
+                    self.state.recording_paused = on;
+                    if let Some(mixer) = self.mixer.as_mut() {
+                        mixer.rec_paused = on;
+                    }
+                }
+            }
             SetContestSerial(n) => {
                 let n = n.clamp(1, sdroxide_types::CONTEST_SERIAL_MAX);
                 if self.digi_config.contest_serial != n {
@@ -10399,17 +10413,24 @@ impl Engine {
         } else {
             RecordingChannels::Stereo
         };
-        match Recorder::start(path, self.audio_out_rate, channels) {
+        let format = if self.state.recording_wav {
+            crate::recorder::RecordingFormat::Wav
+        } else {
+            crate::recorder::RecordingFormat::Mp3
+        };
+        match Recorder::start_format(path, self.audio_out_rate, channels, format) {
             Ok((rec, prod)) => {
                 let mixer = self.mixer.as_mut().expect("checked above");
                 mixer.rec_tap = Some(prod);
                 mixer.rec_mono = self.state.recording_mono;
+                mixer.rec_paused = false;
                 // Whatever the last recording's layout was is no evidence
                 // about this one's; the first block re-latches it.
                 mixer.rec_split = false;
                 mixer.tx_rec_rs = MonoResampler::new(TX_MONITOR_RATE, self.audio_out_rate);
                 self.recorder = Some(rec);
                 self.state.recording = true;
+                self.state.recording_paused = false;
                 self.state.recording_file = Some(name);
             }
             Err(e) => {
@@ -10508,15 +10529,17 @@ impl Engine {
         if let Some(mixer) = self.mixer.as_mut() {
             mixer.rec_tap = None; // stop feeding before the worker drains + closes
             mixer.tx_rec_rs = None;
+            mixer.rec_paused = false;
         }
         if let Some(rec) = self.recorder.take() {
             rec.stop();
         }
         self.state.recording = false;
         self.state.recording_file = None;
+        self.state.recording_paused = false;
     }
 
-    /// `sdroxide_<UTC date>_<UTC time>_<freq>_<mode>.mp3`, filesystem-safe.
+    /// `sdroxide_<UTC date>_<UTC time>_<freq>_<mode>.mp3` (or `.wav`), filesystem-safe.
     fn recording_filename(&self) -> String {
         let secs = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
@@ -10532,8 +10555,9 @@ impl Engine {
             0 => String::new(),
             n => format!("_radio{n}"),
         };
+        let ext = if self.state.recording_wav { "wav" } else { "mp3" };
         format!(
-            "sdroxide{radio}_{y:04}-{mo:02}-{d:02}_{h:02}-{mi:02}-{s:02}Z_{mhz:.6}MHz_{mode}.mp3"
+            "sdroxide{radio}_{y:04}-{mo:02}-{d:02}_{h:02}-{mi:02}-{s:02}Z_{mhz:.6}MHz_{mode}.{ext}"
         )
     }
 

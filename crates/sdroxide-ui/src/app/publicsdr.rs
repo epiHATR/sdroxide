@@ -342,7 +342,7 @@ impl SdroxideApp {
             &mut self.system_was_open.public_sdrs,
             &mut self.system_center_pending.public_sdrs,
         );
-        if !self.show_public_sdrs && !self.system_docked_as(crate::app::SystemDock::PublicSdrs) {
+        if !self.show_public_sdrs {
             // Asked again the next time it opens, so a window reopened after an
             // hour is not showing an hour-old list.
             self.public_sdrs_asked = false;
@@ -369,34 +369,25 @@ impl SdroxideApp {
         let size =
             egui::vec2(crate::layout::window_w(ctx, 980.0), crate::layout::window_h(ctx, 520.0));
         let id = crate::layout::salted_id(ctx, "PUBLIC SDRS");
-        let docked = self.system_docked_as(crate::app::SystemDock::PublicSdrs);
         let pending = self.system_center_pending.public_sdrs;
-        let win = if docked {
-            self.system_dock_host("PUBLIC SDRS", id, crate::app::SystemDock::PublicSdrs)
-        } else {
-            Some(crate::layout::center_on_open(
-                egui::Window::new("PUBLIC SDRS")
-                    .id(id)
-                    .open(&mut open)
-                    .frame(crate::chrome::window_frame())
-                    .resizable(true)
-                    .default_width(size.x)
-                    .default_height(size.y),
-                ctx,
-                pending,
-                size,
-            ))
-        };
-        let resp = win.and_then(|win| {
-            win.show(ctx, |ui| {
-                crate::chrome::window_body_bg(ui);
-                if docked {
-                    self.clip_system_dock_body(ui, crate::app::SystemDock::PublicSdrs);
-                }
-                if let Some(blurb) = &blurb {
-                    answer = confirm_panel(ui, blurb);
-                    ui.add_space(6.0);
-                }
+        let resp = crate::layout::center_on_open(
+            egui::Window::new("PUBLIC SDRS")
+                .id(id)
+                .open(&mut open)
+                .frame(crate::chrome::window_frame())
+                .resizable(true)
+                .default_width(size.x)
+                .default_height(size.y),
+            ctx,
+            pending,
+            size,
+        )
+        .show(ctx, |ui| {
+            crate::chrome::window_body_bg(ui);
+            if let Some(blurb) = &blurb {
+                answer = confirm_panel(ui, blurb);
+                ui.add_space(6.0);
+            }
                 ui.horizontal(|ui| {
                     for (i, net) in PublicSdrNetwork::ALL.iter().enumerate() {
                         if crate::chrome::chip(ui, self.public_sdr_nets_shown[i], net.label())
@@ -534,20 +525,12 @@ impl SdroxideApp {
                         );
                     }
                 });
-            })
         });
-        if docked {
-            self.system_center_pending.public_sdrs = false;
-        } else if let Some(r) = &resp {
+        if let Some(r) = &resp {
             crate::chrome::paint_window_border(ctx, &r.response);
             self.system_center_pending.public_sdrs = false;
         }
-        if !docked && resp.as_ref().is_some_and(|r| self.system_title_pin(ctx, &r.response)) {
-            self.dock_system(crate::app::SystemDock::PublicSdrs);
-        }
-        if !docked {
-            self.show_public_sdrs = open;
-        }
+        self.show_public_sdrs = open;
 
         if refresh {
             self.public_sdrs = None;

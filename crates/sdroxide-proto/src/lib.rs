@@ -1580,11 +1580,17 @@ use sdroxide_types::{
 /// commercial region set — SG_923, JP, ANZ, MY_919, … — LongFast default
 /// centres match firmware slot hashing.
 ///
+/// v189: `Command::SetRecordingWav` + `RadioState::recording_wav` — Audio
+/// panel can ask the next QSO tape to be PCM WAV instead of MP3.
+///
+/// v190: `Command::SetRecordingPause` + `RadioState::recording_paused` —
+/// pause/resume an open QSO tape without closing the file.
+///
 /// v188: `MeshtasticSettings` gains channel PSK (`psk_kind` / `psk_simple` /
 /// `psk_bytes`) for LongFast AES-CTR; native soft-demod fills status.
 /// `SatConfig::watching` always serializes (empty included) so postcard
 /// layout of `StationConfig` stays aligned.
-pub const PROTO_VERSION: u16 = 188;
+pub const PROTO_VERSION: u16 = 190;
 const VERSION_BYTE: u8 = 0x12;
 
 #[derive(Debug, thiserror::Error)]

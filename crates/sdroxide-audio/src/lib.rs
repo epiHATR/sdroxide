@@ -444,6 +444,9 @@ pub struct AudioOutput {
     /// Channels the *card* opened with. Not the shape of what to write: the
     /// ring is interleaved stereo either way — see [`start_output`].
     pub channels: u16,
+    /// Named device that was opened, or `None` when the host default was used
+    /// (including when a saved name was missing and we fell back).
+    pub device: Option<String>,
     underruns: Arc<AtomicU64>,
 }
 
@@ -477,6 +480,9 @@ pub struct AudioInput {
     pub sample_rate: f64,
     /// Channels the capture stream actually runs with (1 = mono; IQ needs ≥2).
     pub channels: u16,
+    /// Named device that was opened, or `None` when the host default was used
+    /// (including when a saved name was missing and we fell back).
+    pub device: Option<String>,
     dropped: Arc<AtomicU64>,
     glitches: Arc<AtomicU64>,
 }
@@ -825,6 +831,20 @@ fn has_usable_config(device: &cpal::Device, output: bool) -> bool {
     }
 }
 
+/// What [`pick_device`] opened, and how the UI should remember it.
+///
+/// `selected` is `Some` only when the operator's named pick was found and used.
+/// Falling back to the host default (missing name, or `None` = system default)
+/// leaves `selected` as `None` so the dropdown shows "System default" instead of
+/// a stale name that is not actually open.
+struct PickedDevice {
+    device: cpal::Device,
+    /// Name used in log lines ("audio output running").
+    label: String,
+    /// Value to persist / show as the combo selection.
+    selected: Option<String>,
+}
+
 /// Find a device by the name it was picked by; falls back to the default device
 /// (with a warning) when the name is gone — e.g. the device was unplugged.
 /// Matches the enumerated name first, then the plain cpal name for configs saved
@@ -840,7 +860,7 @@ fn pick_device(
     host: &cpal::Host,
     name: Option<&str>,
     output: bool,
-) -> Result<(cpal::Device, String), AudioError> {
+) -> Result<PickedDevice, AudioError> {
     if let Some(want) = name {
         let all = enumerate_devices(host, output);
         // 1) enumerated-name match (all sub-PCMs of the card); 2) legacy plain
@@ -866,7 +886,12 @@ fn pick_device(
                 .copied()
                 .find(|&i| has_usable_config(&all[i].0, output))
                 .unwrap_or(idxs[0]);
-            return Ok(all.into_iter().nth(best).unwrap());
+            let (device, label) = all.into_iter().nth(best).unwrap();
+            return Ok(PickedDevice {
+                device,
+                selected: Some(label.clone()),
+                label,
+            });
         }
         warn!("audio device {want:?} not found; using default");
     }
@@ -874,7 +899,7 @@ fn pick_device(
         .ok_or(AudioError::NoDevice)?;
     let cards = alsa_cards();
     let label = device_display(&device, &cards).unwrap_or_else(|| "system default".into());
-    Ok((device, label))
+    Ok(PickedDevice { device, label, selected: None })
 }
 
 /// Open an input device (microphone) by name (`None` = system default) and
@@ -926,7 +951,7 @@ fn start_input_mono(
     costs_a_decode: bool,
 ) -> Result<(AudioInput, rtrb::Consumer<f32>), AudioError> {
     let host = cpal::default_host();
-    let (device, label) = pick_device(&host, device_name, false)?;
+    let PickedDevice { device, label, selected } = pick_device(&host, device_name, false)?;
 
     let picked = device
         .supported_input_configs()
@@ -968,6 +993,7 @@ fn start_input_mono(
                         _stream: stream,
                         sample_rate: rate as f64,
                         channels,
+                        device: selected.clone(),
                         dropped,
                         glitches,
                     },
@@ -1065,7 +1091,7 @@ pub fn start_input_stereo(
     preferred_rate: u32,
 ) -> Result<(AudioInput, rtrb::Consumer<f32>), AudioError> {
     let host = cpal::default_host();
-    let (device, label) = pick_device(&host, device_name, false)?;
+    let PickedDevice { device, label, selected } = pick_device(&host, device_name, false)?;
 
     let picked = device
         .supported_input_configs()
@@ -1128,6 +1154,7 @@ pub fn start_input_stereo(
                         _stream: stream,
                         sample_rate: rate as f64,
                         channels,
+                        device: selected.clone(),
                         dropped,
                         glitches,
                     },
@@ -1166,7 +1193,7 @@ pub fn start_output(
     routing: AudioRouting,
 ) -> Result<(AudioOutput, rtrb::Producer<f32>), AudioError> {
     let host = cpal::default_host();
-    let (device, label) = pick_device(&host, device_name, true)?;
+    let PickedDevice { device, label, selected } = pick_device(&host, device_name, true)?;
 
     let picked = device
         .supported_output_configs()
@@ -1192,7 +1219,13 @@ pub fn start_output(
             Ok(stream) => {
                 info!(rate, channels, format = ?fmt, device = %label, "audio output running");
                 return Ok((
-                    AudioOutput { stream, sample_rate: rate as f64, channels, underruns },
+                    AudioOutput {
+                        stream,
+                        sample_rate: rate as f64,
+                        channels,
+                        device: selected.clone(),
+                        underruns,
+                    },
                     producer,
                 ));
             }

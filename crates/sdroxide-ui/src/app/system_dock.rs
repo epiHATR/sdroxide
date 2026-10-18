@@ -28,7 +28,7 @@ mod persist_id_tests {
             SystemDock::Bands,
             SystemDock::Sat,
             SystemDock::Ism,
-            SystemDock::PublicSdrs,
+            SystemDock::Audio,
             SystemDock::Mail,
             SystemDock::Memories,
             SystemDock::Scanner,
@@ -50,7 +50,8 @@ pub(in crate::app) enum SystemDock {
     Bands,
     Sat,
     Ism,
-    PublicSdrs,
+    /// Speakers / mic / WAV record — replaced the Public SDR strip chip.
+    Audio,
     Mail,
     Memories,
     Scanner,
@@ -67,7 +68,7 @@ impl SystemDock {
             Self::Bands => "BANDS",
             Self::Sat => "SATELLITE",
             Self::Ism => "ISM DEVICES",
-            Self::PublicSdrs => "PUBLIC SDRS",
+            Self::Audio => "AUDIO",
             Self::Mail => "MAIL",
             Self::Memories => "MEMORIES",
             Self::Scanner => "SCANNER",
@@ -86,7 +87,7 @@ impl SystemDock {
             Self::Bands => "bands",
             Self::Sat => "sat",
             Self::Ism => "ism",
-            Self::PublicSdrs => "public_sdrs",
+            Self::Audio => "audio",
             Self::Mail => "mail",
             Self::Memories => "memories",
             Self::Scanner => "scanner",
@@ -103,7 +104,8 @@ impl SystemDock {
             "bands" => Self::Bands,
             "sat" => Self::Sat,
             "ism" => Self::Ism,
-            "public_sdrs" => Self::PublicSdrs,
+            // Old Public SDR dock snapshots reopen as Audio.
+            "audio" | "public_sdrs" => Self::Audio,
             "mail" => Self::Mail,
             "memories" => Self::Memories,
             "scanner" => Self::Scanner,
@@ -121,7 +123,7 @@ impl SystemDock {
             Self::Bands => app.show_bands,
             Self::Sat => app.show_sat,
             Self::Ism => app.show_ism,
-            Self::PublicSdrs => app.show_public_sdrs,
+            Self::Audio => app.show_audio,
             Self::Mail => app.mail.open,
             Self::Memories => app.show_memories,
             Self::Scanner => app.show_scanner,
@@ -138,7 +140,7 @@ impl SystemDock {
             Self::Bands => app.show_bands = open,
             Self::Sat => app.show_sat = open,
             Self::Ism => app.show_ism = open,
-            Self::PublicSdrs => app.show_public_sdrs = open,
+            Self::Audio => app.show_audio = open,
             Self::Mail => app.mail.open = open,
             Self::Memories => app.show_memories = open,
             Self::Scanner => app.show_scanner = open,
@@ -161,7 +163,7 @@ impl SystemDock {
             Self::Bands => &mut p.bands,
             Self::Sat => &mut p.sat,
             Self::Ism => &mut p.ism,
-            Self::PublicSdrs => &mut p.public_sdrs,
+            Self::Audio => &mut p.audio,
             Self::Memories => &mut p.memories,
             Self::Scanner => &mut p.scanner,
             Self::Grid => &mut p.grid,
@@ -750,14 +752,6 @@ impl SdroxideApp {
                                                         ui.horizontal(|ui| {
                                                             let icon =
                                                                 ui.spacing().icon_width;
-                                                            // Reserved grip slot — painted
-                                                            // only while the drag bar is
-                                                            // hovered (not over buttons).
-                                                            let (grip_rect, _) = ui
-                                                                .allocate_exact_size(
-                                                                    egui::vec2(icon, icon),
-                                                                    egui::Sense::hover(),
-                                                                );
                                                             let (_, icon_resp) = ui
                                                                 .allocate_exact_size(
                                                                     egui::vec2(icon, icon),
@@ -894,7 +888,9 @@ impl SdroxideApp {
                                                                     );
                                                                 }
                                                             } else if !over_controls {
-                                                                let drag_resp = ui
+                                                                // Header drag still reorders;
+                                                                // no grip glyph before the title.
+                                                                let _ = ui
                                                                     .interact(
                                                                         header_rect,
                                                                         drag_id,
@@ -906,23 +902,6 @@ impl SdroxideApp {
                                                                     .on_hover_text(
                                                                         "Drag to reorder",
                                                                     );
-                                                                if drag_resp.hovered()
-                                                                    || drag_resp
-                                                                        .contains_pointer()
-                                                                {
-                                                                    // Six-dot grip — only
-                                                                    // while the bar (not a
-                                                                    // button) is hovered.
-                                                                    ui.painter().text(
-                                                                        grip_rect.center(),
-                                                                        egui::Align2::CENTER_CENTER,
-                                                                        "⠿",
-                                                                        egui::FontId::proportional(
-                                                                            icon * 0.95,
-                                                                        ),
-                                                                        crate::theme::gray(90),
-                                                                    );
-                                                                }
                                                             }
                                                         });
                                                     },

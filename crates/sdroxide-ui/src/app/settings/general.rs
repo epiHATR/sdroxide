@@ -38,8 +38,20 @@ pub(in crate::app) fn device_combo(
     selected: &Option<String>,
     mut pick: impl FnMut(Option<String>),
 ) {
+    device_combo_width(ui, id, names, selected, 300.0, &mut pick);
+}
+
+/// Like [`device_combo`], with an explicit combo width (Audio panel fills the row).
+pub(in crate::app) fn device_combo_width(
+    ui: &mut egui::Ui,
+    id: &str,
+    names: &[String],
+    selected: &Option<String>,
+    width: f32,
+    mut pick: impl FnMut(Option<String>),
+) {
     let shown = selected.clone().unwrap_or_else(|| "System default".into());
-    ComboBox::from_id_salt(id).width(300.0).selected_text(shown).show_styled(ui, |ui| {
+    ComboBox::from_id_salt(id).width(width).selected_text(shown).show_styled(ui, |ui| {
         if ui.selectable_label(selected.is_none(), "System default").clicked() {
             pick(None);
         }

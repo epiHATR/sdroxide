@@ -1219,4 +1219,17 @@ pub enum Command {
     /// parks the dial on that region's centre and echoes the config in
     /// [`crate::RadioState::meshtastic`]. Appended for the usual reason.
     SetMeshtasticConfig(crate::MeshtasticSettings),
+
+    /// Whether the *next* audio recording writes a WAV (PCM) file instead of
+    /// MP3. Takes effect on the next [`Command::SetRecording`]`(true)`, not on
+    /// a recording already running. The Audio system panel turns this on; the
+    /// top-bar REC popup leaves it off for the historical MP3 QSO tape.
+    ///
+    /// Appended for the usual reason — postcard numbers variants by position.
+    SetRecordingWav(bool),
+
+    /// Pause (`true`) or resume (`false`) an active audio recording without
+    /// closing the file. No effect when nothing is recording. Appended for the
+    /// usual reason.
+    SetRecordingPause(bool),
 }

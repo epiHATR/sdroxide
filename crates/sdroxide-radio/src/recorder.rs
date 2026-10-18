@@ -14,7 +14,7 @@
 //! being switched on, never has to reinitialise the encoder mid-file.
 
 use std::fs::File;
-use std::io::{BufWriter, Write};
+use std::io::{BufWriter, Seek, SeekFrom, Write};
 use std::panic::AssertUnwindSafe;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -68,6 +68,14 @@ impl RecordingChannels {
     }
 }
 
+/// Container format for a QSO tape.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecordingFormat {
+    Mp3,
+    /// 16-bit PCM WAV at the encode rate (48 kHz after resample).
+    Wav,
+}
+
 /// How many times the encoder may be rebuilt around a panic before the
 /// recording is given up on.
 ///
@@ -115,6 +123,16 @@ impl Recorder {
         in_rate: f64,
         channels: RecordingChannels,
     ) -> std::io::Result<(Recorder, Producer<f32>)> {
+        Self::start_format(path, in_rate, channels, RecordingFormat::Mp3)
+    }
+
+    /// Like [`Self::start`], choosing MP3 or PCM WAV.
+    pub fn start_format(
+        path: PathBuf,
+        in_rate: f64,
+        channels: RecordingChannels,
+        format: RecordingFormat,
+    ) -> std::io::Result<(Recorder, Producer<f32>)> {
         let file = File::create(&path)?;
         // ~4 s of slack so a brief disk stall drops nothing.
         let cap = (in_rate as usize).max(MP3_RATE as usize) * 4 * channels.count();
@@ -125,13 +143,22 @@ impl Recorder {
         let health = Health { failed: failed.clone(), glitched: glitched.clone() };
         let stop_worker = stop.clone();
         let path_worker = path.clone();
+        let name = match format {
+            RecordingFormat::Mp3 => "mp3-recorder",
+            RecordingFormat::Wav => "wav-recorder",
+        };
         let join = std::thread::Builder::new()
-            .name("mp3-recorder".into())
-            .spawn(move || {
-                encode_loop(cons, file, in_rate, channels, stop_worker, path_worker, health)
+            .name(name.into())
+            .spawn(move || match format {
+                RecordingFormat::Mp3 => {
+                    encode_loop(cons, file, in_rate, channels, stop_worker, path_worker, health)
+                }
+                RecordingFormat::Wav => {
+                    wav_loop(cons, file, in_rate, channels, stop_worker, path_worker, health)
+                }
             })
             .expect("spawn recorder thread");
-        info!(path = %path.display(), "recording started");
+        info!(path = %path.display(), ?format, "recording started");
         Ok((Recorder { stop, join: Some(join), failed, glitched, path }, prod))
     }
 
@@ -234,6 +261,133 @@ fn encode_loop(
         }
     }
     let _ = file.flush();
+}
+
+/// PCM WAV path used by the Audio system panel. Same ring / resample pipeline
+/// as the MP3 tape; the container is 16-bit little-endian PCM at 48 kHz.
+fn wav_loop(
+    mut cons: Consumer<f32>,
+    file: File,
+    in_rate: f64,
+    channels: RecordingChannels,
+    stop: Arc<AtomicBool>,
+    path: PathBuf,
+    health: Health,
+) {
+    let nch = channels.count() as u16;
+    let rate = MP3_RATE as u32;
+    let mut file = match file.try_clone() {
+        Ok(f) => BufWriter::new(f),
+        Err(e) => {
+            health.failed.store(true, Ordering::Relaxed);
+            error!(path = %path.display(), error = %e, "wav recorder: clone file handle");
+            return;
+        }
+    };
+    // Header with zero sizes; rewritten once we know the data length.
+    if let Err(e) = write_wav_header(&mut file, nch, rate, 0) {
+        health.failed.store(true, Ordering::Relaxed);
+        error!(path = %path.display(), error = %e, "wav recorder: header");
+        return;
+    }
+    let mut rs_mono = (nch == 1).then(|| MonoResampler::new(in_rate, MP3_RATE as f64)).flatten();
+    let mut rs_stereo = (nch == 2).then(|| StereoResampler::new(in_rate, MP3_RATE as f64)).flatten();
+    let mut pending = Vec::new();
+    let mut out = Vec::new();
+    let mut data_bytes: u64 = 0;
+    while !stop.load(Ordering::Relaxed) {
+        let mut got = false;
+        while let Ok(s) = cons.pop() {
+            pending.push(s);
+            got = true;
+        }
+        if !got {
+            std::thread::sleep(Duration::from_millis(5));
+            continue;
+        }
+        out.clear();
+        match (rs_stereo.as_mut(), rs_mono.as_mut()) {
+            (Some(r), _) => r.push(&pending, &mut out),
+            (None, Some(r)) => r.push(&pending, &mut out),
+            (None, None) => out.extend_from_slice(&pending),
+        }
+        pending.clear();
+        if out.is_empty() {
+            continue;
+        }
+        for &s in &out {
+            let v = (s.clamp(-1.0, 1.0) * 32767.0) as i16;
+            if let Err(e) = file.write_all(&v.to_le_bytes()) {
+                health.failed.store(true, Ordering::Relaxed);
+                error!(path = %path.display(), error = %e, "wav recorder: write");
+                return;
+            }
+            data_bytes += 2;
+        }
+    }
+    // Drain whatever is left after stop.
+    while let Ok(s) = cons.pop() {
+        pending.push(s);
+    }
+    if !pending.is_empty() {
+        out.clear();
+        match (rs_stereo.as_mut(), rs_mono.as_mut()) {
+            (Some(r), _) => r.push(&pending, &mut out),
+            (None, Some(r)) => r.push(&pending, &mut out),
+            (None, None) => out.extend_from_slice(&pending),
+        }
+        for &s in &out {
+            let v = (s.clamp(-1.0, 1.0) * 32767.0) as i16;
+            let _ = file.write_all(&v.to_le_bytes());
+            data_bytes += 2;
+        }
+    }
+    let _ = file.flush();
+    // Patch RIFF sizes.
+    let mut raw = match file.into_inner() {
+        Ok(f) => f,
+        Err(e) => {
+            health.failed.store(true, Ordering::Relaxed);
+            error!(path = %path.display(), error = %e, "wav recorder: flush");
+            return;
+        }
+    };
+    if let Err(e) = patch_wav_sizes(&mut raw, data_bytes) {
+        health.failed.store(true, Ordering::Relaxed);
+        error!(path = %path.display(), error = %e, "wav recorder: patch sizes");
+    }
+}
+
+fn write_wav_header(
+    f: &mut impl Write,
+    channels: u16,
+    sample_rate: u32,
+    data_bytes: u32,
+) -> std::io::Result<()> {
+    let byte_rate = sample_rate * u32::from(channels) * 2;
+    let block_align = channels * 2;
+    f.write_all(b"RIFF")?;
+    f.write_all(&(36 + data_bytes).to_le_bytes())?;
+    f.write_all(b"WAVEfmt ")?;
+    f.write_all(&16u32.to_le_bytes())?;
+    f.write_all(&1u16.to_le_bytes())?;
+    f.write_all(&channels.to_le_bytes())?;
+    f.write_all(&sample_rate.to_le_bytes())?;
+    f.write_all(&byte_rate.to_le_bytes())?;
+    f.write_all(&block_align.to_le_bytes())?;
+    f.write_all(&16u16.to_le_bytes())?;
+    f.write_all(b"data")?;
+    f.write_all(&data_bytes.to_le_bytes())?;
+    Ok(())
+}
+
+fn patch_wav_sizes(f: &mut File, data_bytes: u64) -> std::io::Result<()> {
+    let data_bytes = data_bytes.min(u32::MAX as u64) as u32;
+    f.seek(SeekFrom::Start(4))?;
+    f.write_all(&(36 + data_bytes).to_le_bytes())?;
+    f.seek(SeekFrom::Start(40))?;
+    f.write_all(&data_bytes.to_le_bytes())?;
+    f.flush()
 }
 
 /// One encode session: build an encoder, drain and encode until asked to stop,

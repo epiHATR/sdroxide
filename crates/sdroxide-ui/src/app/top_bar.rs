@@ -3483,6 +3483,10 @@ impl SdroxideApp {
             )
             .clicked()
             {
+                // Historical QSO tape stays MP3; the Audio panel asks for WAV.
+                if !audio {
+                    cmds.push(Command::SetRecordingWav(false));
+                }
                 cmds.push(Command::SetRecording(!audio));
             }
             // Channel layout is a property of the *next* recording — the
@@ -3534,6 +3538,7 @@ impl SdroxideApp {
                     // is asked for and the span is armed once it is up.
                     self.rec_gate_s = None;
                     self.rec_gate = Default::default();
+                    cmds.push(Command::SetRecordingWav(false));
                     if audio {
                         self.recording_stop_at = Some((now + i64::from(secs), secs));
                         self.rec_clip = None;
@@ -5546,7 +5551,7 @@ impl SdroxideApp {
     /// The first five window chips — the condensed System box's top row.
     /// `extra` stretches each chip past its label; the popup passes 0.
     fn system_chips_top(&mut self, ui: &mut egui::Ui, extra: f32) {
-        let [log, spots, awards, bands, sat_label, ism, public_sdrs] = SYSTEM_CHIPS_TOP;
+        let [log, spots, awards, bands, sat_label, ism, audio] = SYSTEM_CHIPS_TOP;
         if chip_stretched(ui, self.show_logbook, log, extra)
             .on_hover_text("Logbook — all QSOs (digital + manual)")
             .clicked()
@@ -5637,20 +5642,14 @@ impl SdroxideApp {
         {
             self.show_ism = !self.show_ism;
         }
-        // Named for what it lists rather than for the WebSDR network, which is
-        // the one thing it does *not* list: PA3FWM's receivers speak a
-        // proprietary codec their author asks third-party clients to stay away
-        // from, and OpenWebRX has neither a stable protocol across its forks
-        // nor a machine-readable directory. "WEB SDR" on the chip had operators
-        // looking for websdr.org's list behind it (issue #254).
-        if chip_stretched(ui, self.show_public_sdrs, public_sdrs, extra)
+        if chip_stretched(ui, self.show_audio, audio, extra)
             .on_hover_text(
-                "Public SDRs on the internet — browse the KiwiSDR and SpyServer directories \
-                 and open one as a radio",
+                "Audio — speakers and microphone, a two-channel level strip, and timed WAV \
+                 recording",
             )
             .clicked()
         {
-            self.show_public_sdrs = !self.show_public_sdrs;
+            self.show_audio = !self.show_audio;
         }
     }
 
@@ -5881,7 +5880,7 @@ impl PttPress {
 /// put this box near the end of a row — and, later, how the public-SDR chip
 /// did, drawn in the top row while a single split index still counted it in the
 /// bottom one.
-const SYSTEM_CHIPS_TOP: [&str; 7] = ["LOG", "SPOTS", "AWARDS", "BANDS", "SAT", "ISM", "PUBLIC SDR"];
+const SYSTEM_CHIPS_TOP: [&str; 7] = ["LOG", "SPOTS", "AWARDS", "BANDS", "SAT", "ISM", "AUDIO"];
 
 /// The rest of them. See [`SYSTEM_CHIPS_TOP`].
 const SYSTEM_CHIPS_BOTTOM: [&str; 7] =
@@ -6083,7 +6082,9 @@ const REC_START_TIMEOUT_S: i64 = 3;
 /// strip has reserved for the four letters `REC`. The top of the breath is the
 /// plain alert red, so the brightest instant matches every other alert in the
 /// program and only the off-beat is dimmer.
-fn rec_chip_fill(now: f64) -> Color32 {
+///
+/// Also used by the Audio panel's start button while a WAV tape is rolling.
+pub(in crate::app) fn rec_chip_fill(now: f64) -> Color32 {
     const PERIOD_S: f64 = 1.6;
     let phase = (now / PERIOD_S * std::f64::consts::TAU).sin() as f32 * 0.5 + 0.5;
     let k = 0.6 + 0.4 * phase.clamp(0.0, 1.0);
