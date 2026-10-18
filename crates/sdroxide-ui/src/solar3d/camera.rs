@@ -38,19 +38,221 @@ pub fn dist_range(focus_radius: f32) -> (f32, f32) {
     ((focus_radius * 1.6).max(1e-4), MAX_DIST)
 }
 
+/// Seconds for a one-shot ease into VISUALIZE / My QTH — a touch shorter than
+/// the tour's station hops so an operator-asked move settles promptly.
+pub const VIEW_FLY_S: f32 = 2.6;
+
 /// Point the orbit camera straight at the operator's QTH and pull in as close
-/// as the Earth clamp allows — what the 3D view's **My QTH** chip does.
+/// as the Earth clamp allows — what the 3D view's **My QTH** chip and the
+/// open-window fly do. (VISUALIZE uses a separate limb / edge framing.)
 ///
 /// Cancels AUTO: a menu that flies the camera somewhere the operator asked for
 /// has to win over the tour that would take it away again next frame.
 pub fn frame_home(view: &mut crate::view::Solar3dView, b: &Bodies, qth: (f64, f64)) {
+    let (pose, _) = home_pose(b, qth);
+    pose.apply(view);
+    view.focus = Focus::Earth.to_id();
+    view.auto = false;
+}
+
+/// Target pose for the **My QTH** / stop-VISUALIZE / open-window shot: QTH
+/// centred under the camera, Earth filling the view.
+pub fn home_pose(b: &Bodies, qth: (f64, f64)) -> (Pose, (V3, f32)) {
     let d = b.surface_dir(qth.0, qth.1);
     let (lo, _) = dist_range(b.earth_r);
+    let pose = Pose::new(
+        yaw_of(d),
+        d.z.clamp(-1.0, 1.0).asin().clamp(-PITCH_LIMIT, PITCH_LIMIT),
+        lo,
+    );
+    (pose, b.focus(Focus::Earth))
+}
+
+/// Side-on framing for pass **VISUALIZE**: QTH and the satellite both in
+/// frame, orbit path running left–right across the sky.
+///
+/// `track_az_deg` is the **orbit-track** bearing (clockwise from north). The
+/// camera stands 90° off that track so the path is edge-on. Distance and pivot
+/// follow the live QTH–sat chord so both ends stay on screen.
+///
+/// Returns the `(pivot, radius)` pair for [`SolarUi::focus_override`].
+pub fn frame_visualize(
+    view: &mut crate::view::Solar3dView,
+    b: &Bodies,
+    qth: (f64, f64),
+    track_az_deg: f64,
+    sat_world: V3,
+) -> (V3, f32) {
+    let (pose, focus) = visualize_pose(b, qth, track_az_deg, sat_world);
+    pose.apply(view);
     view.focus = Focus::Earth.to_id();
-    view.yaw = yaw_of(d);
-    view.pitch = d.z.clamp(-1.0, 1.0).asin().clamp(-PITCH_LIMIT, PITCH_LIMIT);
-    view.dist = lo;
     view.auto = false;
+    focus
+}
+
+/// How much of the FOV the QTH–sat chord should fill in VISUALIZE. Higher than
+/// the lock view's [`QSO_FILL`] — less empty margin to the frame edge.
+const VISUALIZE_FILL: f32 = 0.92;
+/// Closest auto-fit distance, as a multiple of Earth radius.
+const VISUALIZE_MIN_DIST: f32 = 0.20;
+/// Pivot weight toward the satellite (0 = at QTH, 1 = at sat). Biasing toward
+/// the bird parks the QTH near the frame edge, like the flat 2D map.
+const VISUALIZE_PIVOT_SAT: f32 = 0.72;
+
+/// Target pose and pivot for pass **VISUALIZE** — compute without writing the
+/// view, so a [`ViewFly`] can ease into it. QTH sits toward the edge of the
+/// frame; both ends stay in view with a tight margin.
+pub fn visualize_pose(
+    b: &Bodies,
+    qth: (f64, f64),
+    track_az_deg: f64,
+    sat_world: V3,
+) -> (Pose, (V3, f32)) {
+    let (east, north, up) = crate::solar3d::scene::local_enu(b, qth.0, qth.1);
+    let feet = b.earth + up * b.earth_r;
+    let rel = sat_world - b.earth;
+    let r = rel.len();
+    if !r.is_finite() || r < b.earth_r * 0.5 {
+        // Tracker lost the bird — fall back to a tight QTH side view.
+        return visualize_pose_qth_only(b, qth, track_az_deg);
+    }
+
+    // Bias the pivot toward the sat so the QTH lands near the frame edge.
+    let t = VISUALIZE_PIVOT_SAT;
+    let pivot = feet * (1.0 - t) + sat_world * t;
+    let span = (feet - pivot)
+        .len()
+        .max((sat_world - pivot).len())
+        .max(b.earth_r * SAT_MIN_SPAN);
+
+    // Side-on to the locked orbit track (not to the live look angle).
+    let az = (track_az_deg as f32).to_radians();
+    let horiz = (east * az.sin() + north * az.cos()).normalize();
+    let mut side = up.cross(horiz);
+    if side.len() < 1e-4 {
+        side = east;
+    }
+    let mut side = side.normalize();
+    let chord = sat_world - feet;
+    if side.dot(chord.cross(up)) < 0.0 {
+        side = -side;
+    }
+
+    let a = up;
+    let c = rel * (1.0 / r);
+    let s = a + c;
+    let mid = if s.len() > 1e-4 { s.normalize() } else { side.cross(a).normalize() };
+    // Same tilt as the lock view, but the stand-off axis is the track normal.
+    let dir = mid * QSO_TILT.cos() + side * QSO_TILT.sin();
+    let dist =
+        (span / ((FOV_Y * 0.5).tan() * VISUALIZE_FILL)).max(b.earth_r * VISUALIZE_MIN_DIST);
+
+    let pose = Pose::new(
+        yaw_of(dir),
+        dir.z.clamp(-1.0, 1.0).asin().clamp(-PITCH_LIMIT, PITCH_LIMIT),
+        dist,
+    );
+    // Small clamp radius so the operator can zoom in well past the auto-fit.
+    (pose, (pivot, (span * 0.22).max(b.earth_r * 0.03)))
+}
+
+/// Tight side-on at the QTH when the satellite position is unusable.
+fn visualize_pose_qth_only(b: &Bodies, qth: (f64, f64), track_az_deg: f64) -> (Pose, (V3, f32)) {
+    let (east, north, up) = crate::solar3d::scene::local_enu(b, qth.0, qth.1);
+    let feet = b.earth + up * b.earth_r;
+    let az = (track_az_deg as f32).to_radians();
+    let horiz = (east * az.sin() + north * az.cos()).normalize();
+    let sky = b.earth_r * 0.14;
+    let pivot = feet + up * (b.earth_r * 0.02) + horiz * (sky * 0.30);
+    let mut side = up.cross(horiz);
+    if side.len() < 1e-4 {
+        side = east;
+    }
+    let side = side.normalize();
+    let to_eye = (side * 0.92 + up * 0.35).normalize();
+    let dist = sky * 1.35;
+    let (lo, hi) = dist_range(b.earth_r * 0.08);
+    let pose = Pose::new(
+        yaw_of(to_eye),
+        to_eye.z.clamp(-1.0, 1.0).asin().clamp(-PITCH_LIMIT, PITCH_LIMIT),
+        dist.clamp(lo, hi),
+    );
+    (pose, (pivot, b.earth_r * 0.08))
+}
+
+/// One-shot ease from the current camera pose to an operator-asked target
+/// (VISUALIZE, My QTH, stop→home). Same smootherstep the AUTO tour uses.
+#[derive(Clone, Copy)]
+pub struct ViewFly {
+    from: Pose,
+    from_focus: (V3, f32),
+    elapsed: f32,
+    active: bool,
+}
+
+impl Default for ViewFly {
+    fn default() -> Self {
+        ViewFly {
+            from: Pose { yaw: 0.0, pitch: 0.0, ln_dist: 0.0 },
+            from_focus: (V3::ZERO, 1.0),
+            elapsed: 0.0,
+            active: false,
+        }
+    }
+}
+
+impl ViewFly {
+    pub fn active(self) -> bool {
+        self.active
+    }
+
+    pub fn cancel(&mut self) {
+        self.active = false;
+        self.elapsed = 0.0;
+    }
+
+    /// Capture the current view as the flight's start.
+    pub fn begin(
+        &mut self,
+        view: &crate::view::Solar3dView,
+        from_focus: (V3, f32),
+    ) {
+        self.from = Pose::new(view.yaw, view.pitch, view.dist);
+        self.from_focus = from_focus;
+        self.elapsed = 0.0;
+        self.active = true;
+    }
+
+    /// Ease toward `target` / `target_focus`. Returns the pivot for this frame
+    /// and whether the flight is still in progress.
+    pub fn step(
+        &mut self,
+        view: &mut crate::view::Solar3dView,
+        dt: f32,
+        target: Pose,
+        target_focus: (V3, f32),
+    ) -> ((V3, f32), bool) {
+        if !self.active {
+            target.apply(view);
+            return (target_focus, false);
+        }
+        self.elapsed += dt.clamp(0.0, 0.25);
+        let k = smootherstep(self.elapsed / VIEW_FLY_S);
+        let p1 = self.from;
+        let p2 = unwrap_to(p1, target);
+        // Zero tangents at both ends: ease out of the user's view and settle.
+        catmull_rom(p1, p1, p2, p2, k).apply(view);
+        let pivot = (
+            self.from_focus.0 + (target_focus.0 - self.from_focus.0) * k,
+            self.from_focus.1 + (target_focus.1 - self.from_focus.1) * k,
+        );
+        if self.elapsed >= VIEW_FLY_S {
+            self.active = false;
+            target.apply(view);
+            return (target_focus, false);
+        }
+        (pivot, true)
+    }
 }
 
 impl Camera {
@@ -542,6 +744,12 @@ impl Pose {
         view.yaw = self.yaw;
         view.pitch = self.pitch.clamp(-PITCH_LIMIT, PITCH_LIMIT);
         view.dist = self.ln_dist.exp().clamp(1e-5, MAX_DIST);
+    }
+
+    /// Aim only — leave distance alone so VISUALIZE can keep a user zoom.
+    pub fn apply_aim(self, view: &mut crate::view::Solar3dView) {
+        view.yaw = self.yaw;
+        view.pitch = self.pitch.clamp(-PITCH_LIMIT, PITCH_LIMIT);
     }
 
     fn scaled(self, k: f32) -> Pose {
@@ -1625,8 +1833,7 @@ mod tests {
         b.earth + b.surface_dir(lat, lon) * (b.earth_r * lift)
     }
 
-    /// The My QTH chip has to leave the operator's square in the middle of the
-    /// frame, not somewhere off the limb of a still-wide Earth view.
+    /// The My QTH chip leaves the operator's square in the middle of the frame.
     #[test]
     fn frame_home_centres_the_qth() {
         let mut st = SolarUi::new(Solar3dView::default());

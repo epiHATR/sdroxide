@@ -627,6 +627,24 @@ impl Bodies {
     }
 }
 
+/// Local east / north / up at a geodetic point, in world space.
+///
+/// East is along the parallel, north toward the geographic pole, up the
+/// surface normal — the frame a pass's azimuth and elevation are measured in.
+pub fn local_enu(b: &Bodies, lat: f64, lon: f64) -> (V3, V3, V3) {
+    let up = b.surface_dir(lat, lon);
+    let (_, _, ez) = b.earth_basis;
+    let mut east = ez.cross(up);
+    if east.len() < 1e-5 {
+        // On the pole the parallel vanishes; pick an arbitrary east.
+        let (ex, _, _) = b.earth_basis;
+        east = ex.cross(up);
+    }
+    let east = east.normalize();
+    let north = up.cross(east).normalize();
+    (east, north, up)
+}
+
 /// Build the frame's draw lists.
 pub fn build(
     st: &SolarUi,
@@ -702,14 +720,153 @@ pub fn build(
         {
             aurora_shells(&mut s, &b, &cam, oval);
         }
-        if st.layer(layer::SATS) {
+        // VISUALIZE keeps the selected bird's marker + orbit even with the SATS
+        // layer off — the pass view is what the operator asked to watch.
+        if st.layer(layer::SATS) || st.visualize_sat.is_some() {
             satellites(&mut s, st, &b, &cam, d, unix_s);
         }
+        sat_visualize(&mut s, st, &b, &cam, d, unix_s);
     }
     // Always called: it also builds the click targets, which are not a layer —
     // turning names off should not make the planets unclickable.
     body_labels(&mut s, st, &b, &cam, size_px[1], st.layer(layer::LABELS));
     s
+}
+
+/// Pass-window **VISUALIZE**: a stick-figure dummy at the QTH and a sightline
+/// to the satellite's **true** world position (same placement as the orbit
+/// marker), plus a local elevation diagram so the look angle still reads.
+fn sat_visualize(
+    s: &mut Scene,
+    st: &SolarUi,
+    b: &Bodies,
+    cam: &Camera,
+    data: &SolarData,
+    unix_s: f64,
+) {
+    let Some(id) = st.visualize_sat else { return };
+    let Some((lat, lon)) = st.qth else { return };
+    let Some(sat) = data.satellites().find(|s| s.norad_id == id) else { return };
+    let Some(state) = sat.at(unix_s) else { return };
+
+    let earth_px = cam.pixels_for(b.earth, b.earth_r);
+    let fade = ((earth_px - 2.0) / 8.0).clamp(0.0, 1.0);
+    if fade <= 0.0 {
+        return;
+    }
+
+    let (az, el) = state.az_el_from(lat, lon);
+    let (east, north, up) = local_enu(b, lat, lon);
+    // Same surface point the lock sightline uses, so the chord meets the QTH.
+    let feet = b.earth + up * b.earth_r;
+    // True satellite position — must match [`satellites`]'s `place(...)`.
+    let sat_pos = b.earth + V3::from_f64(state.dir_ecliptic) * (b.earth_r * state.radii as f32);
+
+    // Compact dummy: tall enough to read next to the elevation diagram, short
+    // enough to stay on the ground rather than reaching into LEO.
+    let h = b.earth_r * 0.012;
+    let hip = feet + up * (h * 0.48);
+    let shoulder = feet + up * (h * 0.72);
+    let head = feet + up * (h * 0.92);
+    let arm = h * 0.30;
+    let stance = h * 0.14;
+    let green = lin(ink::GREEN, 0.95 * fade);
+    let dim = lin(ink::CYAN_DIM, 0.55 * fade);
+    let accent = lin(ink::YELLOW, 0.95 * fade);
+    let pink = lin(ink::PINK, 0.95 * fade);
+
+    // Ground tick — the horizontal the elevation is measured from.
+    let g = b.earth_r * 0.045;
+    s.lines.push(seg(feet - east * g, feet + east * g, 1.8, dim));
+    s.lines.push(seg(feet - north * g, feet + north * g, 1.8, dim));
+
+    // Lime station mark on the ground (matches the globe QTH ring).
+    s.sprites.push(SpriteInst {
+        center: (feet + up * (b.earth_r * 0.001)).arr(),
+        size_px: 11.0,
+        color: green,
+        params: [SPRITE_RING, 0.0, 0.0, 0.0],
+    });
+
+    // Stick figure: legs, torso, arms, head.
+    s.lines.push(seg(feet - east * stance, hip, 2.4, green));
+    s.lines.push(seg(feet + east * stance, hip, 2.4, green));
+    s.lines.push(seg(hip, shoulder, 2.6, green));
+    s.lines.push(seg(shoulder - east * arm, shoulder + east * arm, 2.2, green));
+    s.sprites.push(SpriteInst {
+        center: head.arr(),
+        size_px: 7.0,
+        color: green,
+        params: [SPRITE_DOT, 0.0, 0.0, 0.0],
+    });
+
+    // Local elevation diagram (not the sat itself): horizon + arc at look az.
+    let el_draw = el.max(0.0) as f32;
+    let az_r = (az as f32).to_radians();
+    let el_r = el_draw.to_radians();
+    let horiz = (east * az_r.sin() + north * az_r.cos()).normalize();
+    let sky = b.earth_r * 0.14;
+    let horizon_pt = feet + horiz * sky;
+    s.lines.push(seg(feet, horizon_pt, 1.6, dim));
+    const ARC: usize = 18;
+    if el_draw > 0.5 {
+        for k in 0..ARC {
+            let t0 = el_r * (k as f32) / ARC as f32;
+            let t1 = el_r * ((k + 1) as f32) / ARC as f32;
+            let r = sky * 0.38;
+            let p0 = feet + (horiz * t0.cos() + up * t0.sin()) * r;
+            let p1 = feet + (horiz * t1.cos() + up * t1.sin()) * r;
+            s.lines.push(seg(p0, p1, 2.0, accent));
+        }
+    }
+
+    // Sightline QTH → bird: straight chord to the real orbital position.
+    const DASHES: usize = 14;
+    for k in 0..DASHES {
+        let t0 = (k as f32 + 0.15) / DASHES as f32;
+        let t1 = (k as f32 + 0.85) / DASHES as f32;
+        s.lines.push(seg(
+            feet + (sat_pos - feet) * t0,
+            feet + (sat_pos - feet) * t1,
+            2.2,
+            pink,
+        ));
+    }
+
+    s.sprites.push(SpriteInst {
+        center: sat_pos.arr(),
+        size_px: 12.0,
+        color: pink,
+        params: [SPRITE_DOT, 0.0, 0.0, 0.0],
+    });
+    s.sprites.push(SpriteInst {
+        center: sat_pos.arr(),
+        size_px: 18.0,
+        color: lin(ink::PINK, 0.35 * fade),
+        params: [SPRITE_RING, 0.0, 0.0, 0.0],
+    });
+
+    let el_txt = if el > 0.0 {
+        format!("{el:.0}° el")
+    } else {
+        format!("▼ {el:.0}°")
+    };
+    s.labels.push(Label {
+        world: sat_pos.arr(),
+        text: format!("{}  {el_txt}", sat.name),
+        color: lin_color(ink::PINK, fade),
+        offset: [10.0, -8.0],
+        click: Click::Sat(id),
+        rank: RANK_ALWAYS,
+    });
+    s.labels.push(Label {
+        world: feet.arr(),
+        text: format!("YOU  {}", st.qth_grid),
+        color: lin_color(ink::GREEN, fade),
+        offset: [10.0, 8.0],
+        click: Click::None,
+        rank: RANK_ALWAYS,
+    });
 }
 
 /// Amateur-radio satellites: position, orbit and label.
@@ -734,8 +891,9 @@ fn satellites(
     }
     let show_all = st.view.all_satellites;
     let above_only = st.view.sats_above_horizon;
-    // While Doppler-locked, the globe is about that one bird: every other
-    // popular / ALL SATS marker is noise on the pass you are working. The
+    // While Doppler-locked or VISUALIZE-ing, the globe is about that one bird:
+    // every other popular / ALL SATS marker is noise. VISUALIZE outranks the
+    // lock for what is drawn — the operator asked to watch this pass. The
     // pending lock request counts too (native only — the browser tab has no
     // command path), so the strip clears on the same click that asks the
     // engine, not a frame later.
@@ -743,6 +901,7 @@ fn satellites(
     let locked_id = st.sat_lock.or(st.lock_requested);
     #[cfg(target_arch = "wasm32")]
     let locked_id = st.sat_lock;
+    let solo_id = st.visualize_sat.or(locked_id);
     let place = |dir: sdroxide_solar::Vec3, radii: f64| {
         b.earth + V3::from_f64(dir) * (b.earth_r * radii as f32)
     };
@@ -752,8 +911,9 @@ fn satellites(
         // (or the Doppler-locked bird) is forced onto the globe. Highlighting
         // every substring hit at once turned a search into a yellow scribble.
         let selected = st.selected_sat == Some(sat.norad_id);
+        let visualizing = st.visualize_sat == Some(sat.norad_id);
         let locked = locked_id == Some(sat.norad_id);
-        if let Some(id) = locked_id {
+        if let Some(id) = solo_id {
             if sat.norad_id != id {
                 continue;
             }
@@ -762,9 +922,9 @@ fn satellites(
         }
         let Some(state) = sat.at(unix_s) else { continue };
         // ABOVE keeps the globe to birds you can work right now. A find-box
-        // pick and a Doppler lock still draw when they are below the horizon —
-        // those are the ones the operator asked for, not the crowd.
-        if above_only && !selected && !locked {
+        // pick, a Doppler lock, and VISUALIZE still draw when they are below
+        // the horizon — those are the ones the operator asked for.
+        if above_only && !selected && !locked && !visualizing {
             match st.qth {
                 Some((lat, lon)) if state.elevation_from(lat, lon) > 0.0 => {}
                 Some(_) => continue,
@@ -780,19 +940,21 @@ fn satellites(
         // brightened: against ninety cyan dots, "a bit lighter" is not findable,
         // and yellow is the one accent nothing else in this layer uses. The
         // locked bird outranks even that, in the one colour louder still.
-        let color = match (locked, selected, geo) {
+        // VISUALIZE counts as selected for colour/orbit weight after the pass
+        // table closes (selected_sat is cleared then).
+        let color = match (locked, selected || visualizing, geo) {
             (true, ..) => ink::PINK,
             (false, true, _) => ink::YELLOW,
             (false, false, true) => ink::GREEN,
             (false, false, false) => ink::CYAN_DIM,
         };
-        let ringed = sat.popular || selected || locked;
+        let ringed = sat.popular || selected || locked || visualizing;
 
         s.sprites.push(SpriteInst {
             center: pos.arr(),
             size_px: if locked {
                 11.0
-            } else if selected {
+            } else if selected || visualizing {
                 10.0
             } else if sat.popular {
                 7.0
@@ -810,7 +972,7 @@ fn satellites(
             let path = sat.orbit(unix_s, 96);
             let (w_px, alpha) = if locked {
                 (2.6, 0.95)
-            } else if selected {
+            } else if selected || visualizing {
                 (2.4, 0.9)
             } else {
                 (1.3, 0.4)
@@ -850,7 +1012,7 @@ fn satellites(
         // what was asked for. The floor is lower than the ordinary one but not
         // absent: on an Earth twelve pixels across there is nothing for a
         // label to point at.
-        let labelled = if selected || locked {
+        let labelled = if selected || locked || visualizing {
             earth_px > 12.0
         } else {
             st.layer(layer::LABELS) && sat.popular && earth_px > 24.0
@@ -1952,8 +2114,12 @@ fn markers(s: &mut Scene, st: &SolarUi, b: &Bodies, cam: &Camera) {
     };
 
     if let Some((lat, lon)) = st.qth {
+        // VISUALIZE zooms in tight on the QTH: the usual 2% lift reads as a
+        // ring floating in space. Sit it on the surface there; elsewhere keep
+        // MARK_LIFT so the ring still meets the traffic arcs.
+        let lift = if st.visualize_sat.is_some() { 1.001 } else { MARK_LIFT };
         s.sprites.push(SpriteInst {
-            center: on_earth(lat, lon, MARK_LIFT).arr(),
+            center: on_earth(lat, lon, lift).arr(),
             size_px: size(14.0),
             color: lin(ink::GREEN, 0.95 * fade),
             params: [SPRITE_RING, 0.0, 0.0, 0.0],

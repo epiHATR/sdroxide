@@ -279,6 +279,8 @@ impl Solar3d {
             }
             self.gpu_ready = true;
         }
+        // First frame after open (feed was dropped on close): ease onto QTH.
+        let just_opened = self.feed.is_none();
         self.ensure_feed(ctx);
         self.ensure_custom_tles(&sat_cfg);
 
@@ -293,6 +295,9 @@ impl Solar3d {
             st.prop = prop;
             st.sat_cfg = sat_cfg;
             st.sat_lock = sat_lock;
+            if just_opened {
+                st.fly_home_pending = true;
+            }
         }
 
         let state = Arc::clone(&self.state);

@@ -279,6 +279,18 @@ pub struct SolarUi {
     /// Satellite whose pass table is open — and which the find box has picked
     /// out on the globe — by catalogue number.
     pub selected_sat: Option<u64>,
+    /// Pass-window **VISUALIZE**: draw a ground dummy at the QTH and the sat
+    /// at its look angle above that dummy. Survives closing the pass table.
+    pub visualize_sat: Option<u64>,
+    /// Orbit-track azimuth (deg, from north) the VISUALIZE camera was framed
+    /// on. The camera stands 90° off that track so the path runs left–right;
+    /// the ground stays fixed while the sky marker follows the live look angle.
+    pub visualize_frame_az: Option<f64>,
+    /// One-shot ease into VISUALIZE / My QTH / stop→home from the current view.
+    pub view_fly: super::camera::ViewFly,
+    /// Next overlay frame should ease the camera onto the operator's QTH
+    /// (window just opened, or the browser tab just started).
+    pub fly_home_pending: bool,
     /// Cached pass prediction: which satellite, from what QTH, computed when,
     /// and the result. Stepping a whole orbit at second resolution is far too
     /// expensive to redo every frame.
@@ -427,6 +439,10 @@ impl SolarUi {
             search: String::new(),
             sat_cfg: Default::default(),
             selected_sat: None,
+            visualize_sat: None,
+            visualize_frame_az: None,
+            view_fly: super::camera::ViewFly::default(),
+            fly_home_pending: true,
             sat_passes: None,
             focus_override: None,
             tour: super::camera::Tour::default(),

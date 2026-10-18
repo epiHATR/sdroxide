@@ -221,10 +221,12 @@ fn menu_bar(
                     "Set your grid square in Settings to zoom here".into()
                 };
                 if chrome::chip(ui, false, "My QTH").on_hover_text(qth_tip).clicked()
-                    && let Some(qth) = st.qth
+                    && st.qth.is_some()
                 {
-                    let b = super::scene::bodies(st, wall + st.sim_offset_s);
-                    super::camera::frame_home(&mut st.view, &b, qth);
+                    st.visualize_sat = None;
+                    st.visualize_frame_az = None;
+                    st.view.auto = false;
+                    begin_view_fly(st, wall + st.sim_offset_s);
                 }
 
                 let btn = chrome::chip(ui, st.view.auto, "VIEW")
@@ -801,6 +803,9 @@ fn scene(ui: &mut egui::Ui, st: &mut SolarUi, data: Option<&SolarData>) {
     advance_tour(ui, st, data, sim_now, dt);
     advance_lapse(ui, st, dt);
     reframe(st, sim_now);
+    // After the tour clears `focus_override` when AUTO is off: ease / hold the
+    // VISUALIZE (or My QTH / stop→home) framing.
+    apply_framed_camera(ui, st, data, sim_now, dt);
     let mut scene = super::scene::build(st, data, sim_now, px, anim as f32);
     // Labels and pick targets are egui's business, not the GPU's, so they come
     // out before the rest of the scene is handed to the paint callback.
@@ -903,6 +908,7 @@ fn scene(ui: &mut egui::Ui, st: &mut SolarUi, data: Option<&SolarData>) {
     clouds_note(ui, st, data, rect, sim_now as i64);
     impact_banner(ui, data, rect, sim_now as i64);
     pass_window(ui, st, data, sim_now);
+    visualize_chip(ui, st, data, rect);
 
     if st.qth.is_none() {
         ui.painter().text(
@@ -1385,17 +1391,26 @@ fn pass_window(ui: &egui::Ui, st: &mut SolarUi, data: Option<&SolarData>, sim_no
             result: sat.next_passes(lat, lon, sim_now, 48.0 * 3600.0, 6),
         });
     }
-    let Some(cache) = &st.sat_passes else { return };
+    if st.sat_passes.is_none() {
+        return;
+    }
 
     // Fixed 500 pt panel. Header and body stay that width; tables that still
     // run wider scroll horizontally inside rather than stretching the frame
     // past the title bar.
+    //
+    // VISUALIZE start/stop is deferred until after this block so we do not
+    // call `stop_visualize(&mut st, …)` while `sat_passes` is borrowed.
     let mut open = true;
-    let sat_name = cache.name.clone();
+    let mut stop_vis = false;
+    let mut start_vis = false;
     let qth_grid = st.qth_grid.clone();
     let win_w = crate::layout::window_w(ui.ctx(), 500.0);
     let frame = chrome::window_frame();
-    let resp = egui::Window::new("PASSES")
+    let resp = {
+        let cache = st.sat_passes.as_ref().expect("checked above");
+        let sat_name = cache.name.clone();
+        egui::Window::new("PASSES")
         .id(egui::Id::new("solar-passes-v10"))
         .open(&mut open)
         .collapsible(false)
@@ -1548,55 +1563,93 @@ fn pass_window(ui: &egui::Ui, st: &mut SolarUi, data: Option<&SolarData>, sim_no
                 }
             }
 
-            // Lock on from right here — the main window activates satellite
-            // mode when the root pass drains the request. Browser tab: the
-            // relay carries no commands, so the button would be a lie.
+            // LOCK (native) and VISUALIZE (everywhere): one tracks Doppler in
+            // the main window; the other draws a ground dummy + look-angle sky
+            // marker on the globe. Browser tab: no command path, so LOCK stays
+            // off; VISUALIZE is display-only and always available.
             //
             // Same pairing as the SAT window's LOCK chip: green fill needs
             // [`theme::INK_ON_BRIGHT`], not the cyan-chip ink — several themes'
             // greens wash out dark `INK_ON_CYAN`.
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                ui.add_space(6.0);
-                let locked_here = st.sat_lock == Some(id) || st.lock_requested == Some(id);
-                if chrome::chip_accent(
-                    ui,
-                    locked_here,
-                    if locked_here {
-                        egui::RichText::new(" ● LOCKED — UNLOCK ").strong()
-                    } else {
-                        egui::RichText::new(" LOCK ON ").strong()
-                    },
-                    theme::GREEN(),
-                    theme::INK_ON_BRIGHT(),
-                )
-                .on_hover_text(if locked_here {
-                    "Release the satellite lock"
-                } else {
-                    "Track this satellite in the main window: Doppler-corrected RX and TX, \
-                     transponder-mapped uplink, rotator steering"
-                })
-                .clicked()
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                #[cfg(not(target_arch = "wasm32"))]
                 {
-                    if locked_here {
-                        st.unlock_requested = true;
-                        st.lock_requested = None;
+                    let locked_here = st.sat_lock == Some(id) || st.lock_requested == Some(id);
+                    if chrome::chip_accent(
+                        ui,
+                        locked_here,
+                        if locked_here {
+                            egui::RichText::new(" ● LOCKED — UNLOCK ").strong()
+                        } else {
+                            egui::RichText::new(" LOCK ON ").strong()
+                        },
+                        theme::GREEN(),
+                        theme::INK_ON_BRIGHT(),
+                    )
+                    .on_hover_text(if locked_here {
+                        "Release the satellite lock"
                     } else {
-                        st.lock_requested = Some(id);
-                        st.unlock_requested = false;
+                        "Track this satellite in the main window: Doppler-corrected RX and TX, \
+                         transponder-mapped uplink, rotator steering"
+                    })
+                    .clicked()
+                    {
+                        if locked_here {
+                            st.unlock_requested = true;
+                            st.lock_requested = None;
+                        } else {
+                            st.lock_requested = Some(id);
+                            st.unlock_requested = false;
+                        }
                     }
                 }
-            }
+                let visualizing = st.visualize_sat == Some(id);
+                let vis_enabled = st.qth.is_some();
+                let vis_label = if visualizing { " ● VISUALIZE " } else { " VISUALIZE " };
+                if chrome::chip_enabled(ui, vis_enabled, visualizing, vis_label)
+                    .on_hover_text(if !vis_enabled {
+                        "Set a grid locator in station settings first"
+                    } else if visualizing {
+                        "Stop the ground-dummy / look-angle view and return to your QTH"
+                    } else {
+                        "Side view at your QTH, locked 90° to this sat's orbit \
+                         path. Ground and station stay fixed; the sat moves. \
+                         Stays on after this window closes — use ✕ STOP on the \
+                         globe to leave it."
+                    })
+                    .clicked()
+                {
+                    if visualizing {
+                        stop_vis = true;
+                    } else {
+                        start_vis = true;
+                    }
+                }
+            });
 
             // Operator override → SatNOGS cache → built-in curated table.
             let mine = st.sat_cfg.freqs_for(id).is_some();
             let owned = sdroxide_solar::satfreq::for_norad(&st.sat_cfg, id);
             freq_table(ui, owned.as_ref(), mine, &sat_name, body_w);
-        });
+        })
+    };
     if let Some(r) = &resp {
         chrome::paint_window_border(ui.ctx(), &r.response);
     }
+    if stop_vis {
+        stop_visualize(st, sim_now);
+    } else if start_vis {
+        st.visualize_sat = Some(id);
+        st.visualize_frame_az = None;
+        st.view.auto = false;
+        begin_view_fly(st, sim_now);
+    }
     if !open {
+        // VISUALIZE stays on after the pass table closes — the dummy / look-
+        // angle view is what the operator asked to keep watching. Clear only
+        // the table selection; turn VISUALIZE off from its chip (here or on
+        // the globe chrome).
         st.selected_sat = None;
     }
 }
@@ -2787,6 +2840,162 @@ fn impact_banner(ui: &egui::Ui, data: Option<&SolarData>, rect: egui::Rect, now:
     );
 }
 
+/// Globe chrome while **VISUALIZE** is on — survives closing the pass table so
+/// the operator can still stop the view without finding the sat again.
+fn visualize_chip(ui: &mut egui::Ui, st: &mut SolarUi, data: Option<&SolarData>, rect: egui::Rect) {
+    let Some(id) = st.visualize_sat else { return };
+    let name = data
+        .and_then(|d| d.satellites().find(|s| s.norad_id == id))
+        .map(|s| s.name.clone())
+        .unwrap_or_else(|| "SAT".into());
+    ui.scope_builder(
+        egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(
+            egui::pos2(rect.left() + MARGIN, rect.bottom() - MARGIN - 28.0),
+            egui::vec2((rect.width() - 2.0 * MARGIN).min(420.0), 28.0),
+        )),
+        |ui| {
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new(format!("VISUALIZE  ·  {name}"))
+                        .color(theme::PINK())
+                        .size(11.0)
+                        .strong(),
+                );
+                if chrome::chip(ui, true, "✕ STOP")
+                    .on_hover_text("Leave the ground-dummy / look-angle view and return to your QTH")
+                    .clicked()
+                {
+                    let sim_now = super::wall_clock_unix() + st.sim_offset_s;
+                    stop_visualize(st, sim_now);
+                }
+            });
+        },
+    );
+}
+
+/// Leave VISUALIZE and ease the camera back onto the operator's QTH.
+fn stop_visualize(st: &mut SolarUi, sim_now: f64) {
+    st.visualize_sat = None;
+    st.visualize_frame_az = None;
+    if st.qth.is_some() {
+        begin_view_fly(st, sim_now);
+    } else {
+        st.focus_override = None;
+        st.view_fly.cancel();
+    }
+}
+
+/// Capture the current camera as the start of a one-shot ease.
+fn begin_view_fly(st: &mut SolarUi, sim_now: f64) {
+    let b = super::scene::bodies(st, sim_now);
+    let from_focus = st.focus_override.unwrap_or_else(|| b.focus(st.focus()));
+    st.view_fly.begin(&st.view, from_focus);
+    st.view.auto = false;
+}
+
+/// Ease / hold VISUALIZE (orbit-side at QTH) or a pending My QTH / stop→home
+/// flight. The sky marker still follows the live look angle once framed.
+fn apply_framed_camera(
+    ui: &egui::Ui,
+    st: &mut SolarUi,
+    data: Option<&SolarData>,
+    sim_now: f64,
+    dt: f32,
+) {
+    // Window / tab just came up: fly to the operator's QTH instead of sitting
+    // on the default system-wide camera.
+    if std::mem::take(&mut st.fly_home_pending) {
+        if st.qth.is_some() {
+            begin_view_fly(st, sim_now);
+        } else {
+            st.set_focus(super::state::Focus::Earth);
+        }
+    }
+
+    let b = super::scene::bodies(st, sim_now);
+    let target = if let Some(id) = st.visualize_sat {
+        let Some(qth) = st.qth else {
+            stop_visualize(st, sim_now);
+            return;
+        };
+        let Some(d) = data else { return };
+        let Some(sat) = d.satellites().find(|s| s.norad_id == id) else { return };
+        let Some(state) = sat.at(sim_now) else { return };
+        // First frame (or a new sat): lock onto the orbit-track bearing.
+        if st.visualize_frame_az.is_none() {
+            st.visualize_frame_az = Some(orbit_track_az(sat, &b, qth, sim_now));
+            // Switching birds mid-session: ease from wherever we are now.
+            if !st.view_fly.active() {
+                begin_view_fly(st, sim_now);
+            }
+        }
+        let frame_az = st.visualize_frame_az.unwrap_or(0.0);
+        let sat_world = b.earth
+            + super::math::V3::from_f64(state.dir_ecliptic)
+                * (b.earth_r * state.radii as f32);
+        Some(super::camera::visualize_pose(&b, qth, frame_az, sat_world))
+    } else if st.view_fly.active() {
+        st.qth.map(|qth| super::camera::home_pose(&b, qth))
+    } else {
+        None
+    };
+    let Some((pose, focus)) = target else { return };
+
+    st.view.focus = super::state::Focus::Earth.to_id();
+    st.view.auto = false;
+    let mut fly = st.view_fly;
+    let flying = if fly.active() {
+        let (pivot, flying) = fly.step(&mut st.view, dt, pose, focus);
+        st.focus_override = Some(pivot);
+        flying
+    } else if st.visualize_sat.is_some() {
+        // Settled: keep side-on aim + edge-biased pivot. Zoom in is allowed
+        // all the way to the focus clamp (past the auto-fit); zoom out free.
+        let dist = st.view.dist;
+        pose.apply_aim(&mut st.view);
+        let (lo, hi) = super::camera::dist_range(focus.1);
+        st.view.dist = dist.clamp(lo, hi);
+        st.focus_override = Some(focus);
+        false
+    } else {
+        // My QTH / stop→home flight just finished — nothing to hold.
+        false
+    };
+    st.view_fly = fly;
+    if flying || st.visualize_sat.is_some() {
+        crate::repaint::animate(ui.ctx());
+    }
+}
+
+/// Horizontal heading of the selected sat's orbit path, degrees clockwise from
+/// north at the QTH — what the VISUALIZE camera stands 90° off. Falls back to
+/// the look-angle azimuth when the track has no horizontal motion (GEO).
+fn orbit_track_az(
+    sat: &sdroxide_solar::Satellite,
+    b: &super::scene::Bodies,
+    qth: (f64, f64),
+    unix_s: f64,
+) -> f64 {
+    use super::math::V3;
+    let Some(s0) = sat.at(unix_s) else {
+        return 0.0;
+    };
+    // ~90 s along-track is enough to read LEO heading without wrapping a pass.
+    let Some(s1) = sat.at(unix_s + 90.0) else {
+        return s0.az_el_from(qth.0, qth.1).0;
+    };
+    let p0 = b.earth + V3::from_f64(s0.dir_ecliptic) * (b.earth_r * s0.radii as f32);
+    let p1 = b.earth + V3::from_f64(s1.dir_ecliptic) * (b.earth_r * s1.radii as f32);
+    let v = p1 - p0;
+    let (east, north, _up) = super::scene::local_enu(b, qth.0, qth.1);
+    let ve = v.dot(east);
+    let vn = v.dot(north);
+    if (ve * ve + vn * vn).sqrt() < 1e-6 {
+        return s0.az_el_from(qth.0, qth.1).0;
+    }
+    ((ve.atan2(vn).to_degrees() as f64) + 360.0) % 360.0
+}
+
 /// Fly the AUTO tour, using real elapsed time so the pacing is frame-rate
 /// independent.
 ///
@@ -2878,10 +3087,11 @@ fn interact(ui: &egui::Ui, st: &mut SolarUi, resp: &egui::Response) {
 
     if touched {
         st.view.auto = false;
+        st.view_fly.cancel();
     }
     // Continuous repaint only while something is actually moving; otherwise the
     // window idles and is woken by input or by the data feed.
-    if touched || st.view.auto || resp.is_pointer_button_down_on() {
+    if touched || st.view.auto || st.view_fly.active() || resp.is_pointer_button_down_on() {
         crate::repaint::animate(ui.ctx());
     }
 }
