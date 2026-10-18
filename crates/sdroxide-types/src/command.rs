@@ -1237,4 +1237,9 @@ pub enum Command {
     /// disconnect the broker and which topics carry digi / WSPR / sonde / mesh.
     /// Output only — Settings → Servers. Appended for the usual reason.
     SetMqttConfig(MqttConfig),
+
+    /// Start (`true`) or stop (`false`) the SONDE Auto TUNE hunt across
+    /// 400–406 MHz. Parks the dial on the first decoded sonde. Appended for
+    /// the usual reason — postcard numbers variants by position.
+    SetRs41AutoTune(bool),
 }

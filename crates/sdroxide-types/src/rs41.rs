@@ -236,6 +236,18 @@ pub struct Rs41Status {
     pub frames: u64,
     /// Frames that failed CRC / Reed-Solomon / JSON parse.
     pub bad_crc: u64,
+    /// Auto TUNE is armed (hunting, dwelling, or holding a lock).
+    #[serde(default)]
+    pub auto_tune: bool,
+    /// Auto TUNE is stepping across 400–406 MHz.
+    #[serde(default)]
+    pub scanning: bool,
+    /// Current Auto TUNE step (Hz), when [`Self::scanning`].
+    #[serde(default)]
+    pub scan_hz: Option<f64>,
+    /// Lane spectrum saw a carrier above the noise floor (for hunt dwell).
+    #[serde(default)]
+    pub carrier_hint: bool,
 }
 
 /// How the radiosonde decoder behaves. Owned by the engine ([`crate::RadioState`]),
@@ -256,6 +268,13 @@ pub struct Rs41Settings {
     pub history_points: u16,
     /// Ceiling on the table.
     pub max_sondes: u16,
+    /// Start Auto TUNE (400–406 MHz hunt) when entering SONDE mode.
+    #[serde(default = "default_auto_scan")]
+    pub auto_scan: bool,
+}
+
+fn default_auto_scan() -> bool {
+    true
 }
 
 impl Default for Rs41Settings {
@@ -267,6 +286,7 @@ impl Default for Rs41Settings {
             drop_list_s: RS41_DROP_LIST_S,
             history_points: RS41_HISTORY_POINTS,
             max_sondes: RS41_MAX_SONDES,
+            auto_scan: true,
         }
     }
 }
@@ -281,6 +301,7 @@ impl Rs41Settings {
         drop_list_s: RS41_DROP_LIST_S,
         history_points: RS41_HISTORY_POINTS,
         max_sondes: RS41_MAX_SONDES,
+        auto_scan: false,
     };
 
     /// Clamp operator-edited values into a usable range.

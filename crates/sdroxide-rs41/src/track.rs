@@ -63,7 +63,7 @@ impl Tracker {
         self.sondes.retain(|s| now - s.last_at <= drop);
     }
 
-    pub fn status(&self) -> Rs41Status {
+    pub fn status(&self, carrier_hint: bool) -> Rs41Status {
         Rs41Status {
             sondes: self.sondes.clone(),
             unavailable: self.unavailable.clone(),
@@ -72,6 +72,10 @@ impl Tracker {
             window_rate_hz: self.window_rate_hz,
             frames: self.frames,
             bad_crc: self.bad_crc,
+            auto_tune: false,
+            scanning: false,
+            scan_hz: None,
+            carrier_hint,
         }
     }
 

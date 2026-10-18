@@ -1597,7 +1597,10 @@ use sdroxide_types::{
 /// `psk_bytes`) for LongFast AES-CTR; native soft-demod fills status.
 /// `SatConfig::watching` always serializes (empty included) so postcard
 /// layout of `StationConfig` stays aligned.
-pub const PROTO_VERSION: u16 = 192;
+/// v193: `Command::SetRs41AutoTune`, `Rs41Settings::auto_scan`, and
+/// `Rs41Status` hunt fields (`scanning` / `scan_hz` / `carrier_hint`) for
+/// 400–406 MHz Auto TUNE.
+pub const PROTO_VERSION: u16 = 193;
 const VERSION_BYTE: u8 = 0x12;
 
 #[derive(Debug, thiserror::Error)]

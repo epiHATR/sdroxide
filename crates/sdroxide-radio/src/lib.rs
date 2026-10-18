@@ -11,6 +11,7 @@ mod image_store;
 pub mod iq_wav;
 mod recorder;
 pub mod scanner;
+mod sonde_scan;
 mod source;
 mod tr_switch;
 mod tx_gate;

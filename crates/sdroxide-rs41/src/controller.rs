@@ -176,8 +176,9 @@ fn worker_loop(
                     }
                     if last_emit.elapsed() >= EMIT_INTERVAL {
                         last_emit = Instant::now();
+                        let hint = bank.as_ref().is_some_and(|b| b.had_spectrum_peak());
                         if res_tx
-                            .send(Rs41Action::Status(Box::new(track.status())))
+                            .send(Rs41Action::Status(Box::new(track.status(hint))))
                             .is_err()
                         {
                             break;

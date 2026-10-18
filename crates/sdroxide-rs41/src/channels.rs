@@ -36,6 +36,9 @@ pub struct ChannelBank {
     scan_buf: Vec<Complex32>,
     next_scan: Instant,
     db: Vec<f32>,
+    /// Last spectrum pass found a carrier above the noise floor (not only the
+    /// forced dial-centre channel). Used by Auto TUNE to decide dwell vs skip.
+    had_spectrum_peak: bool,
 }
 
 struct Channel {
@@ -56,6 +59,7 @@ impl ChannelBank {
             scan_buf: Vec::with_capacity(SCAN_FFT * 2),
             next_scan: Instant::now(),
             db: Vec::new(),
+            had_spectrum_peak: false,
         };
         bank.spectrum.set_dc_suppress(false);
         // Always start with the dial centre so a sonde on-frequency works
@@ -126,6 +130,11 @@ impl ChannelBank {
         (frames, bad)
     }
 
+    /// True when the last FFT pass saw at least one carrier above threshold.
+    pub fn had_spectrum_peak(&self) -> bool {
+        self.had_spectrum_peak
+    }
+
     fn rescan(&mut self) {
         let chunk = &self.scan_buf[self.scan_buf.len().saturating_sub(SCAN_FFT * 2)..];
         self.spectrum.process(chunk);
@@ -133,8 +142,9 @@ impl ChannelBank {
         if self.db.len() < 16 {
             return;
         }
-        let peaks = find_peaks(&self.db, self.rate_hz, MAX_CHANNELS);
-        debug!(?peaks, channels = self.channels.len(), "sonde lane peak scan");
+        let (peaks, saw) = find_peaks(&self.db, self.rate_hz, MAX_CHANNELS);
+        self.had_spectrum_peak = saw;
+        debug!(?peaks, saw, channels = self.channels.len(), "sonde lane peak scan");
         self.reconcile(&peaks);
     }
 
@@ -174,8 +184,9 @@ impl ChannelBank {
     }
 }
 
-/// DC-centred `spectrum_db` bins → offset frequencies of the strongest peaks.
-fn find_peaks(db: &[f32], rate_hz: f64, max_n: usize) -> Vec<f64> {
+/// DC-centred `spectrum_db` bins → offset frequencies of the strongest peaks,
+/// plus whether any bin cleared the noise floor (for Auto TUNE dwell).
+fn find_peaks(db: &[f32], rate_hz: f64, max_n: usize) -> (Vec<f64>, bool) {
     let n = db.len();
     let mut sorted = db.to_vec();
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
@@ -195,6 +206,7 @@ fn find_peaks(db: &[f32], rate_hz: f64, max_n: usize) -> Vec<f64> {
         }
     }
     candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    let saw = !candidates.is_empty();
 
     let mut offsets = Vec::new();
     // Dial centre first — the operator pointed here.
@@ -212,7 +224,7 @@ fn find_peaks(db: &[f32], rate_hz: f64, max_n: usize) -> Vec<f64> {
             break;
         }
     }
-    offsets
+    (offsets, saw)
 }
 
 #[cfg(test)]
@@ -233,7 +245,8 @@ mod tests {
         db[256 - 128] = -38.0;
         db[256 - 127] = -44.0;
         db[256 - 129] = -44.0;
-        let peaks = find_peaks(&db, 48_000.0, 6);
+        let (peaks, saw) = find_peaks(&db, 48_000.0, 6);
+        assert!(saw, "synthetic carriers should clear the noise floor");
         assert!(peaks.iter().any(|p| p.abs() < 1.0), "DC present: {peaks:?}");
         assert!(
             peaks.iter().any(|p| (p - 8_000.0).abs() < 500.0),

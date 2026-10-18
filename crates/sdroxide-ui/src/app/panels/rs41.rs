@@ -125,7 +125,8 @@ impl SdroxideApp {
                 );
             }
 
-            // SETUP first in the RTL tail so it sits on the right edge.
+            // SETUP first in the RTL tail so it sits on the right edge:
+            // visual order Auto TUNE | UPLOAD | SETUP.
             crate::chrome::row_tail(ui, |ui| {
                 if crate::chrome::chip(ui, self.show_rs41_setup, "⚙ SETUP")
                     .on_hover_text("Sonde type, decoder timeouts, trail length and table size")
@@ -143,6 +144,25 @@ impl SdroxideApp {
                 {
                     self.net_cfg_edit.sondehub.upload = !up;
                     cmds.push(Command::SetNetworkConfig(self.net_cfg_edit.clone()));
+                }
+                let tune_on = st.auto_tune;
+                let tune_label = if st.scanning {
+                    if let Some(hz) = st.scan_hz {
+                        format!("Auto TUNE {:.3}", hz / 1e6)
+                    } else {
+                        "Auto TUNE".into()
+                    }
+                } else {
+                    "Auto TUNE".into()
+                };
+                if crate::chrome::chip(ui, tune_on, tune_label)
+                    .on_hover_text(
+                        "Scan 400–406 MHz and park the dial on the first active sonde. \
+                         Click again to stop.",
+                    )
+                    .clicked()
+                {
+                    cmds.push(Command::SetRs41AutoTune(!tune_on));
                 }
             });
         });
@@ -361,6 +381,14 @@ impl SdroxideApp {
 
                 ui.label("Decoder");
                 crate::chrome::checkbox(ui, &mut cfg.enabled, "Armed");
+                ui.end_row();
+
+                ui.label("Auto TUNE");
+                crate::chrome::checkbox(ui, &mut cfg.auto_scan, "Start when entering SONDE")
+                    .on_hover_text(
+                        "Hunt 400–406 MHz for an active sonde when you switch into SONDE mode. \
+                         The Auto TUNE chip starts or stops a hunt at any time.",
+                    );
                 ui.end_row();
 
                 ui.label("Drop from map after");

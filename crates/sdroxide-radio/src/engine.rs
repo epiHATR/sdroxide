@@ -48,6 +48,7 @@ use sdroxide_types::{
 use sdroxide_vdl2::{Vdl2Action, Vdl2Controller};
 
 use crate::recorder::{Recorder, RecorderFault, RecordingChannels};
+use crate::sonde_scan::{HuntAction, SondeBandHunt};
 use crate::voice::VoiceKeyer;
 use crate::{Complex32, ControlUpdate, IqSource};
 
@@ -2851,6 +2852,10 @@ struct Engine {
     /// Last `last_at` uploaded to SondeHub per serial, so a status tick does
     /// not re-post the same package.
     rs41_uploaded: std::collections::HashMap<String, i64>,
+    /// Auto TUNE hunter across 400–406 MHz.
+    sonde_hunt: SondeBandHunt,
+    /// True while the hunter is moving the VFO — operator-stop must not fire.
+    sonde_hunt_moving: bool,
     /// Meshtastic LongFast lane: ~1 Msps DDC + `lorarx` PHY + mesh tracker.
     /// Present while the mode is Meshtastic and the front end can feed the window.
     meshtastic_ddc: Option<Ddc>,
@@ -4301,6 +4306,8 @@ fn engine_thread(
         rs41_cfg,
         rs41_idle_sent: None,
         rs41_uploaded: std::collections::HashMap::new(),
+        sonde_hunt: SondeBandHunt::default(),
+        sonde_hunt_moving: false,
         meshtastic_ddc: None,
         meshtastic: None,
         meshtastic_buf: Vec::new(),
@@ -9570,6 +9577,13 @@ impl Engine {
                     d.set_config(cfg);
                 }
             }
+            SetRs41AutoTune(on) => {
+                if on {
+                    self.start_sonde_hunt();
+                } else {
+                    self.sonde_hunt.stop();
+                }
+            }
 
             // Meshtastic region / listen settings.
             SetMeshtasticConfig(cfg) => {
@@ -12051,6 +12065,9 @@ impl Engine {
                 let st = sdroxide_types::Rs41Status {
                     unavailable,
                     suggest_center_hz: Some(sdroxide_types::RS41_DEFAULT_HZ),
+                    auto_tune: self.sonde_hunt.armed(),
+                    scanning: self.sonde_hunt.scanning(),
+                    scan_hz: self.sonde_hunt.scan_hz(),
                     ..Default::default()
                 };
                 let _ = self.event_tx.send(RadioEvent::Rs41Status(Box::new(st)));
@@ -12061,6 +12078,10 @@ impl Engine {
         if let Some(Rs41Action::Status(mut st)) = d.poll() {
             st.unavailable = unavailable.clone();
             st.suggest_center_hz = unavailable.is_some().then_some(sdroxide_types::RS41_DEFAULT_HZ);
+            self.advance_sonde_hunt(st.carrier_hint, &st.sondes);
+            st.auto_tune = self.sonde_hunt.armed();
+            st.scanning = self.sonde_hunt.scanning();
+            st.scan_hz = self.sonde_hunt.scan_hz();
             let with_pos = st.sondes.iter().filter(|s| s.has_position()).count();
             let fresh: Vec<_> = st
                 .sondes
@@ -12089,6 +12110,50 @@ impl Engine {
             }
             let _ = self.event_tx.send(RadioEvent::Rs41Status(st));
         }
+    }
+
+    /// Begin (or restart) Auto TUNE across 400–406 MHz.
+    fn start_sonde_hunt(&mut self) {
+        if self.rs41_unavailable().is_some() || !self.rs41_cfg.enabled {
+            return;
+        }
+        let lane = self.rs41_cfg.kind.lane_rate_hz();
+        self.sonde_hunt.start(lane);
+        if let Some(hz) = self.sonde_hunt.scan_hz() {
+            self.sonde_hunt_tune(hz);
+        }
+        info!("SONDE Auto TUNE started");
+    }
+
+    fn advance_sonde_hunt(&mut self, carrier_hint: bool, sondes: &[sdroxide_types::Rs41Sonde]) {
+        match self.sonde_hunt.tick(carrier_hint, sondes) {
+            HuntAction::None => {}
+            HuntAction::Tune(hz) => {
+                self.sonde_hunt_tune(hz);
+            }
+            HuntAction::Lock(hz) => {
+                info!(mhz = hz / 1e6, "SONDE Auto TUNE locked");
+                self.sonde_hunt_tune(hz);
+                self.sonde_hunt.mark_locked();
+            }
+        }
+    }
+
+    /// Move the dial for Auto TUNE without treating it as an operator cancel.
+    fn sonde_hunt_tune(&mut self, hz: f64) {
+        let hz = hz
+            .clamp(sdroxide_types::RS41_BAND_LO_HZ, sdroxide_types::RS41_BAND_HI_HZ)
+            .max(0.0);
+        self.sonde_hunt_moving = true;
+        match self.state.active_vfo {
+            Vfo::A => self.state.vfo_a_hz = hz,
+            Vfo::B => self.state.vfo_b_hz = hz,
+        }
+        self.state.band = Band::containing(hz);
+        self.follow_dial();
+        self.update_tuning();
+        self.sync_rs41_window();
+        self.sonde_hunt_moving = false;
     }
 
     /// Start or stop the Meshtastic LongFast lane to match mode + front end.
@@ -13990,6 +14055,7 @@ impl Engine {
     }
 
     fn set_rx_mode(&mut self, rx: RxId, mode: Mode) {
+        let was_rs41 = rx == RxId::Main && self.state.rx[0].mode.is_rs41();
         if let Some(why) = self.source.mode_unavailable(mode) {
             self.notice(why);
             return;
@@ -14198,6 +14264,11 @@ impl Engine {
             self.sync_vdl2();
             self.sync_ais();
             self.sync_rs41();
+            if mode.is_rs41() && !was_rs41 && self.rs41_cfg.auto_scan && self.rs41_cfg.enabled {
+                self.start_sonde_hunt();
+            } else if !mode.is_rs41() {
+                self.sonde_hunt.stop();
+            }
             self.sync_meshtastic();
             self.emit_digi_status();
             // A wider channel needs a wider berth from the LO: switching a
@@ -14470,6 +14541,9 @@ impl Engine {
             self.stop_scan(None);
         }
         self.stop_hop_for_operator();
+        if !self.sonde_hunt_moving {
+            self.sonde_hunt.stop_for_operator();
+        }
     }
 
     /// The same bargain for WSPR band hopping: a hand on the VFO wins.
