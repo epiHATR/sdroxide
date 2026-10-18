@@ -657,6 +657,10 @@ pub struct SdroxideApp {
     /// contact ever made as if it had just been worked.
     session_qsos: usize,
     show_digi_settings: bool,
+    /// Digi SETUP: open on the previous frame (rising-edge for centering).
+    digi_setup_was_open: bool,
+    /// Digi SETUP: keep forcing a centered position until `.show()` draws.
+    digi_setup_center_pending: bool,
     /// UI-owned editable copy of the operator config, so typing isn't fought
     /// by the round-tripped status echo. Seeded once from the first status.
     digi_cfg_edit: sdroxide_types::DigiConfig,
@@ -774,6 +778,10 @@ pub struct SdroxideApp {
     adsb_filter: String,
     /// ADS-B: the decoder's own settings window is open.
     show_adsb_setup: bool,
+    /// ADS-B setup: open on the previous frame (rising-edge for centering).
+    adsb_setup_was_open: bool,
+    /// ADS-B setup: keep forcing a centered position until `.show()` draws.
+    adsb_setup_center_pending: bool,
     adsb_sort: panels::adsb::AdsbSort,
     adsb_sort_desc: bool,
     /// AIS: the vessel table and everything the decoder is seeing, as the
@@ -788,6 +796,10 @@ pub struct SdroxideApp {
     ais_filter: String,
     /// AIS: the decoder's own settings window is open.
     show_ais_setup: bool,
+    /// AIS setup: open on the previous frame (rising-edge for centering).
+    ais_setup_was_open: bool,
+    /// AIS setup: keep forcing a centered position until `.show()` draws.
+    ais_setup_center_pending: bool,
     ais_sort: panels::ais::AisSort,
     ais_sort_desc: bool,
     /// RS41: the sonde table as the engine last sent it.
@@ -832,6 +844,10 @@ pub struct SdroxideApp {
     vdl2_hold: Option<(Vec<sdroxide_types::Vdl2Message>, u64)>,
     /// VDL2: the decoder's own settings window is open.
     show_vdl2_setup: bool,
+    /// VDL2 setup: open on the previous frame (rising-edge for centering).
+    vdl2_setup_was_open: bool,
+    /// VDL2 setup: keep forcing a centered position until `.show()` draws.
+    vdl2_setup_center_pending: bool,
     vdl2_sort: panels::vdl2::Vdl2Sort,
     vdl2_sort_desc: bool,
     /// APRS: who the message box is addressed to.
@@ -1588,6 +1604,8 @@ impl SdroxideApp {
             log_view: Default::default(),
             session_qsos: 0,
             show_digi_settings: false,
+            digi_setup_was_open: false,
+            digi_setup_center_pending: false,
             digi_cfg_edit: sdroxide_types::DigiConfig::default(),
             sstv: SstvUi::default(),
             rf_paint: RfPaintUi::default(),
@@ -1608,12 +1626,16 @@ impl SdroxideApp {
             adsb_map: crate::adsb_map::AdsbMapState::default(),
             adsb_filter: String::new(),
             show_adsb_setup: false,
+            adsb_setup_was_open: false,
+            adsb_setup_center_pending: false,
             adsb_sort: panels::adsb::AdsbSort::default(),
             adsb_sort_desc: true,
             ais_status: None,
             ais_map: crate::ais_map::AisMapState::default(),
             ais_filter: String::new(),
             show_ais_setup: false,
+            ais_setup_was_open: false,
+            ais_setup_center_pending: false,
             ais_sort: panels::ais::AisSort::default(),
             ais_sort_desc: true,
             rs41_status: None,
@@ -1633,6 +1655,8 @@ impl SdroxideApp {
             vdl2_selected: None,
             vdl2_hold: None,
             show_vdl2_setup: false,
+            vdl2_setup_was_open: false,
+            vdl2_setup_center_pending: false,
             vdl2_sort: panels::vdl2::Vdl2Sort::default(),
             vdl2_sort_desc: true,
             aprs_target: String::new(),

@@ -301,7 +301,26 @@ impl SdroxideApp {
         SystemDock::ALL.iter().any(|&kind| kind.open_flag(self) && !self.system_docked_as(kind))
     }
 
-    /// Modal dim while a floating System-strip overlay is open.
+    /// A mode SETUP / other Foreground floating popup is open (not System-dock).
+    ///
+    /// These share the same modal dim as System overlays so the panadapter and
+    /// decode list cannot be clicked while the dialog is up.
+    pub(in crate::app) fn any_floating_mode_popup(&self) -> bool {
+        self.show_digi_settings
+            || self.show_adsb_setup
+            || self.show_ais_setup
+            || self.show_rs41_setup
+            || self.show_meshtastic_setup
+            || self.show_vdl2_setup
+            || self.show_public_sdrs
+    }
+
+    /// Any centred floating dialog that should block the background.
+    pub(in crate::app) fn any_floating_modal_popup(&self) -> bool {
+        self.any_floating_system_popup() || self.any_floating_mode_popup()
+    }
+
+    /// Modal dim while a floating System or mode SETUP overlay is open.
     ///
     /// Mirrors [`egui::Modal`]: a Foreground layer so every Middle panel (top
     /// bar, panadapter, dock) is below the modal gate and cannot take clicks.
@@ -310,7 +329,7 @@ impl SdroxideApp {
     /// [`egui::Popup::is_any_open`]. Call [`Self::raise_floating_system_popups`]
     /// after the floating windows so they stay above the dim.
     pub(in crate::app) fn popup_input_guard(&self, ctx: &egui::Context) {
-        if !self.any_floating_system_popup() {
+        if !self.any_floating_modal_popup() {
             return;
         }
         let rect = ctx.content_rect();
@@ -334,11 +353,27 @@ impl SdroxideApp {
         });
     }
 
-    /// Keep every open floating System window above the Foreground modal dim.
+    /// Keep every open floating modal window above the Foreground dim.
     pub(in crate::app) fn raise_floating_system_popups(&self, ctx: &egui::Context) {
         for kind in SystemDock::ALL {
             if kind.open_flag(self) && !self.system_docked_as(kind) {
                 let id = crate::layout::salted_id(ctx, kind.window_salt());
+                ctx.move_to_top(egui::LayerId::new(egui::Order::Foreground, id));
+            }
+        }
+        // Mode SETUP / Public SDRs — salts must match each `*_window` call site.
+        let mode_salts: &[(&str, bool)] = &[
+            ("DigiSetup", self.show_digi_settings),
+            ("AdsbSetup", self.show_adsb_setup),
+            ("AisSetup", self.show_ais_setup),
+            ("Rs41Setup", self.show_rs41_setup),
+            ("MeshtasticSetup", self.show_meshtastic_setup),
+            ("Vdl2Setup", self.show_vdl2_setup),
+            ("PUBLIC SDRS", self.show_public_sdrs),
+        ];
+        for &(salt, open) in mode_salts {
+            if open {
+                let id = crate::layout::salted_id(ctx, salt);
                 ctx.move_to_top(egui::LayerId::new(egui::Order::Foreground, id));
             }
         }

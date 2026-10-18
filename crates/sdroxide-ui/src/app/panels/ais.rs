@@ -498,6 +498,11 @@ impl SdroxideApp {
         ctx: &egui::Context,
         cmds: &mut Vec<Command>,
     ) {
+        crate::layout::arm_center_on_open(
+            self.show_ais_setup,
+            &mut self.ais_setup_was_open,
+            &mut self.ais_setup_center_pending,
+        );
         if !self.show_ais_setup {
             return;
         }
@@ -507,13 +512,21 @@ impl SdroxideApp {
         // state, so there is no apply step and no way for the two copies to
         // drift.
         let mut cfg = self.state.ais;
-        let resp = egui::Window::new("AIS Setup")
-            .id(crate::layout::salted_id(ctx, "AisSetup"))
-            .open(&mut open)
-            .frame(crate::chrome::window_frame())
-            .resizable(false)
-            .default_width(crate::layout::window_w(ctx, 420.0))
-            .show(ctx, |ui| {
+        let size =
+            egui::vec2(crate::layout::window_w(ctx, 420.0), crate::layout::window_h(ctx, 480.0));
+        let pending = self.ais_setup_center_pending;
+        let resp = crate::layout::center_on_open(
+            egui::Window::new("AIS Setup")
+                .id(crate::layout::salted_id(ctx, "AisSetup"))
+                .open(&mut open)
+                .frame(crate::chrome::window_frame())
+                .resizable(false)
+                .default_width(size.x),
+            ctx,
+            pending,
+            size,
+        )
+        .show(ctx, |ui| {
                 crate::chrome::window_body_bg(ui);
                 ui.horizontal_wrapped(|ui| {
                     ui.label("Channels");
@@ -661,6 +674,7 @@ impl SdroxideApp {
             });
         if let Some(r) = &resp {
             crate::chrome::paint_window_border(ctx, &r.response);
+            self.ais_setup_center_pending = false;
         }
         let cfg = cfg.sane();
         if cfg != self.state.ais {

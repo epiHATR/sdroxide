@@ -392,6 +392,11 @@ impl SdroxideApp {
         ctx: &egui::Context,
         cmds: &mut Vec<Command>,
     ) {
+        crate::layout::arm_center_on_open(
+            self.show_vdl2_setup,
+            &mut self.vdl2_setup_was_open,
+            &mut self.vdl2_setup_center_pending,
+        );
         if !self.show_vdl2_setup {
             return;
         }
@@ -400,13 +405,21 @@ impl SdroxideApp {
         // arrives and echoes it back in the state, so there is no apply step and
         // no way for the two copies to drift.
         let mut cfg = self.state.vdl2;
-        egui::Window::new("VDL2 Setup")
-            .id(crate::layout::salted_id(ctx, "Vdl2Setup"))
-            .open(&mut open)
-            .frame(crate::chrome::window_frame())
-            .resizable(false)
-            .default_width(crate::layout::window_w(ctx, 420.0))
-            .show(ctx, |ui| {
+        let size =
+            egui::vec2(crate::layout::window_w(ctx, 420.0), crate::layout::window_h(ctx, 420.0));
+        let pending = self.vdl2_setup_center_pending;
+        let resp = crate::layout::center_on_open(
+            egui::Window::new("VDL2 Setup")
+                .id(crate::layout::salted_id(ctx, "Vdl2Setup"))
+                .open(&mut open)
+                .frame(crate::chrome::window_frame())
+                .resizable(false)
+                .default_width(size.x),
+            ctx,
+            pending,
+            size,
+        )
+        .show(ctx, |ui| {
                 crate::chrome::window_body_bg(ui);
                 ui.label(RichText::new("Channels").strong());
                 ui.label(
@@ -521,6 +534,10 @@ impl SdroxideApp {
                     ui.end_row();
                 });
             });
+        if let Some(r) = &resp {
+            crate::chrome::paint_window_border(ctx, &r.response);
+            self.vdl2_setup_center_pending = false;
+        }
         let cfg = cfg.sane();
         if cfg != self.state.vdl2 {
             cmds.push(Command::SetVdl2Config(cfg));

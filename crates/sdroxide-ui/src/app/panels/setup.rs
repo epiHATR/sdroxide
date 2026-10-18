@@ -28,11 +28,23 @@ fn is_grid6(g: &str) -> bool {
 
 impl SdroxideApp {
     /// Own-call / grid / message-template editor (and RTTY parameters).
+    ///
+    /// Centred floating popup like the other mode SETUP windows; the shared
+    /// modal dim ([`crate::app::SdroxideApp::popup_input_guard`]) blocks
+    /// clicks on the panadapter / decode list while it is open.
     pub(in crate::app) fn digi_settings_window(
         &mut self,
         ctx: &egui::Context,
         cmds: &mut Vec<Command>,
     ) {
+        crate::layout::arm_center_on_open(
+            self.show_digi_settings,
+            &mut self.digi_setup_was_open,
+            &mut self.digi_setup_center_pending,
+        );
+        if !self.show_digi_settings {
+            return;
+        }
         let mut open = self.show_digi_settings;
         let mode = self.state.rx[0].mode;
         // Per-mode parameters (RTTY/Olivia/THOR/FSQ) now live in each panel's
@@ -47,13 +59,23 @@ impl SdroxideApp {
         } else {
             "FT8 / FT4 / FT2 Setup".to_string()
         };
-        let resp = egui::Window::new(title.clone())
-            .id(crate::layout::salted_id(ctx, &title))
-            .open(&mut open)
-            .frame(crate::chrome::window_frame())
-            .resizable(false)
-            .default_width(crate::layout::window_w(ctx, 420.0))
-            .show(ctx, |ui| {
+        let size =
+            egui::vec2(crate::layout::window_w(ctx, 420.0), crate::layout::window_h(ctx, 480.0));
+        let pending = self.digi_setup_center_pending;
+        // Stable salt (not the mode title) so raise_floating_system_popups can
+        // keep this window above the modal dim across FT8 / Packet / APRS / ….
+        let resp = crate::layout::center_on_open(
+            egui::Window::new(title)
+                .id(crate::layout::salted_id(ctx, "DigiSetup"))
+                .open(&mut open)
+                .frame(crate::chrome::window_frame())
+                .resizable(false)
+                .default_width(size.x),
+            ctx,
+            pending,
+            size,
+        )
+        .show(ctx, |ui| {
                 crate::chrome::window_body_bg(ui);
                 // Edit the UI-owned copy so keystrokes aren't clobbered by the
                 // engine's status echo; persist on any change.
@@ -1002,6 +1024,7 @@ impl SdroxideApp {
             });
         if let Some(r) = &resp {
             crate::chrome::paint_window_border(ctx, &r.response);
+            self.digi_setup_center_pending = false;
         }
         self.show_digi_settings = open;
     }

@@ -412,6 +412,11 @@ impl SdroxideApp {
         ctx: &egui::Context,
         cmds: &mut Vec<Command>,
     ) {
+        crate::layout::arm_center_on_open(
+            self.show_adsb_setup,
+            &mut self.adsb_setup_was_open,
+            &mut self.adsb_setup_center_pending,
+        );
         if !self.show_adsb_setup {
             return;
         }
@@ -420,13 +425,21 @@ impl SdroxideApp {
         // the engine persists whatever arrives and echoes it back in the state,
         // so there is no apply step and no way for the two copies to drift.
         let mut cfg = self.state.adsb;
-        let resp = egui::Window::new("ADS-B Setup")
-            .id(crate::layout::salted_id(ctx, "AdsbSetup"))
-            .open(&mut open)
-            .frame(crate::chrome::window_frame())
-            .resizable(false)
-            .default_width(crate::layout::window_w(ctx, 400.0))
-            .show(ctx, |ui| {
+        let size =
+            egui::vec2(crate::layout::window_w(ctx, 400.0), crate::layout::window_h(ctx, 360.0));
+        let pending = self.adsb_setup_center_pending;
+        let resp = crate::layout::center_on_open(
+            egui::Window::new("ADS-B Setup")
+                .id(crate::layout::salted_id(ctx, "AdsbSetup"))
+                .open(&mut open)
+                .frame(crate::chrome::window_frame())
+                .resizable(false)
+                .default_width(size.x),
+            ctx,
+            pending,
+            size,
+        )
+        .show(ctx, |ui| {
                 crate::chrome::window_body_bg(ui);
                 egui::Grid::new("adsb-cfg").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
                     ui.label("Drop from map after");
@@ -519,6 +532,7 @@ impl SdroxideApp {
             });
         if let Some(r) = &resp {
             crate::chrome::paint_window_border(ctx, &r.response);
+            self.adsb_setup_center_pending = false;
         }
         let cfg = cfg.sane();
         if cfg != self.state.adsb {
