@@ -514,6 +514,15 @@ pub struct SdroxideApp {
     /// one-click chips beside it in the HFDL panel.
     hfdl_channels: Vec<u32>,
     show_settings: bool,
+    /// Open floating System / mode SETUP window salts, bottom → top.
+    ///
+    /// [`Self::raise_floating_system_popups`] raises only the last entry so the
+    /// last-opened (or last explicitly bumped) modal stays above the others
+    /// when several float at once.
+    floating_modal_stack: Vec<&'static str>,
+    /// This frame already chose a frontmost modal (e.g. Servers… from SETUP);
+    /// skip press-to-front so the parent window's click does not undo it.
+    floating_modal_front_forced: bool,
     /// Rising-edge memory for System-strip windows — see [`SystemWasOpen`].
     system_was_open: SystemWasOpen,
     /// Re-center until the window actually draws — see [`SystemWasOpen`].
@@ -1015,6 +1024,9 @@ pub struct SdroxideApp {
     // ── MQTT decode publish (Settings → Servers) ──
     mqtt_edit: sdroxide_types::MqttConfig,
     mqtt_seeded: bool,
+    // ── VDL2 dumpvdl2-JSON UDP (Settings → Servers / VDL2 SETUP) ──
+    vdl2_udp_edit: sdroxide_types::Vdl2UdpConfig,
+    vdl2_udp_seeded: bool,
     /// Live status from `RadioEvent::RigctldStatus`. Same shape as the TCI
     /// server's, so the two share one status type.
     rigctld_status: Option<TciServerStatus>,
@@ -1588,6 +1600,8 @@ impl SdroxideApp {
             hfdl_filter: String::new(),
             hfdl_channels: load_hfdl_channels(storage),
             show_settings: false,
+            floating_modal_stack: Vec::new(),
+            floating_modal_front_forced: false,
             system_was_open: SystemWasOpen::default(),
             system_center_pending: SystemWasOpen::default(),
             settings_scroll_top: true,
@@ -1778,6 +1792,8 @@ impl SdroxideApp {
             wsjtx_seeded: false,
             mqtt_edit: sdroxide_types::MqttConfig::default(),
             mqtt_seeded: false,
+            vdl2_udp_edit: sdroxide_types::Vdl2UdpConfig::default(),
+            vdl2_udp_seeded: false,
             rigctld_status: None,
             tci_srv_edit: sdroxide_types::TciServerConfig::default(),
             tci_srv_seeded: false,

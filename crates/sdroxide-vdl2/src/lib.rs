@@ -39,15 +39,19 @@ pub mod demod;
 pub mod gate;
 pub mod hdlc;
 pub mod header;
+pub mod json_export;
 pub mod plan;
 pub mod rs;
 pub mod scramble;
 pub mod station;
 pub mod sync;
 pub mod tx;
+pub mod udp_export;
 pub mod xid;
 
 pub use controller::{Vdl2Action, Vdl2Controller};
+pub use json_export::message_json;
+pub use udp_export::Vdl2JsonUdp;
 
 /// Whether a stream of this rate, centred here, reaches any VDL2 channel at all.
 ///

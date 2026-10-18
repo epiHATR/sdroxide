@@ -169,7 +169,7 @@ impl crate::app::SdroxideApp {
                 .min_height(min_h),
             ctx,
             pending,
-            size,
+            size
         )
         .show(ctx, |ui| {
             crate::chrome::window_body_bg(ui);
@@ -180,7 +180,7 @@ impl crate::app::SdroxideApp {
             crate::chrome::paint_window_border(ctx, &r.response);
             crate::layout::settle_center_pending(ctx, id, &mut self.mail.center_pending);
         }
-        if resp.as_ref().is_some_and(|r| self.system_title_pin(ctx, &r.response)) {
+        if resp.as_ref().is_some_and(|r| self.system_title_pin(ctx, &r.response, "MAIL")) {
             self.dock_system(crate::app::SystemDock::Mail);
         }
         self.mail.open = open;

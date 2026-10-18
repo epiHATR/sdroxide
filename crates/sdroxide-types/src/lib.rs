@@ -302,7 +302,7 @@ pub use vdl2::{
     VDL2_DROP_LIST_S, VDL2_GOOD_SPS, VDL2_MESSAGE_MAX, VDL2_MESSAGES, VDL2_MIN_RATE_HZ,
     VDL2_PLAN_CENTER_HZ, VDL2_PLAN_RATE_HZ, VDL2_STATION_MAX, VDL2_STATIONS, VDL2_SYMBOL_RATE,
     VDL2_THRESHOLD_DB, Vdl2Acars, Vdl2AddrKind, Vdl2ChannelStatus, Vdl2Frame, Vdl2Message,
-    Vdl2Payload, Vdl2Settings, Vdl2Station, Vdl2Status, Vdl2Xid,
+    Vdl2Payload, Vdl2Settings, Vdl2Station, Vdl2Status, Vdl2UdpConfig, Vdl2Xid,
 };
 pub use voice::{VOICE_MAX_LEN_S, VOICE_SLOTS, VoiceSlotInfo, VoiceStatus, slot_label};
 pub use wefax::{

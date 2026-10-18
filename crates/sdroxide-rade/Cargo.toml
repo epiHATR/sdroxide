@@ -26,6 +26,9 @@ anyhow.workspace = true
 cmake = "0.1"
 cc = "1"
 bindgen = "0.72"
+# Checksum the Opus DNN tarball without shelling out to sha256sum/shasum —
+# Windows MSYS CI has neither.
+sha2 = "0.11"
 
 [[bin]]
 name = "rade-harness"

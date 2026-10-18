@@ -36,3 +36,5 @@ sdroxide-ax25.workspace = true
 num-complex.workspace = true
 crossbeam-channel.workspace = true
 tracing.workspace = true
+serde.workspace = true
+serde_json.workspace = true

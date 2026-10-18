@@ -320,44 +320,58 @@ impl SdroxideApp {
         self.any_floating_system_popup() || self.any_floating_mode_popup()
     }
 
-    /// Modal dim while a floating System or mode SETUP overlay is open.
+    /// Layer id for the modal veil. **Middle** so it can never cover Foreground
+    /// System windows or their ComboBox / menu popups (also Foreground).
+    fn modal_dim_layer(ctx: &egui::Context) -> egui::LayerId {
+        let id = match crate::layout::radio_salt(ctx) {
+            0 => egui::Id::new("sdroxide-modal-dim"),
+            n => egui::Id::new(("sdroxide-modal-dim", n)),
+        };
+        egui::LayerId::new(egui::Order::Middle, id)
+    }
+
+    /// Fullscreen veil over Middle chrome (top bar, panadapter, …).
     ///
-    /// Mirrors [`egui::Modal`]: a Foreground layer so every Middle panel (top
-    /// bar, panadapter, dock) is below the modal gate and cannot take clicks.
-    /// Chip menus (SPEC, FFT, MODE, …) stay out of this path — they are also
-    /// Foreground and would sit under a freshly raised dim if we gated on
-    /// [`egui::Popup::is_any_open`]. Call [`Self::raise_floating_system_popups`]
-    /// after the floating windows so they stay above the dim.
-    pub(in crate::app) fn popup_input_guard(&self, ctx: &egui::Context) {
-        if !self.any_floating_modal_popup() {
-            return;
-        }
+    /// Stays in [`Order::Middle`]: click-blocking of underneath UI is
+    /// [`Memory::set_modal_layer`] on the front Foreground window, not z-order
+    /// fights between the dim and dropdowns.
+    fn show_modal_dim(ctx: &egui::Context) -> egui::LayerId {
+        let layer = Self::modal_dim_layer(ctx);
         let rect = ctx.content_rect();
-        let id = egui::Id::new("sdroxide-popup-input-guard");
-        let area = egui::Area::new(id)
+        let area = egui::Area::new(layer.id)
             .kind(egui::UiKind::Modal)
-            .order(egui::Order::Foreground)
+            .order(egui::Order::Middle)
             .fixed_pos(rect.min)
             .sense(egui::Sense::hover())
             .interactable(true);
-        ctx.memory_mut(|mem| mem.set_modal_layer(area.layer()));
         area.show(ctx, |ui| {
-            // Full-screen click/drag sink — same pattern as egui::Modal — so
-            // pointer events never fall through to Middle widgets underneath.
             let bg_sense = egui::Sense::CLICK | egui::Sense::DRAG;
             let mut backdrop = ui.new_child(egui::UiBuilder::new().sense(bg_sense).max_rect(rect));
             backdrop.set_min_size(rect.size());
             ui.painter().rect_filled(rect, 0.0, egui::Color32::from_black_alpha(100));
             let _ = backdrop.response();
         });
+        // Above other Middle panels so the veil actually covers them.
+        ctx.move_to_top(layer);
+        layer
     }
 
-    /// Keep every open floating modal window above the Foreground dim.
-    pub(in crate::app) fn raise_floating_system_popups(&self, ctx: &egui::Context) {
+    /// Early veil over Middle chrome while any floating modal is open.
+    pub(in crate::app) fn popup_input_guard(&self, ctx: &egui::Context) {
+        if self.floating_modal_stack.is_empty() {
+            return;
+        }
+        Self::show_modal_dim(ctx);
+    }
+
+    /// Window salts for every open floating modal (System + mode SETUP).
+    ///
+    /// Order is undefined — use [`Self::floating_modal_stack`] for z-order.
+    fn open_floating_modal_salts(&self) -> Vec<&'static str> {
+        let mut salts = Vec::new();
         for kind in SystemDock::ALL {
             if kind.open_flag(self) && !self.system_docked_as(kind) {
-                let id = crate::layout::salted_id(ctx, kind.window_salt());
-                ctx.move_to_top(egui::LayerId::new(egui::Order::Foreground, id));
+                salts.push(kind.window_salt());
             }
         }
         // Mode SETUP / Public SDRs — salts must match each `*_window` call site.
@@ -372,10 +386,93 @@ impl SdroxideApp {
         ];
         for &(salt, open) in mode_salts {
             if open {
-                let id = crate::layout::salted_id(ctx, salt);
-                ctx.move_to_top(egui::LayerId::new(egui::Order::Foreground, id));
+                salts.push(salt);
             }
         }
+        salts
+    }
+
+    /// Drop closed modals; append newly opened ones so they become frontmost.
+    pub(in crate::app) fn sync_floating_modal_stack(&mut self) {
+        let open = self.open_floating_modal_salts();
+        self.floating_modal_stack.retain(|s| open.contains(s));
+        for salt in open {
+            if !self.floating_modal_stack.contains(&salt) {
+                self.floating_modal_stack.push(salt);
+            }
+        }
+    }
+
+    /// Put an already-open (or about-to-open) floating modal above the others.
+    ///
+    /// Used when re-opening Settings from a mode SETUP link while both stay up.
+    pub(in crate::app) fn bring_floating_modal_to_front(&mut self, salt: &'static str) {
+        self.floating_modal_stack.retain(|s| *s != salt);
+        self.floating_modal_stack.push(salt);
+        // So raise does not treat the same pointer press on the parent SETUP
+        // window as "bring parent to front" and undo this.
+        self.floating_modal_front_forced = true;
+    }
+
+    /// True while a nested [`crate::chrome::confirm_modal`] is armed.
+    ///
+    /// Those use `egui::Modal` (not [`egui::Popup`]). Raising the front
+    /// Settings / SETUP window after they paint would `move_to_top` over them.
+    pub(in crate::app) fn nested_confirm_open(&self) -> bool {
+        self.confirm_close_radio.is_some()
+            || self.confirm_undock.is_some()
+            || self.sat_win.confirm_unwatch.is_some()
+    }
+
+    /// Keep the front floating modal interactive; block everything under it.
+    ///
+    /// - Dim is Middle (see [`Self::show_modal_dim`]) — never covers this window
+    ///   or its ComboBox / context menus (Foreground).
+    /// - [`Memory::set_modal_layer`] on the front window blocks Middle chrome
+    ///   and any older Foreground modals below it.
+    /// - Skip `move_to_top` / `set_modal_layer` while an egui [`Popup`] or a
+    ///   nested confirm Modal is open so neither is buried under Settings.
+    pub(in crate::app) fn raise_floating_system_popups(&mut self, ctx: &egui::Context) {
+        self.sync_floating_modal_stack();
+        if !self.floating_modal_front_forced {
+            if let Some(pos) = ctx.pointer_interact_pos() {
+                if ctx.input(|i| i.pointer.any_pressed()) {
+                    if let Some(layer) = ctx.layer_id_at(pos) {
+                        if let Some(&salt) = self.floating_modal_stack.iter().find(|&&s| {
+                            layer
+                                == egui::LayerId::new(
+                                    egui::Order::Foreground,
+                                    crate::layout::salted_id(ctx, s),
+                                )
+                        }) {
+                            self.bring_floating_modal_to_front(salt);
+                        }
+                    }
+                }
+            }
+        }
+        self.floating_modal_front_forced = false;
+
+        let Some(&front) = self.floating_modal_stack.last() else {
+            return;
+        };
+        // Dim was drawn before the top bar; panels registered after it can sit
+        // above it among Middle. Re-raise so the veil covers them. Still under
+        // every Foreground window / ComboBox.
+        ctx.move_to_top(Self::modal_dim_layer(ctx));
+        let win = egui::LayerId::new(
+            egui::Order::Foreground,
+            crate::layout::salted_id(ctx, front),
+        );
+        // Popup dropdowns and confirm Modals both live in Foreground; re-raising
+        // the system window would cover them. Leave z-order and modal layer alone.
+        if egui::Popup::is_any_open(ctx) || self.nested_confirm_open() {
+            return;
+        }
+        ctx.move_to_top(win);
+        // Front window (+ pin sublayer, open ComboBox above it) may interact;
+        // Middle chrome, the dim, and older Foreground modals may not.
+        ctx.memory_mut(|mem| mem.set_modal_layer(win));
     }
 
     /// Snap `kind` into the right panel. Already-docked overlays stay; this one
@@ -569,12 +666,15 @@ impl SdroxideApp {
     /// Pin control in a floating System window's title bar, in the slot
     /// immediately to the right of egui's collapse triangle.
     ///
-    /// Call after `.show()` with that window's response. Hidden when the layout
-    /// cannot dock. Returns whether the operator clicked it this frame.
+    /// Call after `.show()` with that window's response. `window_salt` is
+    /// kept for call-site clarity (matches the floating window id salt).
+    /// Hidden when the layout cannot dock. Returns whether the operator
+    /// clicked it this frame.
     pub(in crate::app) fn system_title_pin(
         &self,
         ctx: &egui::Context,
         win: &egui::Response,
+        _window_salt: &'static str,
     ) -> bool {
         if self.band_dock_room.is_none() {
             return false;
@@ -620,8 +720,8 @@ impl SdroxideApp {
                     clicked = true;
                 }
             });
-        // Ride the window's layer so the pin hides/moves with it rather than
-        // stacking as a separate Middle window above everything else.
+        // Ride the window's layer so the pin hides/moves with it. Safe again
+        // now that the window is not itself a sublayer of the modal dim.
         ctx.set_sublayer(win.layer_id, inner.response.layer_id);
         clicked
     }
@@ -1130,12 +1230,11 @@ impl SdroxideApp {
         } else if let Some(kind) = undock {
             self.confirm_undock = Some(kind);
         }
-
-        self.resolve_undock_confirm(ui.ctx());
+        // Confirm paints after `raise_floating_system_popups` (see frame.rs).
     }
 
     /// Centered confirm before returning a docked overlay to a floating window.
-    fn resolve_undock_confirm(&mut self, ctx: &egui::Context) {
+    pub(in crate::app) fn resolve_undock_confirm(&mut self, ctx: &egui::Context) {
         let Some(kind) = self.confirm_undock else {
             return;
         };

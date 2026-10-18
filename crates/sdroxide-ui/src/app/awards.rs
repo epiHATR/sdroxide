@@ -137,7 +137,7 @@ impl SdroxideApp {
                 .default_height(size.y),
             ctx,
             pending,
-            size,
+            size
         )
         .show(ctx, |ui| {
             crate::chrome::window_body_bg(ui);
@@ -147,7 +147,7 @@ impl SdroxideApp {
             crate::chrome::paint_window_border(ctx, &r.response);
             crate::layout::settle_center_pending(ctx, id, &mut self.system_center_pending.awards);
         }
-        if resp.as_ref().is_some_and(|r| self.system_title_pin(ctx, &r.response)) {
+        if resp.as_ref().is_some_and(|r| self.system_title_pin(ctx, &r.response, "AWARDS")) {
             self.dock_system(crate::app::SystemDock::Awards);
         }
         self.show_awards = open;

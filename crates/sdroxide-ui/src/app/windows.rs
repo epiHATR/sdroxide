@@ -506,7 +506,7 @@ impl SdroxideApp {
                 .min_height(crate::layout::window_h(ctx, 280.0)),
             ctx,
             pending,
-            size,
+            size
         )
         .show(ctx, |ui| {
             crate::chrome::window_body_bg(ui);
@@ -516,7 +516,7 @@ impl SdroxideApp {
             crate::chrome::paint_window_border(ctx, &r.response);
             crate::layout::settle_center_pending(ctx, id, &mut self.system_center_pending.memories);
         }
-        if resp.as_ref().is_some_and(|r| self.system_title_pin(ctx, &r.response)) {
+        if resp.as_ref().is_some_and(|r| self.system_title_pin(ctx, &r.response, "Memories")) {
             self.dock_system(crate::app::SystemDock::Memories);
         }
         self.show_memories = open;

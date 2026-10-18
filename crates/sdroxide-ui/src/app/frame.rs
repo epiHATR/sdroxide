@@ -281,10 +281,11 @@ impl eframe::App for SdroxideApp {
             }
         }
 
-        // Before the top bar / panadapter: Foreground modal dim so Middle
-        // chrome cannot take clicks while any floating System / mode SETUP
-        // popup is open. Chip menus drawn in the top bar stack above this
-        // layer; floating windows are raised after they show.
+        // Before the top bar / panadapter: Middle veil over chrome while a
+        // floating System / mode SETUP modal is open. The front window is
+        // Foreground (above the veil); set_modal_layer on that window blocks
+        // clicks on everything underneath, including older modals.
+        self.sync_floating_modal_stack();
         self.popup_input_guard(&ctx);
 
         let topbar = egui::Panel::top(crate::layout::salted_id(&ctx, "topbar"))
@@ -956,6 +957,15 @@ impl eframe::App for SdroxideApp {
         // After every floating System / mode SETUP window: keep them above the
         // modal dim so a fresh backdrop Area cannot cover their widgets.
         self.raise_floating_system_popups(&ctx);
+        // Confirm Modals after raise — otherwise Settings / SETUP move_to_top
+        // covers the question. raise also skips while these flags are set.
+        self.resolve_undock_confirm(&ctx);
+        {
+            let mut radio_tab_reqs = Vec::new();
+            self.resolve_close_radio_confirm(&ctx, &mut radio_tab_reqs);
+            self.radio_tab_requests.append(&mut radio_tab_reqs);
+        }
+        self.sat_resolve_unwatch(&ctx, &mut cmds);
         // Dismissible warnings above every floating overlay and the modal dim.
         self.notice_banners_foreground(&ctx, &mut cmds);
         // Last among dialogs, so the out-of-band lockout still covers the rest.
@@ -1645,6 +1655,10 @@ impl SdroxideApp {
                     if !self.mqtt_seeded {
                         self.mqtt_edit = c.mqtt.clone();
                         self.mqtt_seeded = true;
+                    }
+                    if !self.vdl2_udp_seeded {
+                        self.vdl2_udp_edit = c.vdl2_udp.clone();
+                        self.vdl2_udp_seeded = true;
                     }
                     if !self.sat_cfg_seeded {
                         self.sat_cfg_edit = c.sat.clone();

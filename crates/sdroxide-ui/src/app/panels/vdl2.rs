@@ -436,7 +436,7 @@ impl SdroxideApp {
                 .default_height(size.y),
             ctx,
             pending,
-            size,
+            size
         )
         .show(ctx, |ui| {
             crate::chrome::window_body_bg(ui);
@@ -547,6 +547,52 @@ impl SdroxideApp {
                     .weak(),
                 );
                 ui.end_row();
+            });
+
+            ui.add_space(8.0);
+            ui.separator();
+            ui.add_space(4.0);
+            ui.label(RichText::new("Export").strong());
+            ui.label(
+                RichText::new(
+                    "Send each decoded frame as dumpvdl2-compatible JSON over UDP. Host and \
+                     port live under Settings → Servers.",
+                )
+                .size(10.0)
+                .weak(),
+            );
+            let mut export_on = self.vdl2_udp_edit.enabled;
+            let export_changed = crate::chrome::checkbox(
+                ui,
+                &mut export_on,
+                "Send decoded JSON over UDP",
+            )
+            .changed();
+            if export_changed {
+                self.vdl2_udp_edit.enabled = export_on;
+                cmds.push(Command::SetVdl2UdpConfig(self.vdl2_udp_edit.clone()));
+            }
+            ui.horizontal_wrapped(|ui| {
+                let dest = self.vdl2_udp_edit.addr();
+                ui.label(
+                    RichText::new(if self.vdl2_udp_seeded {
+                        format!("→ {dest}")
+                    } else {
+                        "→ waiting for station config…".into()
+                    })
+                    .size(10.0)
+                    .weak(),
+                );
+                if crate::chrome::chip(ui, false, "Servers…")
+                    .on_hover_text("Open Settings → Servers to set host and port")
+                    .clicked()
+                {
+                    self.show_settings = true;
+                    self.settings_tab = crate::app::settings::SettingsTab::Servers;
+                    // Settings may already be open under this SETUP window —
+                    // bump it so the link's target is frontmost.
+                    self.bring_floating_modal_to_front("settings-window-v2");
+                }
             });
         });
         if let Some(r) = &resp {

@@ -1604,7 +1604,11 @@ use sdroxide_types::{
 /// v194: shortwave broadcast metre bands. `Band::Bc120` … `Band::Bc11` are
 /// appended to the enum (postcard-safe); `Band::ALL` / `Band::BROADCAST` put
 /// them ahead of `Gen` for the band menu's Broadcast chips (issue #699).
-pub const PROTO_VERSION: u16 = 194;
+///
+/// v195: `Command::SetVdl2UdpConfig` + `StationConfig.vdl2_udp` (`vdl2_udp.json`)
+/// — dumpvdl2-compatible JSON over UDP for decoded VDL2 frames (Settings →
+/// Servers / VDL2 SETUP).
+pub const PROTO_VERSION: u16 = 195;
 const VERSION_BYTE: u8 = 0x12;
 
 #[derive(Debug, thiserror::Error)]

@@ -4,9 +4,10 @@
 //! Files written next to each other in the config directory and owned by the
 //! engine: the network cockpit (`net.json`), the two built-in control servers
 //! (`rigctld.json`, `tciserver.json`), the WSJT-X UDP broadcast (`wsjtx.json`),
-//! MQTT decode publish (`mqtt.json`), the operator's satellite additions
-//! (`satellites.json`), the antenna-rotator client (`rotator.json`) and the
-//! external transmit/receive switch (`relay.json`).
+//! MQTT decode publish (`mqtt.json`), VDL2 dumpvdl2-JSON UDP (`vdl2_udp.json`),
+//! the operator's satellite additions (`satellites.json`), the antenna-rotator
+//! client (`rotator.json`) and the external transmit/receive switch
+//! (`relay.json`).
 //!
 //! They are bundled into one announcement because they answer one question —
 //! "what is this station set up to do?" — and because a remote client has to
@@ -24,7 +25,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     MqttConfig, NetworkConfig, Region, RelayConfig, RigctldConfig, RotatorConfig, SatConfig,
-    TciServerConfig, WsjtxConfig,
+    TciServerConfig, Vdl2UdpConfig, WsjtxConfig,
 };
 
 /// Everything the engine host persists on the station's behalf, as one
@@ -91,4 +92,8 @@ pub struct StationConfig {
     /// MQTT decode publish (Settings → Servers). Appended last for postcard.
     #[serde(default)]
     pub mqtt: MqttConfig,
+    /// VDL2 dumpvdl2-compatible JSON over UDP (Settings → Servers). Appended
+    /// last for postcard.
+    #[serde(default)]
+    pub vdl2_udp: Vdl2UdpConfig,
 }

@@ -691,3 +691,67 @@ pub(in crate::app) fn settings_mqtt_tab(
         *apply = true;
     }
 }
+
+/// VDL2 dumpvdl2-compatible JSON over UDP — one object per decoded frame.
+pub(in crate::app) fn settings_vdl2_udp_tab(
+    ui: &mut egui::Ui,
+    cfg: &mut sdroxide_types::Vdl2UdpConfig,
+    seeded: bool,
+    apply: &mut bool,
+) {
+    ui.label(
+        RichText::new("VDL2 JSON over UDP").size(14.0).strong().color(crate::theme::CYAN()),
+    );
+    ui.add_space(4.0);
+    if !seeded {
+        ui.label(RichText::new("Waiting for the station's VDL2 UDP configuration…").weak());
+        return;
+    }
+    ui.label(
+        RichText::new(
+            "Each decoded VDL2 frame as one UDP datagram of dumpvdl2-compatible JSON — the same \
+             shape dumpvdl2 emits for decoded:json:udp. For Airframes-style collectors, custom \
+             loggers, or nc -ul 5555. Output only; nothing on the socket can touch the radio. \
+             The VDL2 SETUP chip can turn this on without opening Settings.",
+        )
+        .weak(),
+    );
+    ui.add_space(6.0);
+    crate::chrome::checkbox(ui, &mut cfg.enabled, "Enable");
+    ui.add_space(6.0);
+    ui.add_enabled_ui(cfg.enabled, |ui| {
+        egui::Grid::new("vdl2-udp-grid").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
+            ui.label("Send to");
+            crate::chrome::field(
+                ui,
+                egui::TextEdit::singleline(&mut cfg.host)
+                    .desired_width(160.0)
+                    .hint_text("127.0.0.1"),
+            )
+            .on_hover_text(
+                "127.0.0.1 reaches programs on this machine; a LAN address or this subnet's \
+                 broadcast address reaches others.",
+            );
+            ui.end_row();
+
+            ui.label("Port");
+            ui.add(egui::DragValue::new(&mut cfg.port).range(1..=65535))
+                .on_hover_text("5555 by default — a common dumpvdl2-style listener port");
+            ui.end_row();
+        });
+    });
+
+    ui.add_space(8.0);
+    if crate::chrome::chip_accent(
+        ui,
+        false,
+        RichText::new(" APPLY ").strong(),
+        crate::theme::GREEN(),
+        crate::theme::INK_ON_CYAN(),
+    )
+    .on_hover_text("Persist and (re)open the UDP socket")
+    .clicked()
+    {
+        *apply = true;
+    }
+}

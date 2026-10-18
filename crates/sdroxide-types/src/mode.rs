@@ -1118,11 +1118,11 @@ impl Mode {
             Mode::Rs41 => (-12_000.0, 12_000.0),
             // LoRa LongFast is typically 250 kHz; shade that around the dial.
             Mode::Meshtastic => (-125_000.0, 125_000.0),
-            // Likewise not a receive filter: the decoder reads seven
+            // Likewise not a receive filter: the decoder reads fourteen
             // channels spread over 325 kHz, and this is the whole plan
-            // drawn on the panadapter so an operator can see that all of
-            // it is being listened to.
-            Mode::Vdl2 => (-162_500.0, 162_500.0),
+            // (with a little shoulder) drawn on the panadapter so an
+            // operator can see that all of it is being listened to.
+            Mode::Vdl2 => (-250_000.0, 250_000.0),
             // Likewise: the two AIS channels sit 25 kHz either side of the
             // dial, and this is the pair of slots drawn on the panadapter so
             // an operator can see that both are being listened to.
@@ -1598,10 +1598,16 @@ impl Mode {
             // made to match the window the receiver is actually delivering,
             // which is the only thing that limits the decode.
             Mode::Adsb => &[("2M", -1_000_000.0, 1_000_000.0), ("2.4M", -1_200_000.0, 1_200_000.0)],
-            // One channel, or the whole plan. A receiver too narrow for
-            // the group can still take the Common Signalling Channel, and
-            // this is how the shading says which of the two it is doing.
-            Mode::Vdl2 => &[("25k", -12_500.0, 12_500.0), ("325k", -162_500.0, 162_500.0)],
+            // One channel, the published plan, or the plan with a little
+            // shoulder. A receiver too narrow for the group can still take
+            // the Common Signalling Channel, and this is how the shading
+            // says which of the three it is doing. 500k is the default —
+            // same span the panadapter frames on entering the mode.
+            Mode::Vdl2 => &[
+                ("25k", -12_500.0, 12_500.0),
+                ("325k", -162_500.0, 162_500.0),
+                ("500k", -250_000.0, 250_000.0),
+            ],
             // One channel, or both. A receiver too narrow for the pair still
             // hears whichever it is over, and this is how the shading says
             // which of the two it is doing.

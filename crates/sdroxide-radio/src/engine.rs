@@ -2923,6 +2923,11 @@ struct Engine {
     mqtt_cfg: sdroxide_types::MqttConfig,
     /// Last Meshtastic message unix already sent to MQTT (dedupe).
     mqtt_mesh_last_unix: i64,
+    /// dumpvdl2-compatible VDL2 JSON over UDP, if switched on.
+    vdl2_udp: Option<sdroxide_vdl2::Vdl2JsonUdp>,
+    vdl2_udp_cfg: sdroxide_types::Vdl2UdpConfig,
+    /// Fingerprint of the last VDL2 message exported over UDP (dedupe).
+    vdl2_udp_last: Option<(i64, u32, u32, usize)>,
     /// Cached Maidenhead for PSK / MQTT / spots. Refreshed when digi or radio
     /// identity changes — never reloads `radio.json` on a per-decode path.
     report_grid_cache: String,
@@ -4342,6 +4347,9 @@ fn engine_thread(
         mqtt: sdroxide_net::MqttPublisher::default(),
         mqtt_cfg: sdroxide_types::MqttConfig::default(),
         mqtt_mesh_last_unix: 0,
+        vdl2_udp: None,
+        vdl2_udp_cfg: sdroxide_types::Vdl2UdpConfig::default(),
+        vdl2_udp_last: None,
         report_grid_cache: String::new(),
         wsjtx_beat: Instant::now(),
         rigctld: None,
@@ -4516,6 +4524,8 @@ fn engine_thread(
     engine.sync_wsjtx();
     engine.mqtt_cfg = engine.store.load_mqtt_config();
     engine.sync_mqtt();
+    engine.vdl2_udp_cfg = engine.store.load_vdl2_udp_config();
+    engine.sync_vdl2_udp();
     // The satellite additions: the display tracker lives in the UI, but the
     // element sets are persisted here — and the satellite *lock*, when the
     // operator engages one, runs here too (see `poll_sat_track`).
@@ -6584,6 +6594,67 @@ impl Engine {
     fn sync_mqtt(&mut self) {
         let grid = self.report_grid();
         self.mqtt.apply(self.mqtt_cfg.clone(), &self.digi_config.my_call, &grid);
+    }
+
+    /// Start, retarget or stop the VDL2 dumpvdl2-JSON UDP output.
+    fn sync_vdl2_udp(&mut self) {
+        let cfg = &self.vdl2_udp_cfg;
+        let want = cfg.enabled;
+        if want && self.vdl2_udp.as_ref().is_some_and(|c| c.addr() == cfg.addr()) {
+            return;
+        }
+        let had = self.vdl2_udp.take().is_some();
+        if !want {
+            if had {
+                info!("VDL2 JSON UDP output stopped");
+            }
+            self.vdl2_udp_last = None;
+            return;
+        }
+        match sdroxide_vdl2::Vdl2JsonUdp::start(cfg) {
+            Ok(c) => {
+                self.vdl2_udp = Some(c);
+                self.vdl2_udp_last = None;
+            }
+            Err(e) => {
+                warn!("VDL2 JSON UDP output: {e}");
+                let _ = self
+                    .event_tx
+                    .send(RadioEvent::NetStatus(Some(format!("VDL2 JSON UDP: {e}"))));
+            }
+        }
+    }
+
+    /// Send newly arrived VDL2 frames as dumpvdl2 JSON. Oldest-first through
+    /// messages not yet exported; a status refresh with the same tip does nothing.
+    fn export_vdl2_udp(&mut self, messages: &[sdroxide_types::Vdl2Message]) {
+        if self.vdl2_udp.is_none() {
+            return;
+        }
+        let call = self.digi_config.my_call.clone();
+        let station = {
+            let c = call.trim();
+            (!c.is_empty()).then_some(c)
+        };
+        let start = match self.vdl2_udp_last {
+            None => 0,
+            Some(last) => messages
+                .iter()
+                .rposition(|m| (m.at, m.src, m.dst, m.raw_hex.len()) == last)
+                .map(|i| i + 1)
+                .unwrap_or(0),
+        };
+        if start >= messages.len() {
+            return;
+        }
+        if let Some(out) = self.vdl2_udp.as_ref() {
+            for m in &messages[start..] {
+                out.send(m, station);
+            }
+        }
+        if let Some(m) = messages.last() {
+            self.vdl2_udp_last = Some((m.at, m.src, m.dst, m.raw_hex.len()));
+        }
     }
 
     /// Stamp MQTT payloads with the current call / report grid. Disk I/O stays
@@ -9903,6 +9974,16 @@ impl Engine {
                 return;
             }
 
+            SetVdl2UdpConfig(cfg) => {
+                if let Err(e) = self.store.save_vdl2_udp_config(&cfg) {
+                    warn!("saving VDL2 UDP config: {e}");
+                }
+                self.vdl2_udp_cfg = cfg;
+                self.sync_vdl2_udp();
+                self.emit_station_config();
+                return;
+            }
+
             // Transmit-image presets and the received-picture stores (no
             // RadioState change → return before the State emit below).
             ImageSetSlot { slot, bytes } => {
@@ -11720,6 +11801,7 @@ impl Engine {
             st.degraded = degraded.clone();
             st.suggest_center_hz = (unavailable.is_some() || degraded.is_some())
                 .then_some(sdroxide_types::VDL2_PLAN_CENTER_HZ);
+            self.export_vdl2_udp(&st.messages);
             let _ = self.event_tx.send(RadioEvent::Vdl2Status(st));
         }
     }
@@ -12954,6 +13036,7 @@ impl Engine {
                 band_plan: sdroxide_types::band_plan().clone(),
                 digi_presets: sdroxide_types::digi_presets().to_vec(),
                 mqtt: self.mqtt_cfg.clone(),
+                vdl2_udp: self.vdl2_udp_cfg.clone(),
             },
         )));
     }

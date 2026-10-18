@@ -886,6 +886,17 @@ impl Store {
     pub fn save_mqtt_config(&self, cfg: &sdroxide_types::MqttConfig) -> Result<(), ConfigError> {
         self.save("mqtt.json", cfg)
     }
+
+    pub fn load_vdl2_udp_config(&self) -> sdroxide_types::Vdl2UdpConfig {
+        self.load("vdl2_udp.json")
+    }
+
+    pub fn save_vdl2_udp_config(
+        &self,
+        cfg: &sdroxide_types::Vdl2UdpConfig,
+    ) -> Result<(), ConfigError> {
+        self.save("vdl2_udp.json", cfg)
+    }
 }
 
 /// One radio in the station (`radios.json`).
@@ -1899,6 +1910,15 @@ pub fn load_mqtt_config() -> sdroxide_types::MqttConfig {
 
 pub fn save_mqtt_config(cfg: &sdroxide_types::MqttConfig) -> Result<(), ConfigError> {
     Store::station().save_mqtt_config(cfg)
+}
+
+/// VDL2 dumpvdl2-JSON UDP output (Settings → Servers). Owned by the engine.
+pub fn load_vdl2_udp_config() -> sdroxide_types::Vdl2UdpConfig {
+    Store::station().load_vdl2_udp_config()
+}
+
+pub fn save_vdl2_udp_config(cfg: &sdroxide_types::Vdl2UdpConfig) -> Result<(), ConfigError> {
+    Store::station().save_vdl2_udp_config(cfg)
 }
 
 /// Control-input bindings: keyboard chords, panadapter mouse behaviour and the

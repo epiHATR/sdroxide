@@ -52,7 +52,7 @@ use self::radio::{
 use self::remote::settings_remote_tab;
 use self::servers::{
     settings_mqtt_tab, settings_rigctld_tab, settings_rotator_tab, settings_tci_server_tab,
-    settings_wsjtx_tab,
+    settings_vdl2_udp_tab, settings_wsjtx_tab,
 };
 use self::tle::settings_tle_tab;
 use self::ui_tab::settings_ui_tab;
@@ -298,6 +298,8 @@ pub(in crate::app) struct SettingsIo<'a> {
     wsjtx_apply: &'a mut bool,
     mqtt_edit: &'a mut sdroxide_types::MqttConfig,
     mqtt_apply: &'a mut bool,
+    vdl2_udp_edit: &'a mut sdroxide_types::Vdl2UdpConfig,
+    vdl2_udp_apply: &'a mut bool,
     /// The rotctld *client* — the satellite lock steering a motorized antenna.
     rot_edit: &'a mut sdroxide_types::RotatorConfig,
     rot_apply: &'a mut bool,
@@ -1123,6 +1125,8 @@ impl SdroxideApp {
         let mut wsjtx_apply = false;
         let mut mqtt_edit = self.mqtt_edit.clone();
         let mut mqtt_apply = false;
+        let mut vdl2_udp_edit = self.vdl2_udp_edit.clone();
+        let mut vdl2_udp_apply = false;
         let mut rot_edit = self.rot_cfg_edit.clone();
         let mut rot_apply = false;
         let mut relay_edit = self.relay_edit.clone();
@@ -1190,7 +1194,7 @@ impl SdroxideApp {
                     .vscroll(true),
                 ctx,
                 pending,
-                want,
+                want
             ))
         };
         let resp = win.and_then(|win| {
@@ -1315,6 +1319,8 @@ impl SdroxideApp {
                             wsjtx_apply: &mut wsjtx_apply,
                             mqtt_edit: &mut mqtt_edit,
                             mqtt_apply: &mut mqtt_apply,
+                            vdl2_udp_edit: &mut vdl2_udp_edit,
+                            vdl2_udp_apply: &mut vdl2_udp_apply,
                             rot_edit: &mut rot_edit,
                             rot_apply: &mut rot_apply,
                             relay_edit: &mut relay_edit,
@@ -1352,7 +1358,7 @@ impl SdroxideApp {
             crate::chrome::paint_window_border(ctx, &r.response);
             crate::layout::settle_center_pending(ctx, id, &mut self.system_center_pending.settings);
         }
-        if !docked && resp.as_ref().is_some_and(|r| self.system_title_pin(ctx, &r.response)) {
+        if !docked && resp.as_ref().is_some_and(|r| self.system_title_pin(ctx, &r.response, "settings-window-v2")) {
             self.dock_system(crate::app::SystemDock::Settings);
         }
         if !docked {
@@ -1373,10 +1379,9 @@ impl SdroxideApp {
         // current. And not cleared here either, or a status already on its way
         // from before the apply would re-seed the old callsign.
         self.profile_apply_pending |= digi_reseed;
-        // Resolve a pending × confirm before the shell drains the queue — the
-        // modal is centered and must outlive the Settings window closure.
+        // Confirm paints after `raise_floating_system_popups` so Settings cannot
+        // bury the egui::Modal (see frame.rs).
         self.confirm_close_radio = confirm_close_radio;
-        self.resolve_close_radio_confirm(ctx, &mut radio_tab_reqs);
         // The multi-radio shell drains these after the frame.
         self.radio_tab_requests.append(&mut radio_tab_reqs);
         {
@@ -1434,6 +1439,10 @@ impl SdroxideApp {
         self.mqtt_edit = mqtt_edit;
         if mqtt_apply {
             cmds.push(Command::SetMqttConfig(self.mqtt_edit.clone()));
+        }
+        self.vdl2_udp_edit = vdl2_udp_edit;
+        if vdl2_udp_apply {
+            cmds.push(Command::SetVdl2UdpConfig(self.vdl2_udp_edit.clone()));
         }
         self.rot_cfg_edit = rot_edit;
         if rot_apply {
@@ -3538,6 +3547,10 @@ impl SdroxideApp {
                 ui.add_space(12.0);
                 ui.separator();
                 ui.add_space(8.0);
+                settings_vdl2_udp_tab(ui, io.vdl2_udp_edit, self.vdl2_udp_seeded, io.vdl2_udp_apply);
+                ui.add_space(12.0);
+                ui.separator();
+                ui.add_space(8.0);
                 settings_rotator_tab(
                     ui,
                     io.rot_edit,
@@ -4272,7 +4285,9 @@ impl SdroxideApp {
     /// the files under `~/.config/sdroxide/` stay. On a connection, "close"
     /// means hang up the tab, or — when the station allows it — remove the
     /// radio from that station's roster for every client.
-    fn resolve_close_radio_confirm(
+    ///
+    /// Call after [`crate::app::SdroxideApp::raise_floating_system_popups`].
+    pub(in crate::app) fn resolve_close_radio_confirm(
         &mut self,
         ctx: &egui::Context,
         requests: &mut Vec<crate::app::RadioTabRequest>,

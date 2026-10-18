@@ -715,6 +715,36 @@ impl Vdl2Settings {
     }
 }
 
+/// Dumpvdl2-compatible JSON over UDP (`vdl2_udp.json`, Settings → Servers).
+///
+/// Output only: one JSON object per decoded frame, the same shape dumpvdl2
+/// emits for `decoded:json:udp`. Off by default — publishing what the station
+/// hears is the operator's decision.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Vdl2UdpConfig {
+    pub enabled: bool,
+    /// Destination host. `127.0.0.1` reaches programs on this machine.
+    pub host: String,
+    /// Destination UDP port. 5555 is a common dumpvdl2-style listener default.
+    pub port: u16,
+}
+
+impl Default for Vdl2UdpConfig {
+    fn default() -> Self {
+        Vdl2UdpConfig { enabled: false, host: "127.0.0.1".into(), port: 5555 }
+    }
+}
+
+impl Vdl2UdpConfig {
+    /// The destination as the sender spells it — trimmed, and 127.0.0.1 for a
+    /// blank host — so the engine rebuilds the socket only on a real change.
+    pub fn addr(&self) -> String {
+        let host = self.host.trim();
+        format!("{}:{}", if host.is_empty() { "127.0.0.1" } else { host }, self.port)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -816,5 +846,13 @@ mod tests {
         for bits in [0u8, 2, 3, 6] {
             assert_eq!(Vdl2AddrKind::from_bits(bits), Vdl2AddrKind::Reserved, "{bits}");
         }
+    }
+
+    #[test]
+    fn vdl2_udp_addr_defaults_to_loopback() {
+        let cfg = Vdl2UdpConfig::default();
+        assert_eq!(cfg.addr(), "127.0.0.1:5555");
+        let blank = Vdl2UdpConfig { host: "  ".into(), ..cfg };
+        assert_eq!(blank.addr(), "127.0.0.1:5555");
     }
 }

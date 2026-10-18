@@ -18,8 +18,11 @@
 //! adds a second target over *the same source list*, read back off upstream's
 //! own target rather than copied, so it cannot drift when the submodule moves.
 
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+use sha2::{Digest, Sha256};
 
 /// SHA-256 of the DNN weight tarball pinned by Opus `autogen.sh` at the
 /// commit `BuildOpus.cmake` fetches (`940d4e5a…`). Bump both together when
@@ -151,7 +154,7 @@ fn ensure_opus_model(manifest: &Path) -> PathBuf {
         panic!("create Opus model cache {}: {e}", cache_dir.display());
     });
     let dest = cache_dir.join(opus_model_name());
-    if dest.is_file() && sha256_hex(&dest).as_deref() == Some(OPUS_MODEL_HASH) {
+    if dest.is_file() && sha256_hex(&dest).ok().as_deref() == Some(OPUS_MODEL_HASH) {
         return dest;
     }
     if dest.is_file() {
@@ -174,17 +177,17 @@ fn ensure_opus_model(manifest: &Path) -> PathBuf {
     let url = format!("https://media.xiph.org/opus/models/{}", opus_model_name());
     println!("cargo:warning=downloading Opus DNN weights to {} (~175 MB, once)", dest.display());
     download(&url, &dest);
-    match sha256_hex(&dest) {
-        Some(h) if h == OPUS_MODEL_HASH => dest,
-        Some(h) => panic!(
+    let h = sha256_hex(&dest).unwrap_or_else(|e| {
+        panic!("could not hash {}: {e}", dest.display());
+    });
+    if h == OPUS_MODEL_HASH {
+        dest
+    } else {
+        panic!(
             "Opus model checksum mismatch for {}\n  expected {OPUS_MODEL_HASH}\n  got      {h}\n\
              delete that file and rebuild",
             dest.display()
-        ),
-        None => panic!(
-            "could not verify checksum of {} (need sha256sum or shasum)",
-            dest.display()
-        ),
+        );
     }
 }
 
@@ -201,43 +204,32 @@ fn find_cached_opus_model(manifest: &Path) -> Option<PathBuf> {
                 .path()
                 .join("out/build/build_opus-prefix/src/build_opus")
                 .join(&name);
-            if path.is_file() && sha256_hex(&path).as_deref() == Some(OPUS_MODEL_HASH) {
+            if path.is_file() && sha256_hex(&path).ok().as_deref() == Some(OPUS_MODEL_HASH) {
                 return Some(path);
             }
         }
     }
     // Repo-local fallback (gitignored).
     let local = workspace.join(".cache/opus_models").join(&name);
-    if local.is_file() && sha256_hex(&local).as_deref() == Some(OPUS_MODEL_HASH) {
+    if local.is_file() && sha256_hex(&local).ok().as_deref() == Some(OPUS_MODEL_HASH) {
         return Some(local);
     }
     None
 }
 
-fn sha256_hex(path: &Path) -> Option<String> {
-    let attempts = [
-        ("sha256sum", vec![path.as_os_str().to_os_string()]),
-        (
-            "shasum",
-            vec![
-                std::ffi::OsString::from("-a"),
-                std::ffi::OsString::from("256"),
-                path.as_os_str().to_os_string(),
-            ],
-        ),
-    ];
-    for (prog, args) in attempts {
-        let output = Command::new(prog).args(&args).output().ok()?;
-        if !output.status.success() {
-            continue;
+fn sha256_hex(path: &Path) -> Result<String, String> {
+    let mut file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    let mut hasher = Sha256::new();
+    let mut buf = [0u8; 64 * 1024];
+    loop {
+        let n = file.read(&mut buf).map_err(|e| e.to_string())?;
+        if n == 0 {
+            break;
         }
-        let text = String::from_utf8_lossy(&output.stdout);
-        let hash = text.split_whitespace().next()?.to_ascii_lowercase();
-        if hash.len() == 64 && hash.chars().all(|c| c.is_ascii_hexdigit()) {
-            return Some(hash);
-        }
+        hasher.update(&buf[..n]);
     }
-    None
+    // sha2 0.11's Output no longer implements LowerHex; format bytes like digi.
+    Ok(hasher.finalize().iter().map(|b| format!("{b:02x}")).collect())
 }
 
 fn download(url: &str, dest: &Path) {

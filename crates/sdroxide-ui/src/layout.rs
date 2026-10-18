@@ -382,8 +382,9 @@ pub fn center_on_open<'a>(
     size: egui::Vec2,
 ) -> egui::Window<'a> {
     let pos = centered_window_pos(ctx, size);
-    // Foreground: sits above the modal dim (`popup_input_guard`) and every
-    // Middle panel, so the open System popup stays the only interactive layer.
+    // Foreground: sits above that window's modal dim (see
+    // [`crate::app::SdroxideApp::raise_floating_system_popups`]) and every
+    // Middle panel.
     let win = win.order(egui::Order::Foreground);
     if pending {
         win.anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
