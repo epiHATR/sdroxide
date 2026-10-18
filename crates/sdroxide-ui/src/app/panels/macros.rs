@@ -36,8 +36,8 @@ pub(in crate::app) fn macro_row(
     let typing = ui.memory(|m| m.focused().is_some());
     let mut fire: Option<usize> = None;
     if !typing && tx_ok {
-        // F1 is the manual's, everywhere and always, so the buttons start at
-        // F2: a press for help must never put a message on the air.
+        // Macro chips start at F2 (F1 is unused) so a function-key press for
+        // help-like habits cannot put a message on the air.
         const KEYS: [egui::Key; 9] = [
             egui::Key::F2,
             egui::Key::F3,

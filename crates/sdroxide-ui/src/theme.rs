@@ -1995,7 +1995,15 @@ pub fn apply_visuals(ctx: &egui::Context) {
         v.faint_bg_color = p.faint_bg;
         v.code_bg_color = p.input_bg;
 
-        v.window_stroke = Stroke::new(1.0, p.pink);
+        // Title bars and default `Frame::window` read this stroke. The cut
+        // border painted by `chrome::paint_window_border` already honours
+        // NoBorder; this must too or System popups keep a pink outline after
+        // the operator turns the accent border off.
+        v.window_stroke = if box_style() == BoxStyle::NoBorder {
+            Stroke::NONE
+        } else {
+            Stroke::new(1.0, p.pink)
+        };
         v.window_corner_radius = window_corner;
         v.menu_corner_radius = window_corner;
 

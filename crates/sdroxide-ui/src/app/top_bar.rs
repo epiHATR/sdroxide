@@ -1338,7 +1338,7 @@ impl SdroxideApp {
     /// The SYS menu: the window buttons.
     fn sys_menu(&mut self, ui: &mut egui::Ui, btn: egui::Response, cmds: &mut Vec<Command>) {
         let btn = btn.on_hover_text(
-            "Logbook, spots, awards, memories, the scanner, settings and the manual",
+            "Logbook, spots, awards, memories, the scanner and settings",
         );
         crate::chrome::menu_popup(ui, &btn, |ui| {
             crate::chrome::menu_caption(ui, "System");
@@ -5655,7 +5655,7 @@ impl SdroxideApp {
 
     /// The remaining window chips — the condensed System box's bottom row.
     fn system_chips_bottom(&mut self, ui: &mut egui::Ui, extra: f32, cmds: &mut Vec<Command>) {
-        let [mail, mem, scan_label, hfdl_label, grid_label, settings, help] = SYSTEM_CHIPS_BOTTOM;
+        let [mail, mem, scan_label, hfdl_label, grid_label, settings] = SYSTEM_CHIPS_BOTTOM;
         if chip_stretched(ui, self.mail.open, mail, extra)
             .on_hover_text("Winlink radio email")
             .clicked()
@@ -5746,12 +5746,6 @@ impl SdroxideApp {
             .clicked()
         {
             self.show_settings = !self.show_settings;
-        }
-        if chip_stretched(ui, self.help.open, help, extra)
-            .on_hover_text("User manual (F1)")
-            .clicked()
-        {
-            self.help.open = !self.help.open;
         }
     }
 
@@ -5876,15 +5870,14 @@ impl PttPress {
 /// reservation honest, and it has to be structural rather than a comment: a box
 /// reserved narrower than its contents does not clip them. The row simply
 /// carries on past the box, and whatever crosses the window edge is lost. That
-/// is how SCAN, SETTINGS and HELP came to vanish on the layouts where the strip
+/// is how SCAN and SETTINGS came to vanish on the layouts where the strip
 /// put this box near the end of a row — and, later, how the public-SDR chip
 /// did, drawn in the top row while a single split index still counted it in the
 /// bottom one.
 const SYSTEM_CHIPS_TOP: [&str; 7] = ["LOG", "SPOTS", "AWARDS", "BANDS", "SAT", "ISM", "AUDIO"];
 
 /// The rest of them. See [`SYSTEM_CHIPS_TOP`].
-const SYSTEM_CHIPS_BOTTOM: [&str; 7] =
-    ["MAIL", "MEM", "SCAN", "HFDL", "GRID", "⚙ SETTINGS", "? HELP"];
+const SYSTEM_CHIPS_BOTTOM: [&str; 6] = ["MAIL", "MEM", "SCAN", "HFDL", "GRID", "⚙ SETTINGS"];
 
 /// The Display box's top row: the solar view, then the chips that choose what
 /// the panadapter draws — the last of those only on a front end with a
@@ -7980,7 +7973,7 @@ mod tests {
     /// whatever crosses the window edge is simply gone. The box was sized 285 pt
     /// by hand for five chips and kept that literal through three more (BANDS,
     /// SCAN, and the widened SETTINGS), by which point the row needed twice the
-    /// box: SCAN, SETTINGS and HELP fell off the right-hand edge on any layout
+    /// box: SCAN and SETTINGS fell off the right-hand edge on any layout
     /// that left the box near the end of a row. Nothing about the chips said so
     /// — they were drawn every frame, just past the edge of the window.
     #[test]
@@ -9065,7 +9058,7 @@ mod tests {
     /// had grown an ANC chip and a MONO chip it was 40 pt light. Nothing about
     /// the box said so: it drew its rows past its own right edge, pushing the
     /// TX, Display and System boxes along the row, and the System box — last
-    /// on the row on a desktop layout — lost ISM and HELP over the edge of the
+    /// on the row on a desktop layout — lost ISM over the edge of the
     /// window. The DRM chip did it again (issue #152), which is why the chips
     /// here come from [`rx_chips`] rather than from a list of their own: a
     /// chip the box does not know about cannot be drawn into it.

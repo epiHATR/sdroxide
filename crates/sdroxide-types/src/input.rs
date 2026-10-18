@@ -105,6 +105,8 @@ pub enum Action {
     /// both of them switches on the SPEC popup's pair of layers.
     WaterfallCollapse,
     WaterfallFlip,
+    /// Former in-app manual toggle. Kept so old `input.json` bindings still
+    /// deserialize; the action is a no-op (manual lives on the GitHub wiki).
     ToggleHelp,
     ToggleSettings,
     ToggleLogbook,
@@ -162,8 +164,11 @@ impl Action {
             | ZoomOut | PeakHold | SpectrumCollapse | WaterfallCollapse | WaterfallFlip => {
                 "Display"
             }
-            ToggleHelp | ToggleSettings | ToggleLogbook | ToggleSpots | ToggleMemories
-            | ToggleVoice => "Windows",
+            ToggleSettings | ToggleLogbook | ToggleSpots | ToggleMemories | ToggleVoice => {
+                "Windows"
+            }
+            // Hidden from the bindings editor; still grouped for any leftover binding.
+            ToggleHelp => "Windows",
             SpeakStatus | SpeakRepeat | SpeechSilence | SpeechToggle => "Speech",
         }
     }
@@ -224,7 +229,7 @@ impl Action {
             SpectrumCollapse => "Collapse spectrum",
             WaterfallCollapse => "Collapse waterfall",
             WaterfallFlip => "Flip waterfall",
-            ToggleHelp => "Manual window",
+            ToggleHelp => "Manual (removed — see wiki)",
             ToggleSettings => "Settings window",
             ToggleLogbook => "Logbook window",
             ToggleSpots => "Spots window",
@@ -319,7 +324,6 @@ impl Action {
             SpectrumCollapse,
             WaterfallCollapse,
             WaterfallFlip,
-            ToggleHelp,
             ToggleSettings,
             ToggleLogbook,
             ToggleSpots,

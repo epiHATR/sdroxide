@@ -25,7 +25,6 @@ pub mod event_loop;
 mod flags;
 mod fuzzy;
 mod hell;
-mod help;
 mod hfdl_map;
 mod input;
 /// Which layout the window wears — desktop strip, tablet menus, or the compact

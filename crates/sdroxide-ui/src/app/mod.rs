@@ -1042,8 +1042,6 @@ pub struct SdroxideApp {
     /// Cached membership sets over the log, keyed by log length — the decode
     /// list asks these which stations would be a new one, every row, every slot.
     log_index_cache: Option<(usize, sdroxide_types::LogIndex)>,
-    /// F1 help: the embedded user manual with a navigation outline.
-    help: crate::help::Help,
     /// Control inputs: keyboard/mouse bindings, MIDI, and what is held right now.
     input: crate::input::InputRuntime,
     /// MIDI ports as `(id, name)`, enumerated when the settings dialog opens
@@ -1743,7 +1741,6 @@ impl SdroxideApp {
             awards_heat: None,
             worked_entities_cache: None,
             log_index_cache: None,
-            help: crate::help::Help::default(),
             input: crate::input::InputRuntime::new(storage, egui_ctx),
             midi_in_ports: Vec::new(),
             midi_out_ports: Vec::new(),

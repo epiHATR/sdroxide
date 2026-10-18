@@ -259,19 +259,8 @@ impl eframe::App for SdroxideApp {
         // this frame loop, and without the gate one arrow key would tune all
         // of them at once.
         if self.focused {
-            // F1 toggles the manual — handled here (not in
-            // `keyboard_shortcuts`) so it works even while a text field has
-            // focus.
-            // Consumed, so nothing later in the frame (the message buttons'
-            // function keys) sees the same press.
-            if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::F1)) {
-                self.help.open = !self.help.open;
-            }
-            // An open manual takes the scrolling keys before the bindings run,
-            // so reading it never tunes the radio at the same time.
-            self.help.grab_keys(&ctx);
-            // Likewise the CW straight key takes the Space bar, so a PTT bound
-            // to it does not key the rig under the operator's hand.
+            // The CW straight key takes the Space bar, so a PTT bound to it
+            // does not key the rig under the operator's hand.
             self.swallow_straight_key(&ctx);
             self.control_inputs(&ctx, now, &mut cmds);
         }
@@ -1029,7 +1018,6 @@ impl eframe::App for SdroxideApp {
         // After every floating System window: keep them above the modal dim so
         // a fresh backdrop Area cannot cover their widgets.
         self.raise_floating_system_popups(&ctx);
-        self.help.ui(&ctx);
         // Last, so it lands on top of everything else that opened this frame.
         self.oob_tx_window(&ctx);
         #[cfg(not(target_arch = "wasm32"))]
@@ -1934,7 +1922,6 @@ impl SdroxideApp {
             input,
             state,
             view,
-            help,
             show_settings,
             show_logbook,
             show_spots,
@@ -1958,7 +1945,6 @@ impl SdroxideApp {
         };
         let mut sink = crate::input::UiSink {
             view,
-            help: &mut help.open,
             settings: show_settings,
             logbook: show_logbook,
             spots: show_spots,
@@ -2009,7 +1995,6 @@ impl SdroxideApp {
             input,
             state,
             view,
-            help,
             show_settings,
             show_logbook,
             show_spots,
@@ -2031,7 +2016,6 @@ impl SdroxideApp {
         let rig_squelch = caps.as_ref().is_some_and(|c| c.commands_squelch);
         let mut sink = crate::input::UiSink {
             view,
-            help: &mut help.open,
             settings: show_settings,
             logbook: show_logbook,
             spots: show_spots,
