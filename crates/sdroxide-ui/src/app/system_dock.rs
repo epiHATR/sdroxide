@@ -21,20 +21,7 @@ mod persist_id_tests {
 
     #[test]
     fn every_dock_kind_round_trips_through_its_persist_id() {
-        for kind in [
-            SystemDock::Logbook,
-            SystemDock::Spots,
-            SystemDock::Awards,
-            SystemDock::Bands,
-            SystemDock::Sat,
-            SystemDock::Ism,
-            SystemDock::Audio,
-            SystemDock::Mail,
-            SystemDock::Memories,
-            SystemDock::Scanner,
-            SystemDock::Grid,
-            SystemDock::Settings,
-        ] {
+        for kind in SystemDock::ALL {
             assert_eq!(SystemDock::from_persist_id(kind.persist_id()), Some(kind));
         }
         assert_eq!(SystemDock::from_persist_id("nope"), None);
@@ -60,6 +47,22 @@ pub(in crate::app) enum SystemDock {
 }
 
 impl SystemDock {
+    /// Every System-strip overlay that can float or pin into the dock column.
+    pub(in crate::app) const ALL: [Self; 12] = [
+        Self::Logbook,
+        Self::Spots,
+        Self::Awards,
+        Self::Bands,
+        Self::Sat,
+        Self::Ism,
+        Self::Audio,
+        Self::Mail,
+        Self::Memories,
+        Self::Scanner,
+        Self::Grid,
+        Self::Settings,
+    ];
+
     pub(in crate::app) fn title(self) -> &'static str {
         match self {
             Self::Logbook => "LOGBOOK",
@@ -74,6 +77,25 @@ impl SystemDock {
             Self::Scanner => "SCANNER",
             Self::Grid => "GRID TRACKER",
             Self::Settings => "SETTINGS",
+        }
+    }
+
+    /// Salt passed to [`crate::layout::salted_id`] for the floating `Window`.
+    /// Must stay identical to each `*_window` call site.
+    fn window_salt(self) -> &'static str {
+        match self {
+            Self::Logbook => "LOGBOOK",
+            Self::Spots => "SPOTS",
+            Self::Awards => "AWARDS",
+            Self::Bands => "BANDS",
+            Self::Sat => "SATELLITE",
+            Self::Ism => "Ism",
+            Self::Audio => "AUDIO",
+            Self::Mail => "MAIL",
+            Self::Memories => "Memories",
+            Self::Scanner => "Scanner",
+            Self::Grid => "GRID TRACKER",
+            Self::Settings => "settings-window-v2",
         }
     }
 
@@ -272,6 +294,54 @@ impl SdroxideApp {
     /// was reserved this frame.
     pub(in crate::app) fn system_docked_as(&self, kind: SystemDock) -> bool {
         self.system_dock.contains(&kind)
+    }
+
+    /// A System-strip overlay is open as a centred floating window (not pinned).
+    pub(in crate::app) fn any_floating_system_popup(&self) -> bool {
+        SystemDock::ALL.iter().any(|&kind| kind.open_flag(self) && !self.system_docked_as(kind))
+    }
+
+    /// Modal dim while a floating System-strip overlay is open.
+    ///
+    /// Mirrors [`egui::Modal`]: a Foreground layer so every Middle panel (top
+    /// bar, panadapter, dock) is below the modal gate and cannot take clicks.
+    /// Chip menus (SPEC, FFT, MODE, …) stay out of this path — they are also
+    /// Foreground and would sit under a freshly raised dim if we gated on
+    /// [`egui::Popup::is_any_open`]. Call [`Self::raise_floating_system_popups`]
+    /// after the floating windows so they stay above the dim.
+    pub(in crate::app) fn popup_input_guard(&self, ctx: &egui::Context) {
+        if !self.any_floating_system_popup() {
+            return;
+        }
+        let rect = ctx.content_rect();
+        let id = egui::Id::new("sdroxide-popup-input-guard");
+        let area = egui::Area::new(id)
+            .kind(egui::UiKind::Modal)
+            .order(egui::Order::Foreground)
+            .fixed_pos(rect.min)
+            .sense(egui::Sense::hover())
+            .interactable(true);
+        ctx.memory_mut(|mem| mem.set_modal_layer(area.layer()));
+        area.show(ctx, |ui| {
+            // Full-screen click/drag sink — same pattern as egui::Modal — so
+            // pointer events never fall through to Middle widgets underneath.
+            let bg_sense = egui::Sense::CLICK | egui::Sense::DRAG;
+            let mut backdrop =
+                ui.new_child(egui::UiBuilder::new().sense(bg_sense).max_rect(rect));
+            backdrop.set_min_size(rect.size());
+            ui.painter().rect_filled(rect, 0.0, egui::Color32::from_black_alpha(100));
+            let _ = backdrop.response();
+        });
+    }
+
+    /// Keep every open floating System window above the Foreground modal dim.
+    pub(in crate::app) fn raise_floating_system_popups(&self, ctx: &egui::Context) {
+        for kind in SystemDock::ALL {
+            if kind.open_flag(self) && !self.system_docked_as(kind) {
+                let id = crate::layout::salted_id(ctx, kind.window_salt());
+                ctx.move_to_top(egui::LayerId::new(egui::Order::Foreground, id));
+            }
+        }
     }
 
     /// Snap `kind` into the right panel. Already-docked overlays stay; this one
@@ -494,10 +564,9 @@ impl SdroxideApp {
 
         let mut clicked = false;
         let inner = egui::Area::new(win.id.with("system-title-pin"))
-            // Same order as `Window` (Middle). `set_sublayer` panics if the
-            // child order differs from the parent — Foreground over Middle
-            // trips egui's debug assert.
-            .order(egui::Order::Middle)
+            // Must match the parent window's order — `set_sublayer` panics if
+            // they differ (System popups are Foreground above the modal dim).
+            .order(win.layer_id.order)
             .fixed_pos(pin_min)
             .sense(egui::Sense::click())
             .show(ctx, |ui| {

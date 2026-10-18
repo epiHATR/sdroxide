@@ -292,6 +292,11 @@ impl eframe::App for SdroxideApp {
             }
         }
 
+        // Before the top bar / panadapter: Foreground modal dim so Middle
+        // chrome cannot take clicks. Chip menus drawn in the top bar stack
+        // above this layer; floating System windows are raised after they show.
+        self.popup_input_guard(&ctx);
+
         egui::Panel::top(crate::layout::salted_id(&ctx, "topbar"))
             .frame(
                 egui::Frame::new()
@@ -1021,6 +1026,9 @@ impl eframe::App for SdroxideApp {
         self.bands_window(&ctx);
         self.sat_window(&ctx, &mut cmds);
         self.morse_window(&ctx);
+        // After every floating System window: keep them above the modal dim so
+        // a fresh backdrop Area cannot cover their widgets.
+        self.raise_floating_system_popups(&ctx);
         self.help.ui(&ctx);
         // Last, so it lands on top of everything else that opened this frame.
         self.oob_tx_window(&ctx);

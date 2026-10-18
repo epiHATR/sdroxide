@@ -384,6 +384,9 @@ pub fn center_on_open<'a>(
     size: egui::Vec2,
 ) -> egui::Window<'a> {
     let pos = centered_window_pos(ctx, size);
+    // Foreground: sits above the modal dim (`popup_input_guard`) and every
+    // Middle panel, so the open System popup stays the only interactive layer.
+    let win = win.order(egui::Order::Foreground);
     if pending {
         win.current_pos(pos).drag_area(egui::WindowDrag::Anywhere)
     } else {
