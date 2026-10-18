@@ -1387,107 +1387,163 @@ fn pass_window(ui: &egui::Ui, st: &mut SolarUi, data: Option<&SolarData>, sim_no
     }
     let Some(cache) = &st.sat_passes else { return };
 
+    // Fixed 500 pt panel. Header and body stay that width; tables that still
+    // run wider scroll horizontally inside rather than stretching the frame
+    // past the title bar.
     let mut open = true;
-    egui::Window::new(format!("{}  ·  PASSES FROM {}", cache.name, st.qth_grid))
-        .id(egui::Id::new("solar-passes"))
+    let sat_name = cache.name.clone();
+    let qth_grid = st.qth_grid.clone();
+    let win_w = crate::layout::window_w(ui.ctx(), 500.0);
+    let frame = chrome::window_frame();
+    let resp = egui::Window::new("PASSES")
+        .id(egui::Id::new("solar-passes-v10"))
         .open(&mut open)
         .collapsible(false)
         .resizable(false)
-        .frame(chrome::window_frame())
-        .default_pos(ui.max_rect().center() - egui::vec2(230.0, 120.0))
+        .frame(frame)
+        .title_frame(
+            egui::Frame::new()
+                .fill(theme::PANEL())
+                .inner_margin(egui::Margin::symmetric(10, 6)),
+        )
+        .default_pos(ui.max_rect().center() - egui::vec2(win_w * 0.5, 120.0))
+        .default_width(win_w)
+        .min_width(win_w)
+        .max_width(win_w)
+        .max_size([win_w, 10_000.0])
         .show(ui.ctx(), |ui| {
             crate::chrome::window_body_bg(ui);
-            ui.label(
-                RichText::new(format!(
-                    "elements {} old · SGP4",
-                    timefmt::age(sat.element_age_s(sim_now) as i64)
-                ))
-                .color(theme::CYAN_DIM())
-                .size(10.0),
+            let body_w = ui.available_width();
+            ui.set_min_width(body_w);
+            ui.set_max_width(body_w);
+            ui.add(
+                egui::Label::new(
+                    RichText::new(&sat_name).color(theme::TEXT_STRONG()).size(13.0).strong(),
+                )
+                .truncate(),
+            );
+            ui.add(
+                egui::Label::new(
+                    RichText::new(format!(
+                        "from {qth_grid} · elements {} old · SGP4",
+                        timefmt::age(sat.element_age_s(sim_now) as i64)
+                    ))
+                    .color(theme::CYAN_DIM())
+                    .size(10.0),
+                )
+                .wrap(),
             );
             ui.add_space(4.0);
 
             match &cache.result {
                 PassSearch::AlwaysVisible { elevation, azimuth } => {
-                    ui.label(
-                        RichText::new("Geostationary — always above your horizon.")
-                            .color(theme::GREEN())
-                            .size(12.5),
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new("Geostationary — always above your horizon.")
+                                .color(theme::GREEN())
+                                .size(12.5),
+                        )
+                        .wrap(),
                     );
-                    ui.label(
-                        RichText::new(format!(
-                            "Point at {azimuth:.0}° ({}), elevation {elevation:.0}°.",
-                            compass(*azimuth)
-                        ))
-                        .color(theme::TEXT()),
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(format!(
+                                "Point at {azimuth:.0}° ({}), elevation {elevation:.0}°.",
+                                compass(*azimuth)
+                            ))
+                            .color(theme::TEXT()),
+                        )
+                        .wrap(),
                     );
                 }
                 PassSearch::NeverVisible => {
-                    ui.label(
-                        RichText::new("No passes in the next 48 hours from your QTH.")
-                            .color(theme::YELLOW()),
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new("No passes in the next 48 hours from your QTH.")
+                                .color(theme::YELLOW()),
+                        )
+                        .wrap(),
                     );
                 }
                 PassSearch::Passes(passes) => {
-                    egui::Grid::new("solar-pass-grid").num_columns(6).spacing([14.0, 3.0]).show(
-                        ui,
-                        |ui| {
-                            for h in ["START", "END", "DUR", "AOS", "LOS", "MAX EL"] {
-                                ui.label(
-                                    RichText::new(h).color(theme::CYAN_DIM()).size(9.5).strong(),
-                                );
-                            }
-                            ui.end_row();
-                            for p in passes {
-                                let soon = p.rise_unix as f64 - sim_now;
-                                // The one happening now, or next, is the one the
-                                // operator cares about.
-                                let color = if soon < 0.0 {
-                                    theme::GREEN()
-                                } else if soon < 3600.0 {
-                                    theme::YELLOW()
-                                } else {
-                                    theme::TEXT()
-                                };
-                                ui.label(RichText::new(timefmt::ymd_hm(p.rise_unix)).color(color));
-                                ui.label(RichText::new(hhmm(p.set_unix)).color(color));
-                                ui.label(
-                                    RichText::new(format!("{} min", p.duration_s() / 60))
-                                        .color(color),
-                                );
-                                ui.label(
-                                    RichText::new(format!(
-                                        "{:.0}° {}",
-                                        p.rise_az,
-                                        compass(p.rise_az)
-                                    ))
-                                    .color(color),
-                                );
-                                ui.label(
-                                    RichText::new(format!(
-                                        "{:.0}° {}",
-                                        p.set_az,
-                                        compass(p.set_az)
-                                    ))
-                                    .color(color),
-                                );
-                                ui.label(
-                                    RichText::new(format!("{:.0}°  {}", p.max_el, p.quality()))
-                                        .color(match p.max_el {
-                                            e if e >= 30.0 => theme::GREEN(),
-                                            e if e >= 15.0 => theme::TEXT(),
-                                            _ => theme::CYAN_DIM(),
-                                        }),
-                                );
-                                ui.end_row();
-                            }
-                        },
-                    );
+                    egui::ScrollArea::horizontal()
+                        .id_salt("solar-pass-grid-scroll")
+                        .max_width(body_w)
+                        .auto_shrink([false, true])
+                        .show(ui, |ui| {
+                            egui::Grid::new("solar-pass-grid")
+                                .num_columns(6)
+                                .spacing([8.0, 3.0])
+                                .show(ui, |ui| {
+                                    for h in ["START", "END", "DUR", "AOS", "LOS", "MAX EL"] {
+                                        ui.label(
+                                            RichText::new(h)
+                                                .color(theme::CYAN_DIM())
+                                                .size(9.5)
+                                                .strong(),
+                                        );
+                                    }
+                                    ui.end_row();
+                                    for p in passes {
+                                        let soon = p.rise_unix as f64 - sim_now;
+                                        // The one happening now, or next, is the
+                                        // one the operator cares about.
+                                        let color = if soon < 0.0 {
+                                            theme::GREEN()
+                                        } else if soon < 3600.0 {
+                                            theme::YELLOW()
+                                        } else {
+                                            theme::TEXT()
+                                        };
+                                        ui.label(
+                                            RichText::new(timefmt::ymd_hm(p.rise_unix))
+                                                .color(color),
+                                        );
+                                        ui.label(RichText::new(hhmm(p.set_unix)).color(color));
+                                        ui.label(
+                                            RichText::new(format!("{} min", p.duration_s() / 60))
+                                                .color(color),
+                                        );
+                                        ui.label(
+                                            RichText::new(format!(
+                                                "{:.0}° {}",
+                                                p.rise_az,
+                                                compass(p.rise_az)
+                                            ))
+                                            .color(color),
+                                        );
+                                        ui.label(
+                                            RichText::new(format!(
+                                                "{:.0}° {}",
+                                                p.set_az,
+                                                compass(p.set_az)
+                                            ))
+                                            .color(color),
+                                        );
+                                        ui.label(
+                                            RichText::new(format!(
+                                                "{:.0}°  {}",
+                                                p.max_el,
+                                                p.quality()
+                                            ))
+                                            .color(match p.max_el {
+                                                e if e >= 30.0 => theme::GREEN(),
+                                                e if e >= 15.0 => theme::TEXT(),
+                                                _ => theme::CYAN_DIM(),
+                                            }),
+                                        );
+                                        ui.end_row();
+                                    }
+                                });
+                        });
                     ui.add_space(4.0);
-                    ui.label(
-                        RichText::new("AOS/LOS are azimuths at the horizon. Times are UTC.")
-                            .color(theme::LINE_LIT())
-                            .size(10.0),
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new("AOS/LOS are azimuths at the horizon. Times are UTC.")
+                                .color(theme::LINE_LIT())
+                                .size(10.0),
+                        )
+                        .wrap(),
                     );
                 }
             }
@@ -1535,8 +1591,11 @@ fn pass_window(ui: &egui::Ui, st: &mut SolarUi, data: Option<&SolarData>, sim_no
             // Operator override → SatNOGS cache → built-in curated table.
             let mine = st.sat_cfg.freqs_for(id).is_some();
             let owned = sdroxide_solar::satfreq::for_norad(&st.sat_cfg, id);
-            freq_table(ui, owned.as_ref(), mine, &cache.name);
+            freq_table(ui, owned.as_ref(), mine, &sat_name, body_w);
         });
+    if let Some(r) = &resp {
+        chrome::paint_window_border(ui.ctx(), &r.response);
+    }
     if !open {
         st.selected_sat = None;
     }
@@ -1552,16 +1611,21 @@ fn freq_table(
     freqs: Option<&sdroxide_solar::SatFreqs>,
     mine: bool,
     tracked_name: &str,
+    body_w: f32,
 ) {
     let Some(freqs) = freqs.filter(|f| f.usable_links().next().is_some()) else {
         ui.add_space(6.0);
-        ui.label(
-            RichText::new(
-                "No frequencies on file for this one — add them in Settings ▸ TLE, or fetch \
-                 SatNOGS transmitters there.",
+        // Wrapped: a single long line must not stretch the passes window.
+        ui.add(
+            egui::Label::new(
+                RichText::new(
+                    "No frequencies on file — add them in Settings ▸ TLE, or fetch \
+                     SatNOGS transmitters there.",
+                )
+                .color(theme::LINE_LIT())
+                .size(10.0),
             )
-            .color(theme::LINE_LIT())
-            .size(10.0),
+            .wrap(),
         );
         return;
     };
@@ -1575,47 +1639,61 @@ fn freq_table(
     // showing it means a table entry keyed to the wrong catalogue number is
     // visible rather than quietly presenting the wrong satellite's frequencies.
     if !freqs.name.trim().is_empty() && !freqs.name.eq_ignore_ascii_case(tracked_name) {
-        ui.label(
-            RichText::new(format!("published as {}", freqs.name))
-                .color(theme::LINE_LIT())
-                .size(10.0),
+        ui.add(
+            egui::Label::new(
+                RichText::new(format!("published as {}", freqs.name))
+                    .color(theme::LINE_LIT())
+                    .size(10.0),
+            )
+            .wrap(),
         );
     }
     ui.add_space(2.0);
 
-    egui::Grid::new("solar-freq-grid").num_columns(4).spacing([14.0, 3.0]).show(ui, |ui| {
-        for h in ["LINK", "DOWNLINK (MHz)", "UPLINK (MHz)", "MODE"] {
-            ui.label(RichText::new(h).color(theme::CYAN_DIM()).size(9.5).strong());
-        }
-        ui.end_row();
-        for l in freqs.links.iter().filter(|l| !l.is_empty()) {
-            let mut label = RichText::new(&l.label).color(theme::TEXT());
-            if !l.note.is_empty() {
-                label = label.color(theme::TEXT_STRONG());
-            }
-            let resp = ui.label(label);
-            if !l.note.is_empty() {
-                resp.on_hover_text(&l.note);
-            }
-            // The downlink is what gets tuned first, so it leads.
-            ui.label(
-                RichText::new(l.downlink.map_or_else(|| "—".into(), |b| b.to_string()))
-                    .color(theme::GREEN()),
-            );
-            ui.label(
-                RichText::new(l.uplink.map_or_else(|| "—".into(), |b| b.to_string()))
-                    .color(theme::YELLOW()),
-            );
-            ui.label(RichText::new(&l.mode).color(theme::TEXT()));
-            ui.end_row();
-        }
-    });
+    egui::ScrollArea::horizontal()
+        .id_salt("solar-freq-grid-scroll")
+        .max_width(body_w)
+        .auto_shrink([false, true])
+        .show(ui, |ui| {
+            egui::Grid::new("solar-freq-grid").num_columns(4).spacing([10.0, 3.0]).show(ui, |ui| {
+                for h in ["LINK", "DOWNLINK (MHz)", "UPLINK (MHz)", "MODE"] {
+                    ui.label(RichText::new(h).color(theme::CYAN_DIM()).size(9.5).strong());
+                }
+                ui.end_row();
+                for l in freqs.links.iter().filter(|l| !l.is_empty()) {
+                    let mut label = RichText::new(&l.label).color(theme::TEXT());
+                    if !l.note.is_empty() {
+                        label = label.color(theme::TEXT_STRONG());
+                    }
+                    let resp = ui.label(label);
+                    if !l.note.is_empty() {
+                        resp.on_hover_text(&l.note);
+                    }
+                    // The downlink is what gets tuned first, so it leads.
+                    ui.label(
+                        RichText::new(l.downlink.map_or_else(|| "—".into(), |b| b.to_string()))
+                            .color(theme::GREEN()),
+                    );
+                    ui.label(
+                        RichText::new(l.uplink.map_or_else(|| "—".into(), |b| b.to_string()))
+                            .color(theme::YELLOW()),
+                    );
+                    ui.label(RichText::new(&l.mode).color(theme::TEXT()));
+                    ui.end_row();
+                }
+            });
+        });
 
     // Everything an operator has to know before keying up sits in the notes, so
     // they go on screen rather than only in a tooltip.
     for l in freqs.links.iter().filter(|l| !l.note.is_empty() && !l.is_empty()) {
-        ui.label(
-            RichText::new(format!("{} — {}", l.label, l.note)).color(theme::LINE_LIT()).size(10.0),
+        ui.add(
+            egui::Label::new(
+                RichText::new(format!("{} — {}", l.label, l.note))
+                    .color(theme::LINE_LIT())
+                    .size(10.0),
+            )
+            .wrap(),
         );
     }
     ui.add_space(2.0);
