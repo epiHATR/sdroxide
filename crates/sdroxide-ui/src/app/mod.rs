@@ -799,6 +799,8 @@ pub struct SdroxideApp {
     adsb_status: Option<Box<sdroxide_types::AdsbStatus>>,
     /// ADS-B: the radar picture's pan/zoom and which target is selected.
     adsb_map: crate::adsb_map::AdsbMapState,
+    /// ADS-B MAP 3D: Earth globe (Natural Earth textures) with altitude stems.
+    adsb_globe: crate::solar3d::AdsbGlobe,
     /// ADS-B: filter for the aircraft list; matches a callsign or an address.
     adsb_filter: String,
     /// ADS-B: the decoder's own settings window is open.
@@ -1673,6 +1675,7 @@ impl SdroxideApp {
             aprs_map: crate::aprs_map::AprsMapState::default(),
             adsb_status: None,
             adsb_map: crate::adsb_map::AdsbMapState::default(),
+            adsb_globe: crate::solar3d::AdsbGlobe::new(wgpu_render_state.clone()),
             adsb_filter: String::new(),
             show_adsb_setup: false,
             adsb_setup_was_open: false,

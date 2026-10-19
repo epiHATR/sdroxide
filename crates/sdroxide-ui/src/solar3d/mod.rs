@@ -20,6 +20,7 @@
 //! is confined to an offscreen pass, so the shared egui render pass — which on
 //! the web must stay within those limits — is untouched.
 
+mod adsb_globe;
 #[cfg(feature = "remote")]
 mod app;
 mod camera;
@@ -32,6 +33,8 @@ mod net;
 mod overlay;
 mod scene;
 mod state;
+
+pub use adsb_globe::AdsbGlobe;
 
 // Everything below is the native host's: the browser's is in `app.rs`.
 #[cfg(not(target_arch = "wasm32"))]

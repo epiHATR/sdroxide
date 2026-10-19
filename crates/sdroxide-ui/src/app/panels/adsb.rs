@@ -4,7 +4,8 @@
 //!
 //! - **AIRCRAFT** — every target being tracked, newest activity first, with the
 //!   detail card for whichever one is selected pinned below the list.
-//! - **MAP** — the same targets as a radar picture. See [`crate::adsb_map`].
+//! - **MAP** — the same targets as a radar picture (2D top-down or 3D air
+//!   picture). See [`crate::adsb_map`].
 //!
 //! No third column, because unlike APRS there is nothing to say back: this is a
 //! receive-only surveillance downlink and the aircraft are not listening.
@@ -382,10 +383,52 @@ impl SdroxideApp {
     }
 
     fn adsb_map_pane(&mut self, ui: &mut egui::Ui, st: &AdsbStatus, now: i64, h: f32) {
+        use crate::adsb_map::AdsbMapKind;
+        let chip_h = crate::chrome::chip_height(ui, Some(9.5)) + 4.0;
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.x = 3.0;
+            let flat = self.adsb_map.kind == AdsbMapKind::Flat;
+            if crate::chrome::chip(ui, flat, RichText::new("2D").size(9.5))
+                .on_hover_text("Top-down radar picture.")
+                .clicked()
+            {
+                self.adsb_map.kind = AdsbMapKind::Flat;
+            }
+            if crate::chrome::chip(ui, !flat, RichText::new("3D").size(9.5))
+                .on_hover_text(
+                    "Earth globe focused on your QTH: drag to orbit, scroll to zoom \
+                     in/out, compass resets north, double-click resets the 45° view.",
+                )
+                .clicked()
+            {
+                self.adsb_map.kind = AdsbMapKind::Air3d;
+            }
+        });
         let home = self.adsb_home();
         let cfg = self.state.adsb;
-        let state = &mut self.adsb_map;
-        crate::adsb_map::show(ui, state, &st.aircraft, home, now, cfg, h);
+        let map_h = (h - chip_h).max(crate::adsb_map::MIN_HEIGHT);
+        match self.adsb_map.kind {
+            AdsbMapKind::Flat => {
+                let state = &mut self.adsb_map;
+                crate::adsb_map::show(ui, state, &st.aircraft, home, now, cfg, map_h);
+            }
+            AdsbMapKind::Air3d => {
+                let grid = self.digi_cfg_edit.my_grid.trim().to_owned();
+                let selected = self.adsb_map.selected;
+                let clicked = self.adsb_globe.show(
+                    ui,
+                    &st.aircraft,
+                    &grid,
+                    selected,
+                    now,
+                    cfg,
+                    map_h,
+                );
+                if let Some(icao) = clicked {
+                    self.adsb_map.selected = (selected != Some(icao)).then_some(icao);
+                }
+            }
+        }
     }
 
     /// The operator's own position, from the grid in the digital-mode setup.

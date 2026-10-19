@@ -1,5 +1,6 @@
 //! The ADS-B radar picture: every aircraft being tracked, drawn the way a
-//! surveillance display draws one.
+//! surveillance display draws one — flat top-down. The MAP pane's **3D** chip
+//! switches to the Earth globe ([`crate::solar3d::AdsbGlobe`]) instead.
 //!
 //! The projection, the pan/zoom and the dotted continents are the FT8 panel
 //! map's ([`crate::widgets::worldmap`]) — the views have to agree about where
@@ -129,12 +130,31 @@ fn paint_aircraft(
     }
 }
 
+/// Flat radar vs Earth globe in the ADS-B MAP pane.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AdsbMapKind {
+    #[default]
+    Flat,
+    /// Textured Earth globe — see [`crate::solar3d::AdsbGlobe`].
+    Air3d,
+}
+
 /// The map's own state, owned by the panel so the view survives across frames.
-#[derive(Default)]
 pub struct AdsbMapState {
     pub view: MapView,
     /// The aircraft whose card is open, by ICAO address.
     pub selected: Option<u32>,
+    pub kind: AdsbMapKind,
+}
+
+impl Default for AdsbMapState {
+    fn default() -> Self {
+        Self {
+            view: MapView::default(),
+            selected: None,
+            kind: AdsbMapKind::Flat,
+        }
+    }
 }
 
 /// The view to ease toward: every target that can be drawn, plus us, framed.

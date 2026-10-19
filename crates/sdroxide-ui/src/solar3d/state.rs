@@ -202,6 +202,19 @@ pub struct SolarUi {
     pub data: Option<Arc<Mutex<SolarData>>>,
     /// FT8/FT4 traffic to plot on the globe.
     pub digi: DigiTraffic,
+    /// ADS-B aircraft above the Earth (MAP 3D pane). Empty in the solar window
+    /// unless the host also pushes them there.
+    pub adsb: AdsbTraffic,
+    /// ADS-B MAP pane: local ENU camera with the ground plane horizontal.
+    pub adsb_globe: bool,
+    /// Surface look-at (lat, lon) for the ADS-B local camera.
+    pub adsb_look: Option<(f64, f64)>,
+    /// Unit surface direction grabbed at drag start (ADS-B pan), if any.
+    pub adsb_grab: Option<super::math::V3>,
+    /// Operator took the zoom wheel — stop auto-fitting traffic until home reset.
+    pub adsb_user_zoom: bool,
+    /// Ease orbit yaw back to north: `(from_yaw, elapsed_s)`.
+    pub adsb_north_fly: Option<(f32, f32)>,
     /// Logged-QSO intro arcs: grow from the QTH, then pop the far-end dot.
     /// Timed with egui's frame clock (`started` is `Context::input.time`).
     pub qso_intros: Vec<QsoArcIntro>,
@@ -346,6 +359,29 @@ pub struct SatPasses {
     /// Wall clock when it was computed, so it can be refreshed as it ages.
     pub computed_unix: f64,
     pub result: sdroxide_solar::PassSearch,
+}
+
+/// One ADS-B target to place above the Earth (altitude-lifted).
+#[derive(Clone, Debug)]
+pub struct AdsbMarker {
+    pub icao: u32,
+    pub lat: f64,
+    pub lon: f64,
+    /// Feet; zero when on the ground or unknown.
+    pub alt_ft: f32,
+    pub on_ground: bool,
+    /// True track degrees, when known — aims the 3D silhouette.
+    pub track_deg: Option<f32>,
+    pub call: Option<std::sync::Arc<str>>,
+    pub tip: String,
+    pub selected: bool,
+    pub emergency: bool,
+}
+
+/// Live ADS-B traffic for the Earth globe (MAP 3D / solar overlay).
+#[derive(Clone, Default)]
+pub struct AdsbTraffic {
+    pub aircraft: Vec<AdsbMarker>,
 }
 
 /// FT8/FT4 activity, republished into the window each frame by the root pass.
@@ -507,6 +543,12 @@ impl SolarUi {
             sim_offset_s: 0.0,
             data: None,
             digi: DigiTraffic::default(),
+            adsb: AdsbTraffic::default(),
+            adsb_globe: false,
+            adsb_look: None,
+            adsb_grab: None,
+            adsb_user_zoom: false,
+            adsb_north_fly: None,
             qso_intros: Vec::new(),
             digi_tip: None,
             qso_card: None,

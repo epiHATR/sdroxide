@@ -38,6 +38,20 @@ pub fn dist_range(focus_radius: f32) -> (f32, f32) {
     ((focus_radius * 1.6).max(1e-4), MAX_DIST)
 }
 
+/// ADS-B local-camera distance limits, gigametres from the look-at on the surface.
+///
+/// (~2 km … ~half an Earth diameter.) Far enough to pull back from a terminal
+/// to a continental / whole-disc view while the camera still orbits a ground
+/// point (local up stays the surface normal).
+pub const ADSB_DIST_MIN: f32 = 2.0e-6;
+pub const ADSB_DIST_MAX: f32 = 0.02;
+/// Default eye distance (~120 km) for a readable 45° air picture.
+pub const ADSB_DIST_DEFAULT: f32 = 1.2e-4;
+/// Elevation above the local horizon: 0 = level, π/2 = straight down.
+pub const ADSB_ELEV_MIN: f32 = 0.12;
+pub const ADSB_ELEV_MAX: f32 = 1.45;
+pub const ADSB_ELEV_DEFAULT: f32 = std::f32::consts::FRAC_PI_4;
+
 /// Seconds for a one-shot ease into VISUALIZE / My QTH — a touch shorter than
 /// the tour's station hops so an operator-asked move settles promptly.
 pub const VIEW_FLY_S: f32 = 2.6;
@@ -60,6 +74,89 @@ pub fn home_pose(b: &Bodies, qth: (f64, f64)) -> (Pose, (V3, f32)) {
     let pose =
         Pose::new(yaw_of(d), d.z.clamp(-1.0, 1.0).asin().clamp(-PITCH_LIMIT, PITCH_LIMIT), lo);
     (pose, b.focus(Focus::Earth))
+}
+
+/// Frame the ADS-B pane on `qth`: look-at on the surface, 45° elevation from
+/// the south, local ground horizontal.
+pub fn adsb_apply_home(st: &mut SolarUi, qth: (f64, f64)) {
+    st.adsb_look = Some(qth);
+    st.view.yaw = 0.0;
+    st.view.pitch = ADSB_ELEV_DEFAULT;
+    st.view.dist = adsb_fit_dist(qth, &st.adsb.aircraft);
+    st.view.focus = Focus::Earth.to_id();
+    st.view.auto = false;
+    st.view_fly.cancel();
+    st.focus_override = None;
+    st.fly_home_pending = false;
+    st.adsb_user_zoom = false;
+    st.adsb_north_fly = None;
+}
+
+/// Look-at lat/lon for the ADS-B local camera.
+pub fn adsb_look_ll(st: &SolarUi) -> (f64, f64) {
+    st.adsb_look.or(st.qth).unwrap_or((20.0, 0.0))
+}
+
+/// Eye distance that keeps the QTH and the farthest live aircraft in frame.
+pub fn adsb_fit_dist(qth: (f64, f64), aircraft: &[super::state::AdsbMarker]) -> f32 {
+    if aircraft.is_empty() {
+        return ADSB_DIST_DEFAULT;
+    }
+    // Floor so a single overhead contact does not bury the camera in the apron.
+    let mut max_km = 60.0f64;
+    for a in aircraft {
+        max_km = max_km.max(sdroxide_types::distance_km(qth, (a.lat, a.lon)));
+        // Exaggerated altitude also needs room in the FOV.
+        let alt_km = f64::from(a.alt_ft.max(0.0)) * 0.0003048 * 80.0;
+        max_km = max_km.max(alt_km);
+    }
+    // 1 km = 1e-6 Gm; ×2.4 leaves margin around the outermost target.
+    ((max_km as f32) * 1.0e-6 * 2.4).clamp(ADSB_DIST_DEFAULT, ADSB_DIST_MAX)
+}
+
+/// Ease `view.dist` toward a traffic fit when the operator has not taken zoom.
+pub fn adsb_auto_frame(st: &mut SolarUi) {
+    if st.adsb_user_zoom {
+        return;
+    }
+    let Some(qth) = st.qth else { return };
+    let want = adsb_fit_dist(qth, &st.adsb.aircraft);
+    // Ignore sub-percent chatter from aircraft position updates.
+    if (want - st.view.dist).abs() < want.max(ADSB_DIST_DEFAULT) * 0.03 {
+        return;
+    }
+    st.view.dist += (want - st.view.dist) * 0.08;
+    st.view.dist = st.view.dist.clamp(ADSB_DIST_MIN, ADSB_DIST_MAX);
+}
+
+/// Seconds for the compass chip's yaw ease back to north.
+pub const ADSB_NORTH_FLY_S: f32 = 0.55;
+
+/// Start (or restart) an ease of orbit yaw to north-up.
+pub fn adsb_begin_north(st: &mut SolarUi) {
+    let yaw = st.view.yaw.rem_euclid(std::f32::consts::TAU);
+    if yaw < 0.02 || yaw > std::f32::consts::TAU - 0.02 {
+        st.view.yaw = 0.0;
+        st.adsb_north_fly = None;
+        return;
+    }
+    st.adsb_north_fly = Some((st.view.yaw, 0.0));
+}
+
+/// Step the north-heading ease. Returns true while still in flight.
+pub fn adsb_step_north(st: &mut SolarUi, dt: f32) -> bool {
+    let Some((from, elapsed)) = st.adsb_north_fly.as_mut() else {
+        return false;
+    };
+    *elapsed += dt.clamp(0.0, 0.25);
+    let k = smootherstep(*elapsed / ADSB_NORTH_FLY_S);
+    st.view.yaw = *from + short_angle(*from, 0.0) * k;
+    if *elapsed >= ADSB_NORTH_FLY_S {
+        st.view.yaw = 0.0;
+        st.adsb_north_fly = None;
+        return false;
+    }
+    true
 }
 
 /// How much of the FOV the QTH–sat chord should fill in VISUALIZE. Higher than
@@ -229,6 +326,9 @@ impl Camera {
     }
 
     pub fn from_view(st: &SolarUi, b: &Bodies, size_px: [f32; 2]) -> Camera {
+        if st.adsb_globe {
+            return Camera::adsb_from_view(st, b, size_px);
+        }
         let v = &st.view;
         // While the tour is flying between two stations it supplies a blended
         // pivot. Without it the pivot would snap to the destination body on the
@@ -247,6 +347,29 @@ impl Camera {
         let proj = M4::perspective_reversed_z(FOV_Y, aspect, near, FAR);
         let view = M4::look_at(eye, focus, v3(0.0, 0.0, 1.0));
 
+        Camera { view_proj: proj.mul(&view), eye, near, height_px: size_px[1].max(1.0) }
+    }
+
+    /// Local ENU camera: look-at on the surface, camera `up` = surface normal
+    /// so the ground reads horizontal, elevation = [`Solar3dView::pitch`].
+    fn adsb_from_view(st: &SolarUi, b: &Bodies, size_px: [f32; 2]) -> Camera {
+        let (lat, lon) = adsb_look_ll(st);
+        let (east, north, up) = super::scene::local_enu(b, lat, lon);
+        let target = b.earth + up * b.earth_r;
+        let elev = st.view.pitch.clamp(ADSB_ELEV_MIN, ADSB_ELEV_MAX);
+        let yaw = st.view.yaw;
+        // Azimuth 0: from the south, looking north over the point.
+        let back = (-north) * yaw.cos() + (-east) * yaw.sin();
+        let dist = st.view.dist.clamp(ADSB_DIST_MIN, ADSB_DIST_MAX);
+        let eye = target + back * (dist * elev.cos()) + up * (dist * elev.sin());
+
+        // With Earth at the origin, a near plane tied to eye distance keeps the
+        // ground and aircraft silhouettes stable when zoomed in tight.
+        let near = (dist * 0.01).clamp(5e-8, 0.002);
+        let aspect = size_px[0] / size_px[1].max(1.0);
+        let proj = M4::perspective_reversed_z(FOV_Y, aspect, near, FAR);
+        // Surface normal as camera-up → local ground is the horizontal plane.
+        let view = M4::look_at(eye, target, up);
         Camera { view_proj: proj.mul(&view), eye, near, height_px: size_px[1].max(1.0) }
     }
 
@@ -704,7 +827,7 @@ impl Pose {
         Pose { yaw, pitch, ln_dist: dist.max(1e-6).ln() }
     }
 
-    fn apply(self, view: &mut crate::view::Solar3dView) {
+    pub(crate) fn apply(self, view: &mut crate::view::Solar3dView) {
         view.yaw = self.yaw;
         view.pitch = self.pitch.clamp(-PITCH_LIMIT, PITCH_LIMIT);
         view.dist = self.ln_dist.exp().clamp(1e-5, MAX_DIST);
@@ -1200,7 +1323,7 @@ fn unwrap_to(near: Pose, p: Pose) -> Pose {
 }
 
 /// Bearing of a direction in the ecliptic plane.
-fn yaw_of(v: V3) -> f32 {
+pub(crate) fn yaw_of(v: V3) -> f32 {
     v.y.atan2(v.x)
 }
 

@@ -1656,6 +1656,52 @@ pub fn chip_reset(ui: &mut Ui, size: egui::Vec2) -> Response {
     resp
 }
 
+/// Magnetic-compass chip: rose rotates with `heading_rad` (0 = north up).
+///
+/// Painted rather than typed — same reason as [`chip_link`] / [`chip_reset`].
+pub fn chip_compass(ui: &mut Ui, selected: bool, heading_rad: f32, size: egui::Vec2) -> Response {
+    let resp = chip_impl(ui, selected, RichText::new(""), None, Sense::click(), Some(size));
+    if ui.is_rect_visible(resp.rect) {
+        let v = ui.style().interact_selectable(&resp, selected);
+        let ink = if selected { theme::INK_ON_CYAN() } else { v.fg_stroke.color };
+        let accent = if selected { theme::INK_ON_CYAN() } else { theme::PINK() };
+        let c = resp.rect.center();
+        let r = resp.rect.height() * 0.30;
+        let stroke = Stroke::new((size.y * 0.065).clamp(1.2, 2.0), ink);
+        // Screen y grows down; rotate so heading 0 keeps the north tip at top.
+        let rot = -heading_rad - std::f32::consts::FRAC_PI_2;
+        let at = |ang: f32, rad: f32| {
+            Pos2::new(c.x + rad * (rot + ang).cos(), c.y + rad * (rot + ang).sin())
+        };
+        let p = ui.painter();
+        p.circle_stroke(c, r, stroke);
+        // Cardinal ticks (N tip is filled separately).
+        for k in 0..4 {
+            let a = k as f32 * std::f32::consts::FRAC_PI_2;
+            p.line_segment([at(a, r * 0.72), at(a, r * 0.98)], stroke);
+        }
+        // North needle (filled) + light south opposite.
+        let north = [
+            at(0.0, r * 0.88),
+            at(0.22, r * 0.12),
+            at(-0.22, r * 0.12),
+        ];
+        p.add(Shape::convex_polygon(north.to_vec(), accent, Stroke::NONE));
+        let south = [
+            at(std::f32::consts::PI, r * 0.72),
+            at(std::f32::consts::PI + 0.20, r * 0.10),
+            at(std::f32::consts::PI - 0.20, r * 0.10),
+        ];
+        p.add(Shape::convex_polygon(
+            south.to_vec(),
+            ink.gamma_multiply(0.55),
+            Stroke::NONE,
+        ));
+        p.circle_filled(c, r * 0.10, ink);
+    }
+    resp
+}
+
 /// A chip stretched to an exact `size` rather than hugging its label — for the
 /// compact strip's button grid, whose rows divide the width they were given
 /// between them instead of clustering at one end of it. The label stays

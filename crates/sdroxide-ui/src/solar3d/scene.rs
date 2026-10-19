@@ -375,6 +375,14 @@ pub struct DigiPick {
     pub tip: crate::digi_map::DigiTip,
 }
 
+/// An ADS-B aircraft marker the pointer can select.
+pub struct AdsbPick {
+    pub world: [f32; 3],
+    pub radius_px: f32,
+    pub icao: u32,
+    pub tip: String,
+}
+
 #[derive(Default)]
 pub struct Scene {
     pub globals: Globals,
@@ -384,6 +392,7 @@ pub struct Scene {
     pub labels: Vec<Label>,
     pub picks: Vec<Pick>,
     pub digi_picks: Vec<DigiPick>,
+    pub adsb_picks: Vec<AdsbPick>,
     /// The star field is a static buffer on the GPU, so it is a flag here
     /// rather than 1500 instances rebuilt every frame.
     pub draw_stars: bool,
@@ -472,6 +481,9 @@ pub struct MoonBody {
 pub struct Bodies {
     pub jd: f64,
     pub sun_r: f32,
+    /// Sun centre in the render frame (heliocentric origin, or Earth-centred
+    /// for the ADS-B globe — see [`bodies`]).
+    pub sun: V3,
     pub earth: V3,
     pub earth_r: f32,
     pub earth_basis: (V3, V3, V3),
@@ -504,11 +516,13 @@ fn basis_cols(b: sdroxide_solar::Basis) -> (V3, V3, V3) {
 pub fn bodies(st: &SolarUi, unix_s: f64) -> Bodies {
     let jd = ephem::julian_day(unix_s);
     let v = &st.view;
-    let earth = V3::from_f64(ephem::earth_heliocentric(jd));
+    let mut earth = V3::from_f64(ephem::earth_heliocentric(jd));
     let b = ephem::earth_basis(jd);
     let moon_true_off = V3::from_f64(ephem::moon_geocentric_vec(jd));
     let moon_off = moon_true_off * v.moon_orbit_scale;
     let sun_r = ephem::SUN_R as f32 * v.sun_scale;
+    let mut sun = V3::ZERO;
+    let mut moon = earth + moon_off;
 
     let mut planets = Vec::with_capacity(sdroxide_solar::Planet::ALL.len());
     let mut moons = Vec::new();
@@ -547,7 +561,7 @@ pub fn bodies(st: &SolarUi, unix_s: f64) -> Bodies {
     // slider as the planets, which lifts Pluto to something you can see and
     // leaves a 200 m asteroid at a millionth of a pixel — that one is a sprite
     // and a name, and pretending otherwise would be the lie.
-    let smalls = sdroxide_solar::smallbody::BODIES
+    let mut smalls: Vec<SmallPlaced> = sdroxide_solar::smallbody::BODIES
         .iter()
         .enumerate()
         .map(|(index, info)| {
@@ -563,13 +577,34 @@ pub fn bodies(st: &SolarUi, unix_s: f64) -> Bodies {
         })
         .collect();
 
+    // ADS-B is a local Earth view a few km to a few thousand km out. At 1 AU,
+    // f32's ULP is tens of kilometres — the camera and surface markers jitter
+    // and the QTH ring sinks into the mesh. Park Earth at the origin so
+    // metre-scale geometry survives.
+    if st.adsb_globe {
+        let origin = earth;
+        earth = V3::ZERO;
+        sun = V3::ZERO - origin;
+        moon = moon - origin;
+        for p in &mut planets {
+            p.pos = p.pos - origin;
+        }
+        for m in &mut moons {
+            m.pos = m.pos - origin;
+        }
+        for sb in &mut smalls {
+            sb.pos = sb.pos - origin;
+        }
+    }
+
     Bodies {
         jd,
         sun_r,
+        sun,
         earth,
         earth_r: ephem::EARTH_R as f32 * v.body_scale,
         earth_basis: basis_cols(b),
-        moon: earth + moon_off,
+        moon,
         moon_r: ephem::MOON_R as f32 * v.body_scale,
         moon_basis: basis_cols(ephem::moon_basis(jd)),
         moon_true_off,
@@ -641,7 +676,12 @@ impl Bodies {
 /// East is along the parallel, north toward the geographic pole, up the
 /// surface normal — the frame a pass's azimuth and elevation are measured in.
 pub fn local_enu(b: &Bodies, lat: f64, lon: f64) -> (V3, V3, V3) {
-    let up = b.surface_dir(lat, lon);
+    local_enu_from_up(b, b.surface_dir(lat, lon))
+}
+
+/// [`local_enu`] from a unit surface normal already in world space.
+pub fn local_enu_from_up(b: &Bodies, up: V3) -> (V3, V3, V3) {
+    let up = up.normalize();
     let (_, _, ez) = b.earth_basis;
     let mut east = ez.cross(up);
     if east.len() < 1e-5 {
@@ -652,6 +692,18 @@ pub fn local_enu(b: &Bodies, lat: f64, lon: f64) -> (V3, V3, V3) {
     let east = east.normalize();
     let north = up.cross(east).normalize();
     (east, north, up)
+}
+
+/// Geodetic lat/lon of a world-space point near the Earth's surface.
+pub fn world_to_geodetic(b: &Bodies, world: V3) -> (f64, f64) {
+    let rel = (world - b.earth) * (1.0 / b.earth_r.max(1e-9));
+    let (ex, ey, ez) = b.earth_basis;
+    let bx = f64::from(rel.dot(ex));
+    let by = f64::from(rel.dot(ey));
+    let bz = f64::from(rel.dot(ez));
+    let lat = bz.clamp(-1.0, 1.0).asin().to_degrees();
+    let lon = ephem::wrap180(by.atan2(bx).to_degrees());
+    (lat, lon)
 }
 
 /// Build the frame's draw lists.
@@ -669,7 +721,7 @@ pub fn build(
         globals: Globals {
             view_proj: cam.view_proj.cols,
             camera_pos: cam.eye.arr4(cam.near),
-            sun_pos: V3::ZERO.arr4(b.sun_r),
+            sun_pos: b.sun.arr4(b.sun_r),
             sun_to_earth: V3::from_f64(b.sun_frame.to_earth)
                 .arr4(sun_img.map_or(0.45, |i| i.disk_radius_frac)),
             solar_north: V3::from_f64(b.sun_frame.basis.z).arr4(1.0),
@@ -681,7 +733,8 @@ pub fn build(
         // The star field and the graticule below are not layers any more: they
         // are the backdrop and the coordinate frame the rest is read against,
         // and a scene without them reads as broken rather than as uncluttered.
-        draw_stars: true,
+        // ADS-B is a local air picture — no star dome, no solar graticule.
+        draw_stars: !st.adsb_globe,
         ..Default::default()
     };
 
@@ -689,7 +742,9 @@ pub fn build(
     if st.layer(layer::ORBITS) {
         orbits(&mut s, st, &b, &cam);
     }
-    grid(&mut s, &b);
+    if !st.adsb_globe {
+        grid(&mut s, &b);
+    }
     markers(&mut s, st, &b, &cam);
     // Before the markers and the arcs above it, and before the awards: this is
     // ground the rest of the layers stand on.
@@ -702,6 +757,7 @@ pub fn build(
     if st.layer(layer::QSO) {
         digi_traffic(&mut s, st, &b, &cam, unix_s, anim_t);
     }
+    adsb_traffic(&mut s, st, &b, &cam);
     if let Some(d) = data {
         let now = unix_s as i64;
         if st.layer(layer::SPOTS) {
@@ -1688,10 +1744,6 @@ fn bodies_draws(s: &mut Scene, st: &SolarUi, b: &Bodies, cam: &Camera) {
         s.draws.push((Prim::Sphere, d));
     };
 
-    // Sun.
-    let sun = Color32::from_rgb(0xff, 0xc4, 0x6a);
-    sphere(s, sun_basis, V3::ZERO, b.sun_r, sun, MODE_SUN, [0.0; 4]);
-
     // Earth — its body frame is ECEF, so the land mask, the QTH marker and the
     // terminator all share one coordinate system. `tint2` carries the Moon's
     // true geocentric offset, from which the shader casts the eclipse shadow.
@@ -1704,6 +1756,16 @@ fn bodies_draws(s: &mut Scene, st: &SolarUi, b: &Bodies, cam: &Camera) {
     );
     earth.tint2 = b.moon_true_off.arr4(0.0);
     s.draws.push((Prim::Sphere, earth));
+
+    // ADS-B MAP: Earth only — Sun/Moon/planets are solar-system chrome.
+    if st.adsb_globe {
+        glow(s, cam, b.earth, b.earth_r, 7.0, ink::CYAN);
+        return;
+    }
+
+    // Sun.
+    let sun = Color32::from_rgb(0xff, 0xc4, 0x6a);
+    sphere(s, sun_basis, b.sun, b.sun_r, sun, MODE_SUN, [0.0; 4]);
 
     // Moon, in the tidally locked frame — which is what puts Imbrium and
     // Tranquillitatis on the near side, where they belong. `tint2` carries the
@@ -1743,7 +1805,7 @@ fn bodies_draws(s: &mut Scene, st: &SolarUi, b: &Bodies, cam: &Camera) {
 
     // A glow billboard with a pixel floor under every body, so "can I see the
     // Earth from 2 AU" never depends on the exaggeration slider.
-    glow(s, cam, V3::ZERO, b.sun_r, 22.0, Color32::from_rgb(0xff, 0xd0, 0x80));
+    glow(s, cam, b.sun, b.sun_r, 22.0, Color32::from_rgb(0xff, 0xd0, 0x80));
     glow(s, cam, b.earth, b.earth_r, 7.0, ink::CYAN);
     glow(s, cam, b.moon, b.moon_r, 5.0, Color32::from_rgb(0xc8, 0xd2, 0xe0));
     if st.layer(layer::PLANETS) {
@@ -2114,25 +2176,62 @@ fn markers(s: &mut Scene, st: &SolarUi, b: &Bodies, cam: &Camera) {
     };
 
     if let Some((lat, lon)) = st.qth {
-        // VISUALIZE zooms in tight on the QTH: the usual 2% lift reads as a
-        // ring floating in space. Sit it on the surface there; elsewhere keep
-        // MARK_LIFT so the ring still meets the traffic arcs.
-        let lift = if st.visualize_sat.is_some() { 1.001 } else { MARK_LIFT };
-        s.sprites.push(SpriteInst {
-            center: on_earth(lat, lon, lift).arr(),
-            size_px: size(14.0),
-            color: lin(ink::GREEN, 0.95 * fade),
-            params: [SPRITE_RING, 0.0, 0.0, 0.0],
-        });
+        if st.adsb_globe {
+            // Ground-aligned ring in the local tangent plane — a screen
+            // billboard reads as a floating halo once the camera is oblique.
+            let (east, north, up) = local_enu(b, lat, lon);
+            let center = b.earth + up * (b.earth_r * 1.0008);
+            // ~10 px apparent radius; floor so it stays readable when close.
+            let r_world = (10.0 / cam.pixels_for(center, 1.0).max(1e-3))
+                .clamp(b.earth_r * 8e-5, b.earth_r * 0.05);
+            const STEPS: usize = 56;
+            let col = lin(ink::GREEN, 0.98 * fade);
+            for i in 0..STEPS {
+                let a0 = std::f32::consts::TAU * (i as f32) / STEPS as f32;
+                let a1 = std::f32::consts::TAU * ((i + 1) as f32) / STEPS as f32;
+                let p0 = center + east * (r_world * a0.cos()) + north * (r_world * a0.sin());
+                let p1 = center + east * (r_world * a1.cos()) + north * (r_world * a1.sin());
+                s.lines.push(seg(p0, p1, 2.6, col));
+            }
+            s.sprites.push(SpriteInst {
+                center: center.arr(),
+                size_px: size(8.0),
+                color: lin(ink::GREEN, 0.95 * fade),
+                params: [SPRITE_DOT, 0.0, 0.0, 0.0],
+            });
+            if st.layer(layer::LABELS) {
+                s.labels.push(Label {
+                    world: center.arr(),
+                    text: format!("YOU  {}", st.qth_grid),
+                    color: lin_color(ink::GREEN, fade),
+                    offset: [10.0, 8.0],
+                    click: Click::None,
+                    rank: RANK_ALWAYS,
+                });
+            }
+        } else {
+            // VISUALIZE zooms in tight on the QTH: the usual 2% lift reads as a
+            // ring floating in space. Sit it on the surface there; elsewhere
+            // keep MARK_LIFT so the ring still meets the traffic arcs.
+            let lift = if st.visualize_sat.is_some() { 1.001 } else { MARK_LIFT };
+            s.sprites.push(SpriteInst {
+                center: on_earth(lat, lon, lift).arr(),
+                size_px: size(14.0),
+                color: lin(ink::GREEN, 0.95 * fade),
+                params: [SPRITE_RING, 0.0, 0.0, 0.0],
+            });
+        }
     }
 
-    let (slat, slon) = ephem::subsolar_point(b.jd);
-    s.sprites.push(SpriteInst {
-        center: on_earth(slat, slon, 1.02).arr(),
-        size_px: size(9.0),
-        color: lin(ink::YELLOW, 0.85 * fade),
-        params: [SPRITE_DOT, 0.0, 0.0, 0.0],
-    });
+    if !st.adsb_globe {
+        let (slat, slon) = ephem::subsolar_point(b.jd);
+        s.sprites.push(SpriteInst {
+            center: on_earth(slat, slon, 1.02).arr(),
+            size_px: size(9.0),
+            color: lin(ink::YELLOW, 0.85 * fade),
+            params: [SPRITE_DOT, 0.0, 0.0, 0.0],
+        });
+    }
 }
 
 fn seg(a: V3, b: V3, width_px: f32, color: [f32; 4]) -> LineInst {
@@ -2267,6 +2366,106 @@ fn station_label(
 /// already answer that — but *who*. It is why the callsign is carried all the
 /// way from the decoder rather than dropped at the grid square.
 ///
+/// How strongly altitude is exaggerated on the globe.
+///
+/// True scale puts FL350 a millimetre above the surface at Earth-filling zoom;
+/// this lift makes a busy terminal readable without turning jets into LEO.
+const ADSB_ALT_EXAG: f32 = 80.0;
+
+/// Radii multiplier for an aircraft at `alt_ft` (feet).
+fn adsb_lift(alt_ft: f32) -> f32 {
+    let alt_km = (alt_ft.max(0.0) * 0.3048 / 1000.0) * ADSB_ALT_EXAG;
+    1.0 + alt_km / CLOUD_EARTH_R_KM
+}
+
+/// ADS-B targets: a small 3D silhouette at altitude (and optional callsign).
+/// Drawn whenever the host has pushed any into [`SolarUi::adsb`].
+fn adsb_traffic(s: &mut Scene, st: &SolarUi, b: &Bodies, cam: &Camera) {
+    if st.adsb.aircraft.is_empty() {
+        return;
+    }
+    let earth_px = cam.pixels_for(b.earth, b.earth_r);
+    let fade = ((earth_px - 3.0) / 9.0).clamp(0.0, 1.0);
+    if fade <= 0.0 {
+        return;
+    }
+    let (ex, ey, ez) = b.earth_basis;
+    let to_world = |lat: f64, lon: f64, lift: f32| {
+        let v = ephem::geodetic_to_body(lat, lon);
+        b.earth + (ex * v.x as f32 + ey * v.y as f32 + ez * v.z as f32) * (b.earth_r * lift)
+    };
+    let names = st.layer(layer::LABELS) && earth_px > STATION_LABEL_MIN_PX;
+    let label_all = st.adsb.aircraft.len() <= 16;
+
+    for a in &st.adsb.aircraft {
+        let lift = if a.on_ground { MARK_LIFT } else { adsb_lift(a.alt_ft) };
+        let tip = to_world(a.lat, a.lon, lift);
+        let (east, north, up) = local_enu(b, a.lat, a.lon);
+        // Selection is list/UI state only — keep every contact the same ink so
+        // the air picture does not recolour under a click.
+        let color = if a.emergency { ink::PINK } else { ink::TEXT_STRONG };
+        // Scale the silhouette with eye distance so it stays readable when
+        // the camera pulls back to frame regional traffic.
+        let eye_dist = (cam.eye - tip).len().max(b.earth_r * 1.0e-4);
+        let span = (eye_dist * 0.028)
+            .clamp(b.earth_r * 4.0e-5, b.earth_r * 2.5e-3);
+        let width = if a.selected || a.emergency { 2.6 } else { 2.0 };
+        adsb_silhouette(s, tip, east, north, up, a.track_deg, span, width, lin(color, 0.92 * fade));
+        if faces_camera(cam, up, tip) {
+            s.adsb_picks.push(AdsbPick {
+                world: tip.arr(),
+                radius_px: 16.0f32.min(earth_px * 1.4).max(12.0),
+                icao: a.icao,
+                tip: a.tip.clone(),
+            });
+            if names && (a.selected || a.emergency || label_all) {
+                if let Some(call) = a.call.as_deref() {
+                    s.labels.push(Label {
+                        world: tip.arr(),
+                        text: call.to_string(),
+                        color: lin_color(color, fade),
+                        offset: [8.0, -8.0],
+                        click: Click::None,
+                        rank: Label::station_rank(1.0),
+                    });
+                }
+            }
+        }
+    }
+}
+
+/// Line-drawn aircraft: nose–tail, wings, stabilizer, and a vertical fin,
+/// oriented by true track in the local ENU frame.
+fn adsb_silhouette(
+    s: &mut Scene,
+    tip: V3,
+    east: V3,
+    north: V3,
+    up: V3,
+    track_deg: Option<f32>,
+    size: f32,
+    width: f32,
+    color: [f32; 4],
+) {
+    let hdg = track_deg.unwrap_or(0.0).to_radians();
+    let (sin, cos) = hdg.sin_cos();
+    let fwd = (north * cos + east * sin).normalize();
+    let right = (east * cos - north * sin).normalize();
+    let nose = tip + fwd * size;
+    let tail = tip - fwd * size * 0.85;
+    let wing = tip - fwd * size * 0.05;
+    let stab = tip - fwd * size * 0.70;
+    s.lines.push(seg(nose, tail, width, color));
+    s.lines.push(seg(wing - right * size * 0.95, wing + right * size * 0.95, width, color));
+    s.lines.push(seg(
+        stab - right * size * 0.38,
+        stab + right * size * 0.38,
+        width * 0.85,
+        color,
+    ));
+    s.lines.push(seg(tail, tail + up * size * 0.38, width * 0.85, color));
+}
+
 /// The flat map in the FT8 panel draws the live set as a great-circle line
 /// across a rectangle; here the path is the *actual* great circle, lifted off
 /// the surface so it arcs through space between the two stations instead of

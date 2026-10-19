@@ -138,6 +138,212 @@ pub fn ui(ui: &mut egui::Ui, st: &mut SolarUi) {
     scene(ui, st, data);
 }
 
+/// Earth globe for the ADS-B MAP 3D pane: same wgpu Earth as the solar window,
+/// without the solar-system chrome. Returns the ICAO clicked this frame, if any.
+pub fn adsb_earth_pane(ui: &mut egui::Ui, st: &mut SolarUi) -> Option<u32> {
+    use super::camera;
+    use super::scene;
+
+    crate::repaint::after(ui.ctx(), IDLE_FRAME);
+    let handle = st.data.clone();
+    let guard = handle.as_ref().map(|d| d.lock().unwrap_or_else(|e| e.into_inner()));
+    let data = guard.as_deref();
+
+    let rect = ui.available_rect_before_wrap();
+    if rect.width() < 4.0 || rect.height() < 4.0 {
+        return None;
+    }
+    let resp = ui.allocate_rect(rect, egui::Sense::click_and_drag());
+
+    let ppp = ui.ctx().pixels_per_point();
+    let px = [(rect.width() * ppp).round().max(1.0), (rect.height() * ppp).round().max(1.0)];
+    let sim_now = super::wall_clock_unix() + st.sim_offset_s;
+    let anim = ui.input(|i| i.time);
+    st.last_frame_time = anim;
+    if st.focus() != super::state::Focus::Earth {
+        st.set_focus(super::state::Focus::Earth);
+    }
+    // Pivot is always the operator's QTH — never a free look-at on the map.
+    if std::mem::take(&mut st.fly_home_pending) {
+        if let Some(qth) = st.qth {
+            camera::adsb_apply_home(st, qth);
+        }
+    }
+    st.adsb_look = st.qth;
+
+    interact_adsb(ui, st, &resp);
+    let dt = ui.input(|i| i.stable_dt);
+    if camera::adsb_step_north(st, dt) {
+        crate::repaint::animate(ui.ctx());
+    }
+    camera::adsb_auto_frame(st);
+
+    let mut scene = scene::build(st, data, sim_now, px, anim as f32);
+    let labels = std::mem::take(&mut scene.labels);
+    let adsb_picks = std::mem::take(&mut scene.adsb_picks);
+    let view_proj = scene.globals.view_proj;
+
+    let (sun_img, sun_gen, aurora, aurora_gen, clouds, clouds_gen) = match data {
+        Some(d) => (
+            d.sun.clone(),
+            d.sun_gen,
+            d.aurora.clone(),
+            d.aurora_gen,
+            d.clouds.clone(),
+            d.clouds_gen,
+        ),
+        None => (None, 0, None, 0, None, 0),
+    };
+    ui.painter().add(crate::egui_wgpu::Callback::new_paint_callback(
+        rect,
+        super::gpu::SolarCallback {
+            scene: std::sync::Arc::new(scene),
+            px_size: [px[0] as u32, px[1] as u32],
+            sun_img,
+            sun_gen,
+            aurora,
+            aurora_gen,
+            clouds,
+            clouds_gen,
+            prop: None,
+            prop_gen: 0,
+        },
+    ));
+
+    let _ = draw_labels(ui, st, rect, &view_proj, &labels, &resp);
+    let clicked = pick_adsb(ui, rect, &view_proj, &adsb_picks, &resp);
+    adsb_north_chip(ui, st, rect);
+    if st.qth.is_none() {
+        ui.painter().text(
+            rect.left_bottom() + egui::vec2(8.0, -6.0),
+            egui::Align2::LEFT_BOTTOM,
+            "set My grid in digimode setup for home on the globe",
+            egui::FontId::proportional(10.0),
+            theme::scope().warn,
+        );
+    } else {
+        ui.painter().text(
+            rect.left_bottom() + egui::vec2(8.0, -6.0),
+            egui::Align2::LEFT_BOTTOM,
+            "drag to orbit · scroll zoom · compass = north · double-click reset view",
+            egui::FontId::proportional(9.0),
+            theme::CYAN_DIM(),
+        );
+    }
+    if resp.double_clicked() {
+        st.fly_home_pending = true;
+    }
+    clicked
+}
+
+/// Overlay compass: ease orbit yaw so the camera looks north over the QTH.
+fn adsb_north_chip(ui: &egui::Ui, st: &mut SolarUi, rect: egui::Rect) {
+    let yaw = st.view.yaw.rem_euclid(std::f32::consts::TAU);
+    let facing_north = st.adsb_north_fly.is_none()
+        && (yaw < 0.05 || yaw > std::f32::consts::TAU - 0.05);
+    let side = chrome::chip_height(ui, Some(11.0)).max(26.0);
+    egui::Area::new(egui::Id::new("adsb-globe-north"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(rect.right_top() + egui::vec2(-(side + 8.0), 8.0))
+        .constrain_to(rect)
+        .show(ui.ctx(), |ui| {
+            if chrome::chip_compass(ui, facing_north, st.view.yaw, egui::vec2(side, side))
+                .on_hover_text("Reset heading — north up the screen")
+                .clicked()
+            {
+                super::camera::adsb_begin_north(st);
+            }
+        });
+}
+
+/// Orbit around the QTH (drag) and zoom with the scroll wheel only.
+fn interact_adsb(ui: &egui::Ui, st: &mut SolarUi, resp: &egui::Response) {
+    use super::camera::{ADSB_DIST_MAX, ADSB_DIST_MIN, ADSB_ELEV_MAX, ADSB_ELEV_MIN};
+
+    let mut touched = false;
+    st.adsb_grab = None;
+
+    let pinch = ui.input(|i| i.multi_touch()).filter(|mt| resp.rect.contains(mt.center_pos));
+    if let Some(mt) = pinch {
+        if mt.zoom_delta > 0.0 {
+            st.view.dist /= mt.zoom_delta;
+            if mt.zoom_delta != 1.0 {
+                touched = true;
+                st.adsb_user_zoom = true;
+            }
+        }
+    } else if resp.dragged_by(egui::PointerButton::Primary)
+        || resp.dragged_by(egui::PointerButton::Secondary)
+    {
+        // Drag orbits the camera around the QTH — it never moves the focus.
+        let d = resp.drag_delta();
+        if d.x != 0.0 {
+            st.adsb_north_fly = None;
+        }
+        st.view.yaw -= d.x * 0.005;
+        st.view.pitch = (st.view.pitch + d.y * 0.004).clamp(ADSB_ELEV_MIN, ADSB_ELEV_MAX);
+        touched |= d != egui::Vec2::ZERO;
+    }
+
+    if resp.hovered() {
+        let scroll = ui.input(|i| i.smooth_scroll_delta.y);
+        if scroll != 0.0 {
+            // Positive scroll → closer; negative → pull back.
+            let factor: f32 = (1.0 - scroll * 0.005).clamp(0.4, 2.5);
+            st.view.dist *= factor;
+            touched = true;
+            st.adsb_user_zoom = true;
+        }
+    }
+
+    st.view.dist = st.view.dist.clamp(ADSB_DIST_MIN, ADSB_DIST_MAX);
+    st.view.pitch = st.view.pitch.clamp(ADSB_ELEV_MIN, ADSB_ELEV_MAX);
+
+    if touched {
+        st.view.auto = false;
+        st.view_fly.cancel();
+        st.focus_override = None;
+        st.fly_home_pending = false;
+    }
+    if touched || resp.is_pointer_button_down_on() {
+        crate::repaint::animate(ui.ctx());
+    }
+}
+
+/// Nearest ADS-B marker under the pointer; click returns its ICAO.
+fn pick_adsb(
+    ui: &egui::Ui,
+    rect: egui::Rect,
+    view_proj: &[[f32; 4]; 4],
+    picks: &[super::scene::AdsbPick],
+    resp: &egui::Response,
+) -> Option<u32> {
+    let Some(pointer) = ui.input(|i| i.pointer.interact_pos()) else { return None };
+    if !rect.contains(pointer) {
+        return None;
+    }
+    let mut best: Option<(f32, &super::scene::AdsbPick, egui::Pos2)> = None;
+    for pick in picks {
+        let Some(pos) = project(view_proj, rect, pick.world) else { continue };
+        let d = pos.distance(pointer);
+        if d > pick.radius_px {
+            continue;
+        }
+        let score = d / pick.radius_px;
+        if best.as_ref().is_none_or(|(b, _, _)| score < *b) {
+            best = Some((score, pick, pos));
+        }
+    }
+    let Some((_, pick, pos)) = best else {
+        return None;
+    };
+    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    let r = pick.radius_px.clamp(8.0, 28.0);
+    ui.painter().circle_stroke(pos, r, egui::Stroke::new(1.2, theme::CYAN().gamma_multiply(0.85)));
+    resp.clone().on_hover_text(&pick.tip);
+    if resp.clicked() { Some(pick.icao) } else { None }
+}
+
 // Fade slots in [`SolarUi::menu_since`], in bar order.
 const M_VIEW: usize = 0;
 const M_LAYERS: usize = 1;
