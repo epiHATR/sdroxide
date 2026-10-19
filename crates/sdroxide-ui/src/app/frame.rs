@@ -1017,6 +1017,33 @@ impl eframe::App for SdroxideApp {
                 }
                 None => {}
             }
+
+            // ADS-B MAP pop-out — same deferred-viewport host as solar.
+            self.adsb_map_win.set_window_seed(self.ui_settings.adsb_map_window);
+            let aircraft = self
+                .adsb_status
+                .as_ref()
+                .map(|s| s.aircraft.as_slice())
+                .unwrap_or(&[]);
+            let grid = self.digi_cfg_edit.my_grid.trim().to_owned();
+            let home = self.adsb_home();
+            let cfg = self.state.adsb;
+            let now = crate::time::now_unix();
+            let selected = self.adsb_map.selected;
+            if let Some(win_sel) = self.adsb_map_win.viewport(
+                &ctx,
+                aircraft,
+                &grid,
+                home,
+                cfg,
+                now,
+                selected,
+            ) {
+                self.adsb_map.selected = win_sel;
+            }
+            if let Some(geom) = self.adsb_map_win.window_now() {
+                self.ui_settings.adsb_map_window = Some(geom);
+            }
         }
 
         // Debounced spectrum-config updates with pan hysteresis.

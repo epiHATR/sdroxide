@@ -29,7 +29,7 @@ fn page_base(pathname: &str) -> String {
 mod web {
     use eframe::wasm_bindgen::{self, JsCast, prelude::*};
     use sdroxide_proto::AudioCaps;
-    use sdroxide_ui::{AudioBridge, MultiApp, RadioTab, RemoteController, SolarApp};
+    use sdroxide_ui::{AdsbMapApp, AudioBridge, MultiApp, RadioTab, RemoteController, SolarApp};
 
     // Implemented in assets/audio_bridge.js (loaded by index.html).
     #[wasm_bindgen(js_namespace = ["window", "sdroxideAudio"])]
@@ -173,6 +173,7 @@ mod web {
             let location = window.location();
             let search = location.search().unwrap_or_default();
             let solar = search.contains("view=solar");
+            let adsb = search.contains("view=adsb");
             let options = web_options(&search);
 
             let ws_proto =
@@ -196,6 +197,27 @@ mod web {
                             Ok(Box::new(
                                 SolarApp::new(cc, &url)
                                     .map_err(|e| format!("solar websocket connect: {e}"))?,
+                            ))
+                        }),
+                    )
+                    .await
+            } else if adsb {
+                // Map-only tab: no audio bridge. Uses the control `/ws` so it
+                // sees the same ADS-B traffic as the main radio tab.
+                document.set_title("sdroxide — ADS-B map");
+                let radio = radio_query(&search);
+                let url = match radio {
+                    Some(id) => format!("{ws_proto}://{host}{base}ws/{id}"),
+                    None => format!("{ws_proto}://{host}{base}ws"),
+                };
+                runner
+                    .start(
+                        canvas,
+                        options,
+                        Box::new(move |cc| {
+                            Ok(Box::new(
+                                AdsbMapApp::new(cc, &url)
+                                    .map_err(|e| format!("adsb map websocket connect: {e}"))?,
                             ))
                         }),
                     )

@@ -403,6 +403,35 @@ impl SdroxideApp {
             {
                 self.adsb_map.kind = AdsbMapKind::Air3d;
             }
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                if crate::chrome::chip(ui, self.adsb_map_win.open, RichText::new("⛶").size(9.5))
+                    .on_hover_text(
+                        "Open the ADS-B map in a separate (maximised) window — \
+                         same idea as ☀ 3D.",
+                    )
+                    .clicked()
+                {
+                    self.adsb_map_win.open = !self.adsb_map_win.open;
+                    if self.adsb_map_win.open {
+                        self.adsb_map_win.sync_kind(self.adsb_map.kind);
+                    }
+                }
+            }
+            #[cfg(target_arch = "wasm32")]
+            {
+                if crate::chrome::chip(ui, false, RichText::new("⛶").size(9.5))
+                    .on_hover_text("Open the ADS-B map in a new browser tab.")
+                    .clicked()
+                {
+                    let href = if self.radio_id == 0 {
+                        "?view=adsb".to_owned()
+                    } else {
+                        format!("?view=adsb&radio={}", self.radio_id)
+                    };
+                    ui.ctx().open_url(egui::OpenUrl::new_tab(href));
+                }
+            }
         });
         let home = self.adsb_home();
         let cfg = self.state.adsb;
@@ -436,7 +465,7 @@ impl SdroxideApp {
     /// The same source the FT8 and APRS maps use, so the three never disagree
     /// about where the station is. `None` until it has been filled in, which is
     /// why the range column and the RANGE sort are conditional.
-    fn adsb_home(&self) -> Option<(f64, f64)> {
+    pub(in crate::app) fn adsb_home(&self) -> Option<(f64, f64)> {
         let grid = self.digi_cfg_edit.my_grid.trim();
         (!grid.is_empty()).then(|| sdroxide_types::grid_to_latlon(grid)).flatten()
     }

@@ -8,6 +8,7 @@
 //! targets.
 
 mod adsb_map;
+mod adsb_map_window;
 mod ais_map;
 mod app;
 mod aprs_icons;
@@ -63,6 +64,8 @@ pub use remote::{AudioBridge, RemoteController};
 /// instead — see `solar3d::Solar3d`.
 #[cfg(feature = "remote")]
 pub use solar3d::SolarApp;
+#[cfg(feature = "remote")]
+pub use adsb_map_window::AdsbMapApp;
 
 /// Wgpu access must go through this re-export so every crate agrees on the
 /// wgpu version (project rule).

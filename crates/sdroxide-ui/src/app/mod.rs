@@ -801,6 +801,9 @@ pub struct SdroxideApp {
     adsb_map: crate::adsb_map::AdsbMapState,
     /// ADS-B MAP 3D: Earth globe (Natural Earth textures) with altitude stems.
     adsb_globe: crate::solar3d::AdsbGlobe,
+    /// ADS-B MAP pop-out: second OS window (native). Browser uses `?view=adsb`.
+    #[cfg(not(target_arch = "wasm32"))]
+    adsb_map_win: crate::adsb_map_window::AdsbMapWindow,
     /// ADS-B: filter for the aircraft list; matches a callsign or an address.
     adsb_filter: String,
     /// ADS-B: the decoder's own settings window is open.
@@ -1676,6 +1679,8 @@ impl SdroxideApp {
             adsb_status: None,
             adsb_map: crate::adsb_map::AdsbMapState::default(),
             adsb_globe: crate::solar3d::AdsbGlobe::new(wgpu_render_state.clone()),
+            #[cfg(not(target_arch = "wasm32"))]
+            adsb_map_win: crate::adsb_map_window::AdsbMapWindow::new(wgpu_render_state.clone()),
             adsb_filter: String::new(),
             show_adsb_setup: false,
             adsb_setup_was_open: false,

@@ -94,7 +94,7 @@ impl AdsbGlobe {
     }
 }
 
-fn marker(a: &AdsbAircraft, selected: Option<u32>) -> Option<AdsbMarker> {
+pub(crate) fn marker(a: &AdsbAircraft, selected: Option<u32>) -> Option<AdsbMarker> {
     let (lat, lon) = a.lat.zip(a.lon)?;
     let alt_ft = if a.on_ground { 0.0 } else { a.altitude_ft.unwrap_or(0) as f32 };
     let call = {

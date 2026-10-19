@@ -23,18 +23,20 @@
 mod adsb_globe;
 #[cfg(feature = "remote")]
 mod app;
-mod camera;
+pub(crate) mod camera;
 mod dotmatrix;
-mod gpu;
+pub(crate) mod gpu;
 mod math;
 mod mesh;
 #[cfg(feature = "remote")]
 mod net;
-mod overlay;
+pub(crate) mod overlay;
 mod scene;
-mod state;
+pub(crate) mod state;
 
 pub use adsb_globe::AdsbGlobe;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) use adsb_globe::marker as adsb_marker;
 
 // Everything below is the native host's: the browser's is in `app.rs`.
 #[cfg(not(target_arch = "wasm32"))]

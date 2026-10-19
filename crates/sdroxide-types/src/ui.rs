@@ -738,6 +738,10 @@ pub struct UiSettings {
     /// its own.
     #[serde(default)]
     pub solar3d_window: Option<Solar3dWindow>,
+    /// Where the ADS-B MAP pop-out window last was (same geometry shape as
+    /// [`Solar3dWindow`]).
+    #[serde(default)]
+    pub adsb_map_window: Option<Solar3dWindow>,
 }
 
 /// Default for [`UiSettings::spot_colors`] — every kind on its stock tint.
@@ -840,6 +844,7 @@ impl Default for UiSettings {
             map_cities: true,
             panadapter_clock: true,
             solar3d_window: None,
+            adsb_map_window: None,
         }
     }
 }

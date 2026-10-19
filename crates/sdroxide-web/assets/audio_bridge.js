@@ -25,6 +25,7 @@
     function warnInsecure() {
         // The solar view is a silent viewer; an audio warning there is noise.
         if (location.search.includes("view=solar")) return;
+        if (location.search.includes("view=adsb")) return;
         console.warn(
             "sdroxide audio: this page is not a secure context, so the browser " +
             "withholds AudioWorklet and the microphone. Receive audio and " +
