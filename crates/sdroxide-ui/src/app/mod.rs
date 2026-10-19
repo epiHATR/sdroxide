@@ -2298,13 +2298,16 @@ impl SdroxideApp {
         self.radio_notice = Some(text);
     }
 
-    /// Snapshot of the client layout half of a profile: panadapter view and
-    /// System / band docks. Dial and mode are captured by the engine.
+    /// Snapshot of the client layout half of a profile: panadapter view,
+    /// System / band docks, floating System popups, and UI zoom. Dial and mode
+    /// are captured by the engine.
     pub(in crate::app) fn capture_profile_layout(&self) -> crate::app::persist::ProfileLayout {
         crate::app::persist::ProfileLayout {
             view: self.view.clone(),
             system_dock: self.system_dock_snapshot(),
             band_docked: self.band_docked,
+            band_dock_visible: self.band_dock_visible,
+            ui_zoom: self.ui_settings.ui_zoom,
         }
     }
 
@@ -2319,6 +2322,10 @@ impl SdroxideApp {
     /// Put back the layout saved with `name`, if any. Missing layout is fine —
     /// an older profile or a remote save that only hit the engine still applies
     /// dial and mode.
+    ///
+    /// Restores the exact dock set, floating System open/closed state, band
+    /// dock, panadapter view, and UI zoom. Mode SETUP dialogs and chip popups
+    /// are closed so apply does not leave Audio / SETUP clutter on screen.
     pub(in crate::app) fn restore_profile_layout(&mut self, name: &str) {
         let Some(layout) = crate::app::persist::take_profile_layout(&self.profile_layouts, name)
         else {
@@ -2327,8 +2334,46 @@ impl SdroxideApp {
         self.view = layout.view;
         self.apply_system_dock_snapshot(&layout.system_dock);
         self.band_docked = layout.band_docked;
-        if self.band_docked {
-            self.band_dock_visible = true;
+        self.band_dock_visible = if layout.band_docked {
+            true
+        } else {
+            layout.band_dock_visible
+        };
+        let zoom = layout.ui_zoom;
+        crate::theme::set_ui_zoom(zoom);
+        self.ui_settings.ui_zoom = crate::theme::ui_zoom();
+        crate::app::persist::persist_ui_settings(&self.ui_settings);
+        self.close_transient_popups_for_profile();
+    }
+
+    /// Collapse chip menus and mode SETUP windows when a profile layout lands —
+    /// they are not part of the saved layout and would otherwise stay up over
+    /// the restored docks (Audio was the common leftover).
+    fn close_transient_popups_for_profile(&mut self) {
+        self.show_digi_settings = false;
+        self.show_adsb_setup = false;
+        self.show_ais_setup = false;
+        self.show_meshtastic_setup = false;
+        self.show_voice = false;
+        self.show_rds = false;
+        self.show_drm = false;
+        self.show_hd = false;
+        self.show_public_sdrs = false;
+        self.mode_popup_since = None;
+        self.fft_popup_since = None;
+        self.skimmer_popup_since = None;
+        self.layers_popup_since = None;
+        self.prof_popup_since = None;
+        self.tone_popup_since = None;
+        self.nr_popup_since = None;
+        self.rec_popup_since = None;
+        self.bw_popup_since = None;
+        self.duplex_popup_since = None;
+        self.rpt_tone_popup_since = None;
+        self.audio_rec_since = None;
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.adsb_map_win.open = false;
         }
     }
 

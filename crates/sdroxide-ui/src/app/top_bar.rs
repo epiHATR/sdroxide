@@ -5798,7 +5798,7 @@ impl SdroxideApp {
                             if crate::chrome::chip(ui, false, "REP")
                                 .on_hover_text(format!(
                                     "Replace \u{201c}{name}\u{201d} with the station as it is \
-                                     right now — dial, mode, and the current layout"
+                                     right now — dial, mode, docks, popups, zoom, and band"
                                 ))
                                 .clicked()
                             {
@@ -5808,7 +5808,7 @@ impl SdroxideApp {
                             if crate::chrome::chip(ui, false, "APP")
                                 .on_hover_text(format!(
                                     "Apply \u{201c}{name}\u{201d} — dial, mode, filters, levels, \
-                                     identity, band stacks, and the saved layout"
+                                     identity, band stacks, docks, popups, zoom, and band"
                                 ))
                                 .clicked()
                             {

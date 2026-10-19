@@ -18,6 +18,7 @@ struct DraggedSystemDock(SystemDock);
 #[cfg(test)]
 mod persist_id_tests {
     use super::SystemDock;
+    use crate::app::persist::SystemDockSnapshot;
 
     #[test]
     fn every_dock_kind_round_trips_through_its_persist_id() {
@@ -25,6 +26,24 @@ mod persist_id_tests {
             assert_eq!(SystemDock::from_persist_id(kind.persist_id()), Some(kind));
         }
         assert_eq!(SystemDock::from_persist_id("nope"), None);
+    }
+
+    #[test]
+    fn dock_snapshot_keeps_floating_open_set() {
+        let snap = SystemDockSnapshot {
+            order: vec!["logbook".into()],
+            floating: vec!["audio".into()],
+            ..SystemDockSnapshot::default()
+        };
+        let json = serde_json::to_string(&snap).expect("serialize");
+        let back: SystemDockSnapshot = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back.order, vec!["logbook"]);
+        assert_eq!(back.floating, vec!["audio"]);
+        // Older layouts without `floating` still load.
+        let old = r#"{"order":["audio"],"fraction":0.3}"#;
+        let legacy: SystemDockSnapshot = serde_json::from_str(old).expect("legacy");
+        assert!(legacy.floating.is_empty());
+        assert_eq!(legacy.order, vec!["audio"]);
     }
 }
 
@@ -219,10 +238,18 @@ const SYSTEM_DOCK_SLOT_MAX_FRACTION: f32 = 0.5;
 
 impl SdroxideApp {
     /// Snapshot of the dock column for persistence (order, collapse, weights,
-    /// width fraction). Open flags are implied: every entry in `order` is open.
+    /// width fraction) plus which overlays were open as floating windows.
     pub(in crate::app) fn system_dock_snapshot(&self) -> crate::app::persist::SystemDockSnapshot {
+        let order: Vec<String> =
+            self.system_dock.iter().map(|k| k.persist_id().to_string()).collect();
+        let floating: Vec<String> = SystemDock::ALL
+            .iter()
+            .copied()
+            .filter(|k| k.open_flag(self) && !self.system_dock.contains(k))
+            .map(|k| k.persist_id().to_string())
+            .collect();
         crate::app::persist::SystemDockSnapshot {
-            order: self.system_dock.iter().map(|k| k.persist_id().to_string()).collect(),
+            order,
             collapsed: self
                 .system_dock_collapsed
                 .iter()
@@ -236,14 +263,27 @@ impl SdroxideApp {
                 .map(|(k, w)| (k.persist_id().to_string(), *w))
                 .collect(),
             fraction: self.system_dock_fraction.clamp(0.15, SYSTEM_DOCK_MAX_FRACTION),
+            floating,
         }
     }
 
-    /// Restore a previously saved dock column and re-open each pinned overlay.
+    /// Restore a previously saved dock column and open/close overlays exactly.
+    ///
+    /// Every System overlay is closed first, then only the saved docked and
+    /// floating sets are reopened — otherwise an Audio / Settings window that
+    /// was docked before apply would fall out of the dock and keep floating.
     pub(in crate::app) fn apply_system_dock_snapshot(
         &mut self,
         snap: &crate::app::persist::SystemDockSnapshot,
     ) {
+        for kind in SystemDock::ALL {
+            kind.set_open(self, false);
+            *kind.center_pending_mut(self) = false;
+        }
+        self.system_dock.clear();
+        self.system_dock_collapsed.clear();
+        self.system_dock_weights.clear();
+
         let mut order = Vec::new();
         for id in &snap.order {
             let Some(kind) = SystemDock::from_persist_id(id) else { continue };
@@ -285,6 +325,14 @@ impl SdroxideApp {
         self.system_dock_collapsed = collapsed;
         self.system_dock_weights = weights;
         self.system_dock_fraction = snap.fraction.clamp(0.15, SYSTEM_DOCK_MAX_FRACTION);
+
+        for id in &snap.floating {
+            let Some(kind) = SystemDock::from_persist_id(id) else { continue };
+            if self.system_dock.contains(&kind) {
+                continue;
+            }
+            kind.set_open(self, true);
+        }
     }
 
     /// Whether this overlay is snapped into the right panel (expanded or collapsed).

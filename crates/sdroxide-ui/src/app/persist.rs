@@ -144,7 +144,9 @@ mod remote_seat_tests {
 ///
 /// Restored on open so a docked SAT / SETTINGS / … column comes back instead of
 /// every overlay starting as a floating window again. Floating window geometry
-/// itself is egui's memory (`persist_egui_memory`); this is only the dock.
+/// itself is egui's memory (`persist_egui_memory`); this is only the dock plus
+/// which overlays were open as floating windows (so a profile apply can close
+/// Audio / Settings that should not stay up).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SystemDockSnapshot {
@@ -158,11 +160,22 @@ pub struct SystemDockSnapshot {
     pub weights: Vec<(String, f32)>,
     /// Fraction of the main content width the dock column took.
     pub fraction: f32,
+    /// Overlays that were open as floating windows (not in `order`) when the
+    /// layout was captured. Empty on older snapshots — apply still closes
+    /// anything that is neither docked nor listed here.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub floating: Vec<String>,
 }
 
 impl Default for SystemDockSnapshot {
     fn default() -> Self {
-        Self { order: Vec::new(), collapsed: Vec::new(), weights: Vec::new(), fraction: 0.35 }
+        Self {
+            order: Vec::new(),
+            collapsed: Vec::new(),
+            weights: Vec::new(),
+            fraction: 0.35,
+            floating: Vec::new(),
+        }
     }
 }
 
@@ -193,6 +206,16 @@ pub struct ProfileLayout {
     pub system_dock: SystemDockSnapshot,
     /// Whether the band/mode column was docked beside the panadapter.
     pub band_docked: bool,
+    /// Whether the band/mode column was visible (even when undocked as a strip).
+    #[serde(default)]
+    pub band_dock_visible: bool,
+    /// egui zoom multiplier on top of the menu font scale (`UiSettings::ui_zoom`).
+    #[serde(default = "profile_ui_zoom_default")]
+    pub ui_zoom: f32,
+}
+
+fn profile_ui_zoom_default() -> f32 {
+    1.0
 }
 
 impl Default for ProfileLayout {
@@ -201,6 +224,8 @@ impl Default for ProfileLayout {
             view: crate::view::ViewState::default(),
             system_dock: SystemDockSnapshot::default(),
             band_docked: false,
+            band_dock_visible: false,
+            ui_zoom: 1.0,
         }
     }
 }
