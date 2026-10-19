@@ -8,13 +8,13 @@
 //!
 //! - a **ship-shaped symbol**, drawn to the vessel's heading. This is the one
 //!   place this map differs from [`crate::adsb_map`] on purpose rather than by
-//!   accident: everything overhead is an aeroplane, so ADS-B draws a square and
-//!   says nothing about the kind — but what is on the water is a tanker, a
-//!   ferry, a fishing boat, a buoy, a lighthouse or a lifeboat, and which it is
-//!   changes what a watchkeeper does next. So a ship is a hull outline pointed
-//!   the way its bow is, a base station is a square with a mast, an aid to
-//!   navigation is a diamond, a SAR aircraft is an aircraft, and a distress
-//!   beacon is a cross that nothing else can be mistaken for.
+//!   accident: ADS-B draws one aircraft outline for everything overhead, but
+//!   what is on the water is a tanker, a ferry, a fishing boat, a buoy, a
+//!   lighthouse or a lifeboat, and which it is changes what a watchkeeper does
+//!   next. So a ship is a hull outline pointed the way its bow is, a base
+//!   station is a square with a mast, an aid to navigation is a diamond, a SAR
+//!   aircraft is an aircraft, and a distress beacon is a cross that nothing
+//!   else can be mistaken for.
 //! - **history dots** behind it — where it has been, fading with age. The
 //!   spacing of the dots is the speed, read before any number on the screen is.
 //! - a **vector** ahead of it, as long as the distance covered in

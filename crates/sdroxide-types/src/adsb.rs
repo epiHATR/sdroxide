@@ -67,7 +67,7 @@ pub const ADSB_MAX_RATE_HZ: f64 = 9_000_000.0;
 pub const ADSB_TRACK_MAX: usize = 240;
 
 /// Default for [`AdsbSettings::drop_map_s`].
-pub const ADSB_DROP_MAP_S: u16 = 10;
+pub const ADSB_DROP_MAP_S: u16 = 60;
 /// Default for [`AdsbSettings::drop_list_s`].
 pub const ADSB_DROP_LIST_S: u16 = 60;
 /// Default for [`AdsbSettings::history_points`].

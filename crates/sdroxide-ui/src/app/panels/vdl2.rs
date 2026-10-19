@@ -1,10 +1,11 @@
 //! The VDL panel: what the aircraft overhead are *saying*.
 //!
-//! Two things an operator watches, so two columns:
+//! Two things an operator watches, so two columns behind a draggable split
+//! (same cue as ADS-B / AIS / HFDL):
 //!
 //! - **MESSAGES** — every AVLC frame decoded, newest at the bottom, with the
 //!   full card for whichever one is selected pinned below the log behind a
-//!   draggable split (same cue as ADS-B / AIS).
+//!   second, vertical draggable split.
 //! - **STATIONS** — one row per 24-bit address heard, which is who is out there.
 //!
 //! No map, deliberately. VDL2 carries a position only occasionally — a ground
@@ -66,25 +67,27 @@ impl SdroxideApp {
         let pane = self.phone_pane(ui, self.state.rx[0].mode);
         let full_w = ui.available_width();
 
+        // The message log keeps a draggable share of the width; the rest is
+        // STATIONS. Floors so neither pane can be dragged away to nothing. On a
+        // phone the pane chips choose one or the other.
+        const HANDLE_W: f32 = 7.0;
+        let msgs_w = (full_w * self.view.vdl2_split_fraction)
+            .clamp(300.0, (full_w - HANDLE_W - 260.0).max(300.0));
+
         ui.horizontal_top(|ui| {
             if pane.is_none_or(|p| p == 0) {
                 ui.allocate_ui_with_layout(
-                    egui::vec2(
-                        if pane.is_some() {
-                            full_w
-                        } else {
-                            // The log is the wider of the two: it carries free
-                            // text, and the station list is six short columns.
-                            (full_w * 0.62).clamp(300.0, full_w - 260.0)
-                        },
-                        avail_h,
-                    ),
+                    egui::vec2(if pane.is_some() { full_w } else { msgs_w }, avail_h),
                     egui::Layout::top_down(egui::Align::Min),
                     |ui| self.vdl2_messages(ui, &st, avail_h),
                 );
             }
             if pane.is_none() {
-                ui.separator();
+                let h = crate::chrome::split_handle(ui, egui::vec2(HANDLE_W, avail_h), None);
+                if h.dragged() {
+                    self.view.vdl2_split_fraction =
+                        ((msgs_w + h.drag_delta().x) / full_w.max(1.0)).clamp(0.25, 0.85);
+                }
             }
             if pane.is_none_or(|p| p == 1) {
                 ui.vertical(|ui| self.vdl2_stations(ui, &st, now, avail_h));

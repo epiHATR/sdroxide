@@ -6,10 +6,9 @@
 //! the world is, and one of them owning that is how they do. What is here is
 //! everything an air picture needs and a station map does not:
 //!
-//! - a **square** per target, not an icon. Everything up there is an aeroplane,
-//!   so a symbol that said which kind would be saying nothing; what the square
-//!   does is stay the same size and shape at every zoom, so a scan across a
-//!   busy sector reads as one class of thing.
+//! - a **top-down aircraft silhouette** per target (fuselage, swept wings,
+//!   tailplane), nose along its track when known (a circle when not, so a
+//!   missing track never invents a heading). Fixed screen size at every zoom.
 //! - **history dots** behind it — where it has been, fading with age. A
 //!   controller reads speed and turn off the spacing of those dots before
 //!   reading any number on the screen.
@@ -27,11 +26,13 @@
 //! Past [`sdroxide_types::AdsbSettings::drop_map_s`] a target's position is old
 //! news, and it comes off the map — symbol, dots and block together. It stays
 //! on the list, greyed. Fading it instead was the obvious alternative and is
-//! wrong: a faint square at a stale position is still a claim about where an
+//! wrong: a faint mark at a stale position is still a claim about where an
 //! aeroplane is, drawn in the same ink as the ones that are true, and the map
 //! is the one place with no room for a hedge.
 
-use eframe::egui::{Align2, Color32, FontId, Rect, Sense, Ui, pos2, vec2};
+use eframe::egui::{
+    Align2, Color32, FontId, Pos2, Rect, Sense, Shape, Stroke, Ui, pos2, vec2,
+};
 use sdroxide_types::{AdsbAircraft, AdsbSettings};
 
 use crate::theme;
@@ -44,8 +45,8 @@ pub const MIN_HEIGHT: f32 = 90.0;
 /// How close a click has to land, in points.
 const HIT_RADIUS: f32 = 14.0;
 
-/// Half the side of a target square, in points.
-const TARGET_R: f32 = 3.5;
+/// Half-span of a target aircraft icon, in points (wingtip to centre).
+const TARGET_R: f32 = 6.0;
 
 /// Never auto-fit tighter than this longitudinal span. Aircraft are hundreds of
 /// kilometres apart and one overhead must not blow the map up to street level.
@@ -61,6 +62,72 @@ const EASE: f64 = 0.06;
 /// which is what makes converting a speed in knots into map degrees exact
 /// rather than approximate.
 const NM_PER_DEG_LAT: f64 = 60.0;
+
+/// Rotate a point in symbol space (x starboard, y forward / nose) into screen
+/// space around `c`, for a symbol pointed `deg` degrees true.
+///
+/// Forward (`+y`) is the nose: at track 0° that is screen-north.
+fn rot(c: Pos2, deg: f32, x: f32, y: f32) -> Pos2 {
+    let (s, k) = deg.to_radians().sin_cos();
+    pos2(c.x + x * k + y * s, c.y + x * s - y * k)
+}
+
+/// Top-down aircraft silhouette (fuselage + swept wing + tailplane), nose
+/// along track. Composed of convex fills so egui can paint it. Without a track
+/// we draw a circle instead of inventing a heading.
+fn paint_aircraft(
+    p: &eframe::egui::Painter,
+    c: Pos2,
+    r: f32,
+    track_deg: Option<f32>,
+    tint: Color32,
+    sea: Color32,
+    on_ground: bool,
+) {
+    let Some(d) = track_deg else {
+        // Heard, but no velocity/track yet — do not imply a heading.
+        p.circle_stroke(c, r * 0.65, Stroke::new(1.5, tint));
+        if on_ground {
+            p.circle_filled(c, 1.6, tint);
+        }
+        return;
+    };
+    // Fuselage: pointed nose, parallel sides, pointed tail cone (+y = nose).
+    let fuse = vec![
+        rot(c, d, 0.0, r),            // nose
+        rot(c, d, 0.13 * r, 0.55 * r),
+        rot(c, d, 0.13 * r, -0.55 * r),
+        rot(c, d, 0.0, -r),           // tail tip
+        rot(c, d, -0.13 * r, -0.55 * r),
+        rot(c, d, -0.13 * r, 0.55 * r),
+    ];
+    // Swept main wing through mid-body.
+    let wing = vec![
+        rot(c, d, 0.0, 0.22 * r),     // leading root
+        rot(c, d, r, -0.08 * r),      // starboard tip
+        rot(c, d, 0.85 * r, -0.22 * r),
+        rot(c, d, 0.0, -0.18 * r),    // trailing root
+        rot(c, d, -0.85 * r, -0.22 * r),
+        rot(c, d, -r, -0.08 * r),     // port tip
+    ];
+    // Horizontal stabilizers near the tail.
+    let stab = vec![
+        rot(c, d, 0.0, -0.48 * r),
+        rot(c, d, 0.42 * r, -0.68 * r),
+        rot(c, d, 0.38 * r, -0.82 * r),
+        rot(c, d, 0.0, -0.72 * r),
+        rot(c, d, -0.38 * r, -0.82 * r),
+        rot(c, d, -0.42 * r, -0.68 * r),
+    ];
+    p.add(Shape::convex_polygon(wing, tint, Stroke::NONE));
+    p.add(Shape::convex_polygon(fuse, tint, Stroke::NONE));
+    p.add(Shape::convex_polygon(stab, tint, Stroke::NONE));
+    // On the ground: a dark pin so taxiing traffic is distinct from something
+    // a few hundred feet above the same runway.
+    if on_ground {
+        p.circle_filled(c, 1.6, sea);
+    }
+}
 
 /// The map's own state, owned by the panel so the view survives across frames.
 #[derive(Default)]
@@ -290,25 +357,14 @@ pub fn show(
         if path.len() > 1 {
             let pts: Vec<_> = path.iter().map(|&(la, lo)| project(la, lo)).collect();
             for w in pts.windows(2) {
-                p.line_segment([w[0], w[1]], (1.2, alpha(tint, 190.0)));
+                p.line_segment([w[0], w[1]], (1.0, alpha(tint, 100.0)));
             }
         }
 
-        // The target: a square, hollow, the same size at every zoom.
+        // The target: an aircraft icon, fixed size at every zoom, pointed along
+        // its track when the tracker has one.
         let r = if top || selected_icao == Some(a.icao) { TARGET_R + 1.0 } else { TARGET_R };
-        // A halo so it stays readable over the dotted land.
-        p.circle_filled(c, r + 2.0, alpha(map.sea, 170.0));
-        p.rect_stroke(
-            Rect::from_center_size(c, vec2(r * 2.0, r * 2.0)),
-            0.0,
-            (1.4, tint),
-            eframe::egui::StrokeKind::Middle,
-        );
-        // On the ground: a dot inside, so a taxiing aircraft is distinguishable
-        // from one at a thousand feet above the same runway.
-        if a.on_ground {
-            p.circle_filled(c, 1.4, tint);
-        }
+        paint_aircraft(&p, c, r, a.track_deg, tint, map.sea, a.on_ground);
     };
     for (i, a) in live.iter().enumerate() {
         if hover != Some(i) {
