@@ -92,6 +92,16 @@ to the receiver at open time. It is MIT licensed (© 2017-2020 Oscar
 Steila IK1XPV and the rx888-firmware contributors) and its notice
 ships as `LICENSE-rx888-firmware.txt` in every package.
 
+## Meshtastic — all builds
+
+Meshtastic LongFast decode needs **`lorarx`** from dxlAPRS on the
+machine that runs the radio. It is **not** bundled (unlike the
+radiosonde `*mod` helpers). Without it, **MESH** mode shows a
+missing-helper warning and will not decode. Install OpenWebRX+'s
+`dxlaprs-lora` package (or put a `lorarx` binary on `PATH` from
+[oe5dxl.hamspirit.at](http://oe5dxl.hamspirit.at:8025/aprs/c/)), then
+restart sdroxide. See `release/v1.6.12.md`.
+
 ## HD Radio — all builds
 
 HD Radio (the digital sidecar of North American FM stations) is
