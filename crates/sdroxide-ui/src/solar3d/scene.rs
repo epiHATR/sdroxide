@@ -2409,7 +2409,7 @@ fn adsb_traffic(s: &mut Scene, st: &SolarUi, b: &Bodies, cam: &Camera) {
         // Scale with eye distance so it stays readable when the camera pulls
         // back to frame regional traffic. Selected / emergency get a nudge.
         let eye_dist = (cam.eye - tip).len().max(b.earth_r * 1.0e-4);
-        let mut span = (eye_dist * 0.028).clamp(b.earth_r * 4.0e-5, b.earth_r * 2.5e-3);
+        let mut span = (eye_dist * 0.055).clamp(b.earth_r * 8.0e-5, b.earth_r * 5.0e-3);
         if a.selected || a.emergency {
             span *= 1.2;
         }
