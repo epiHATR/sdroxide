@@ -4,8 +4,62 @@ on:
   push:
     tags: ['v*']
   # Manual runs build all artifacts (downloadable from the run page) without
-  # creating a release — useful for testing the pipeline.
+  # creating a release — useful for testing the pipeline. Narrow with the
+  # platform / variant inputs, or use the Pre-release workflow to publish
+  # one package as a GitHub pre-release.
   workflow_dispatch:
+    inputs:
+      platform:
+        description: Platform to build (all = every matrix entry)
+        type: choice
+        default: all
+        options:
+          - all
+          - linux-x86_64-compat
+          - linux-aarch64-compat
+          - linux-x86_64
+          - linux-aarch64
+          - windows-x86_64
+          - macos-aarch64
+          - macos-x86_64
+      variant:
+        description: Build variant (both = soapy + standard)
+        type: choice
+        default: both
+        options:
+          - both
+          - cat
+          - soapy
+      prerelease:
+        description: Also publish a GitHub pre-release with the built packages
+        type: boolean
+        default: false
+      tag:
+        description: Pre-release tag (empty = pre-<sha7>); ignored unless prerelease is set
+        type: string
+        required: false
+        default: ''
+  # Called by pre-release.yml for a single-platform publish.
+  workflow_call:
+    inputs:
+      platform:
+        description: Platform label (not "all")
+        type: string
+        required: true
+      variant:
+        description: cat or soapy
+        type: string
+        required: true
+      prerelease:
+        description: Publish a GitHub pre-release
+        type: boolean
+        required: false
+        default: true
+      tag:
+        description: Pre-release tag (empty = pre-<sha7>)
+        type: string
+        required: false
+        default: ''
   # Nightly build, 03:17 UTC. Same deal as a manual run — `release` is gated on
   # a tag, so nothing is published — but it builds the four platforms listed in
   # `targets` rather than all fourteen, and the result is downloaded from the
@@ -74,13 +128,30 @@ jobs:
           # libSoapySDR installed; drive a CAT rig over serial + a sound card
           # instead). The nightly builds `cat` only — it is what the installers
           # ship and the one a tester can run without installing PothosSDR
-          # first.
+          # first. A Pre-release / filtered manual run picks one platform and
+          # one variant via workflow inputs.
+          PLATFORM='${{ inputs.platform }}'
+          VARIANT='${{ inputs.variant }}'
+          if [[ -z "$PLATFORM" ]]; then PLATFORM=all; fi
+          if [[ -z "$VARIANT" ]]; then VARIANT=both; fi
+
           if [[ "$GITHUB_EVENT_NAME" == "schedule" ]]; then
             wanted='["linux-x86_64-compat", "linux-aarch64-compat", "windows-x86_64", "macos-aarch64"]'
             variants='["cat"]'
+          elif [[ "$PLATFORM" != "all" ]]; then
+            wanted=$(jq -cn --arg p "$PLATFORM" '[$p]')
+            if [[ "$VARIANT" == "both" ]]; then
+              variants='["soapy", "cat"]'
+            else
+              variants=$(jq -cn --arg v "$VARIANT" '[$v]')
+            fi
           else
             wanted='null'
-            variants='["soapy", "cat"]'
+            if [[ "$VARIANT" == "cat" || "$VARIANT" == "soapy" ]]; then
+              variants=$(jq -cn --arg v "$VARIANT" '[$v]')
+            else
+              variants='["soapy", "cat"]'
+            fi
           fi
           # An include-only matrix: one job per entry, and no cross product to
           # filter down afterwards.
@@ -94,6 +165,11 @@ jobs:
                          | $p + {variant: .} ]}')
           echo "combos=$combos" >> "$GITHUB_OUTPUT"
           echo "$combos" | jq .
+          count=$(echo "$combos" | jq '.include | length')
+          if [[ "$count" -lt 1 ]]; then
+            echo "no build targets matched platform=$PLATFORM variant=$VARIANT" >&2
+            exit 1
+          fi
 
           # What this build should call itself. A tag is a release and keeps the
           # bare crate version; anything else says which build it is and which
@@ -862,6 +938,70 @@ jobs:
           # As above: a nightly's artifacts expire in a fortnight, a tagged
           # build's become the release assets and keep the default retention.
           retention-days: ${{ github.event_name == 'schedule' && 14 || 0 }}
+
+  # Single-platform (or filtered) publish as a GitHub *pre*-release. Used by
+  # the Pre-release workflow and by a Release run with prerelease=true. Real
+  # version tags still go through `release` below.
+  publish-prerelease:
+    name: publish pre-release
+    needs: [web, build]
+    if: ${{ inputs.prerelease == true }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: pkg-*
+          path: dist
+          merge-multiple: true
+      - name: Create pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG='${{ inputs.tag }}'
+          if [[ -z "$TAG" ]]; then
+            TAG="pre-${GITHUB_SHA::7}"
+          fi
+          # Refuse to overwrite a real version tag.
+          if [[ "$TAG" == v* ]]; then
+            echo "refusing pre-release tag '$TAG' — use a v* push for full releases" >&2
+            exit 1
+          fi
+          shopt -s nullglob
+          files=(dist/*)
+          if [[ ${#files[@]} -lt 1 ]]; then
+            echo "no packages under dist/" >&2
+            ls -la dist || true
+            exit 1
+          fi
+          NOTES=$(mktemp)
+          {
+            echo "Pre-release built from \`${GITHUB_SHA}\` on \`${GITHUB_REF_NAME}\`."
+            echo
+            echo "Platform: \`${{ inputs.platform }}\` · variant: \`${{ inputs.variant }}\`"
+            echo
+            echo "Install the package for your machine from the assets below."
+            echo "On Linux, prefer the \`-compat.deb\` when the host is Ubuntu 22.04 / Debian 12."
+          } > "$NOTES"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" \
+              --prerelease \
+              --title "sdroxide $TAG" \
+              --notes-file "$NOTES" \
+              --target "$GITHUB_SHA"
+          else
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
+              --prerelease \
+              --title "sdroxide $TAG" \
+              --notes-file "$NOTES" \
+              --target "$GITHUB_SHA"
+          fi
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber "${files[@]}"
+          echo "Published pre-release: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
 
   release:
     name: create release

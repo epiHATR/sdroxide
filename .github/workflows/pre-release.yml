@@ -1,0 +1,52 @@
+name: Pre-release
+
+# Build one platform package and publish it as a GitHub pre-release.
+# Faster than a full Release run when you only need, e.g., a Linux .deb for a
+# station box. Assets land on the Releases page (pre-release), so they download
+# with `gh release download` — no Actions artifact zip / path-traversal issues.
+#
+# Actions → Pre-release → Run workflow, or:
+#   gh workflow run pre-release.yml \
+#     -f platform=linux-x86_64-compat -f variant=cat
+
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: Platform package to build
+        type: choice
+        default: linux-x86_64-compat
+        options:
+          - linux-x86_64-compat
+          - linux-aarch64-compat
+          - linux-x86_64
+          - linux-aarch64
+          - windows-x86_64
+          - macos-aarch64
+          - macos-x86_64
+      variant:
+        description: Build variant (cat = no SoapySDR; soapy = with SoapySDR)
+        type: choice
+        default: cat
+        options:
+          - cat
+          - soapy
+      tag:
+        description: Pre-release tag (empty = pre-<sha7>)
+        type: string
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    name: build and publish
+    uses: ./.github/workflows/release.yml
+    with:
+      platform: ${{ inputs.platform }}
+      variant: ${{ inputs.variant }}
+      prerelease: true
+      tag: ${{ inputs.tag }}
+    secrets: inherit
