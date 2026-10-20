@@ -250,11 +250,7 @@ fn sondehub_response_errors(body: &str) -> Option<String> {
         .iter()
         .filter_map(|e| e.get("error_message").and_then(|m| m.as_str()).map(str::to_string))
         .collect();
-    if msgs.is_empty() {
-        Some(format!("{} error(s)", errs.len()))
-    } else {
-        Some(msgs.join("; "))
-    }
+    if msgs.is_empty() { Some(format!("{} error(s)", errs.len())) } else { Some(msgs.join("; ")) }
 }
 
 fn frame_key(entry: &serde_json::Value) -> Option<(String, u32)> {
@@ -269,10 +265,8 @@ fn upload_batch(url: &str, batch: &[serde_json::Value], batch_type: &str) {
     if batch.is_empty() {
         return;
     }
-    let serials: Vec<&str> = batch
-        .iter()
-        .filter_map(|v| v.get("serial").and_then(|s| s.as_str()))
-        .collect();
+    let serials: Vec<&str> =
+        batch.iter().filter_map(|v| v.get("serial").and_then(|s| s.as_str())).collect();
     let body = serde_json::Value::Array(batch.to_vec()).to_string();
     for attempt in 1..=UPLOAD_RETRIES {
         debug!(
@@ -529,8 +523,7 @@ mod tests {
     #[test]
     fn prefers_sonde_datetime_over_receive_time() {
         let rx = Reporter { call: "N0CALL".into(), grid: "FN31".into(), antenna: String::new() };
-        let mut s =
-            Rs41Sonde::new("U1234567".into(), 403e6, SondeKind::Rs41, 1_700_000_000);
+        let mut s = Rs41Sonde::new("U1234567".into(), 403e6, SondeKind::Rs41, 1_700_000_000);
         s.lat = Some(40.0);
         s.lon = Some(-74.0);
         s.altitude_m = Some(1_000.0);

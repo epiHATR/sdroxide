@@ -517,8 +517,7 @@ fn build(rs: &RenderState) -> SolarResources {
     let plume_ib = vb("solar-plume-ib", bytemuck::cast_slice(&pi), wgpu::BufferUsages::INDEX);
     let aircraft_vb =
         vb("solar-aircraft-vb", bytemuck::cast_slice(&av), wgpu::BufferUsages::VERTEX);
-    let aircraft_ib =
-        vb("solar-aircraft-ib", bytemuck::cast_slice(&ai), wgpu::BufferUsages::INDEX);
+    let aircraft_ib = vb("solar-aircraft-ib", bytemuck::cast_slice(&ai), wgpu::BufferUsages::INDEX);
     let quad_vb = vb("solar-quad-vb", bytemuck::cast_slice(&quad), wgpu::BufferUsages::VERTEX);
 
     let stars = super::scene::stars();

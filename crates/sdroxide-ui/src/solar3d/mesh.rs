@@ -200,9 +200,9 @@ pub fn aircraft() -> (Vec<Vertex>, Vec<u32>) {
     // ── Fuselage: diamond cross-section, nose → tail ──
     let nose = push([0.0, 0.02, 1.0]);
     let f0 = [
-        push([0.0, 0.13, 0.55]),  // top
-        push([0.12, 0.02, 0.55]), // right
-        push([0.0, -0.08, 0.55]), // bottom
+        push([0.0, 0.13, 0.55]),   // top
+        push([0.12, 0.02, 0.55]),  // right
+        push([0.0, -0.08, 0.55]),  // bottom
         push([-0.12, 0.02, 0.55]), // left
     ];
     let f1 = [

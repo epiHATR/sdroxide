@@ -16,7 +16,8 @@ fn a_queued_report_uploads_to_the_collector() {
     mgr.set_config(cfg);
     mgr.set_operator("XV4HT", "OL20vx");
 
-    let when = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as u32).unwrap_or(0);
+    let when =
+        SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as u32).unwrap_or(0);
     mgr.psk_report(PskReport {
         call: "W1AW".into(),
         grid: "FN31".into(),

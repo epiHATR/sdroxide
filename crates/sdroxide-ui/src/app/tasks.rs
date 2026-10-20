@@ -401,10 +401,8 @@ impl SdroxideApp {
         match self.background_tasks.export_json() {
             Ok(json) => {
                 crate::download::save("sdroxide-tasks.json", json.as_bytes());
-                self.tasks_transfer_note = Some(format!(
-                    "Exported {} task(s)",
-                    self.background_tasks.tasks.len()
-                ));
+                self.tasks_transfer_note =
+                    Some(format!("Exported {} task(s)", self.background_tasks.tasks.len()));
             }
             Err(e) => {
                 self.tasks_transfer_note = Some(format!("Export failed: {e}"));
@@ -443,7 +441,11 @@ impl SdroxideApp {
         }
     }
 
-    fn commit_tasks_import(&mut self, imported: Vec<sdroxide_types::BackgroundTask>, cmds: &mut Vec<Command>) {
+    fn commit_tasks_import(
+        &mut self,
+        imported: Vec<sdroxide_types::BackgroundTask>,
+        cmds: &mut Vec<Command>,
+    ) {
         let device = self.caps.is_some().then(|| self.task_device_label());
         let mut cfg = self.background_tasks.clone();
         let (added, replaced) =
