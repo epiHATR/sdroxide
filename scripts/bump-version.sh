@@ -39,6 +39,18 @@ else
   echo "Cargo.toml: $OLD → $NEW"
 fi
 
+# Keep Cargo.lock in step with workspace.package.version — CI builds with
+# --locked, so a bump that leaves the lock on the old version fails the release.
+# Workspace crates alone carry this version string in the lockfile.
+if [[ -f Cargo.lock ]] && grep -q "^version = \"${OLD}\"$" Cargo.lock; then
+  if [[ "$(uname -s)" == Darwin ]]; then
+    sed -i '' "s/^version = \"${OLD}\"/version = \"${NEW}\"/" Cargo.lock
+  else
+    sed -i "s/^version = \"${OLD}\"/version = \"${NEW}\"/" Cargo.lock
+  fi
+  echo "Cargo.lock: $OLD → $NEW"
+fi
+
 mkdir -p release
 if [[ -f "$NOTES" ]]; then
   echo "already exists: $NOTES (left unchanged)"
@@ -55,5 +67,5 @@ fi
 echo
 echo "Next:"
 echo "  1. Edit $NOTES with operator-facing highlights"
-echo "  2. Commit Cargo.toml + $NOTES"
+echo "  2. Commit Cargo.toml + Cargo.lock + $NOTES"
 echo "  3. git tag ${TAG} && git push origin ${TAG}"
