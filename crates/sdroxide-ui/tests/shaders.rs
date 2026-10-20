@@ -17,6 +17,7 @@ const SHADERS: &[(&str, &str)] = &[
     ("solar_cone.wgsl", include_str!("../src/shaders/solar_cone.wgsl")),
     ("solar_ring.wgsl", include_str!("../src/shaders/solar_ring.wgsl")),
     ("solar_tail.wgsl", include_str!("../src/shaders/solar_tail.wgsl")),
+    ("solar_aircraft.wgsl", include_str!("../src/shaders/solar_aircraft.wgsl")),
     ("solar_line.wgsl", include_str!("../src/shaders/solar_line.wgsl")),
     ("solar_sprite.wgsl", include_str!("../src/shaders/solar_sprite.wgsl")),
     ("solar_blit.wgsl", include_str!("../src/shaders/solar_blit.wgsl")),

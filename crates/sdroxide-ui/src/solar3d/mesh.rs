@@ -177,6 +177,92 @@ pub fn quad() -> Vec<[f32; 2]> {
     vec![[-1.0, -1.0], [1.0, -1.0], [-1.0, 1.0], [-1.0, 1.0], [1.0, -1.0], [1.0, 1.0]]
 }
 
+/// A unit low-poly airliner for the ADS-B globe: +Z is the nose, +Y up, +X
+/// starboard. Scaled and oriented by the draw's model matrix.
+///
+/// Kept deliberately coarse — a few dozen triangles — so a busy approach still
+/// reads as a fleet of aeroplanes rather than a pile of silhouettes.
+pub fn aircraft() -> (Vec<Vertex>, Vec<u32>) {
+    let mut verts: Vec<Vertex> = Vec::new();
+    let mut idx: Vec<u32> = Vec::new();
+    let mut push = |p: [f32; 3]| -> u32 {
+        let i = verts.len() as u32;
+        verts.push(Vertex { pos: p, uv: [0.0, 0.0] });
+        i
+    };
+    let tri = |idx: &mut Vec<u32>, a: u32, b: u32, c: u32| {
+        idx.extend_from_slice(&[a, b, c]);
+    };
+    let quad = |idx: &mut Vec<u32>, a: u32, b: u32, c: u32, d: u32| {
+        idx.extend_from_slice(&[a, b, c, a, c, d]);
+    };
+
+    // ── Fuselage: diamond cross-section, nose → tail ──
+    let nose = push([0.0, 0.02, 1.0]);
+    let f0 = [
+        push([0.0, 0.13, 0.55]),  // top
+        push([0.12, 0.02, 0.55]), // right
+        push([0.0, -0.08, 0.55]), // bottom
+        push([-0.12, 0.02, 0.55]), // left
+    ];
+    let f1 = [
+        push([0.0, 0.14, 0.05]),
+        push([0.14, 0.02, 0.05]),
+        push([0.0, -0.09, 0.05]),
+        push([-0.14, 0.02, 0.05]),
+    ];
+    let f2 = [
+        push([0.0, 0.11, -0.55]),
+        push([0.10, 0.02, -0.55]),
+        push([0.0, -0.06, -0.55]),
+        push([-0.10, 0.02, -0.55]),
+    ];
+    let tail = push([0.0, 0.04, -0.88]);
+
+    for i in 0..4 {
+        let j = (i + 1) % 4;
+        tri(&mut idx, nose, f0[i], f0[j]);
+        quad(&mut idx, f0[i], f0[j], f1[j], f1[i]);
+        quad(&mut idx, f1[i], f1[j], f2[j], f2[i]);
+        tri(&mut idx, f2[i], f2[j], tail);
+    }
+
+    // ── Main wing (slight dihedral) ──
+    let wr_l = push([-0.02, 0.03, 0.18]);
+    let wr_t = push([-0.02, 0.03, -0.18]);
+    let wl_l = push([0.02, 0.03, 0.18]);
+    let wl_t = push([0.02, 0.03, -0.18]);
+    let tip_r_l = push([0.95, 0.10, 0.02]);
+    let tip_r_t = push([0.88, 0.09, -0.18]);
+    let tip_l_l = push([-0.95, 0.10, 0.02]);
+    let tip_l_t = push([-0.88, 0.09, -0.18]);
+    // Top / bottom for each wing so lighting works from either side.
+    quad(&mut idx, wr_l, tip_r_l, tip_r_t, wr_t);
+    quad(&mut idx, wr_l, wr_t, tip_r_t, tip_r_l);
+    quad(&mut idx, wl_l, wl_t, tip_l_t, tip_l_l);
+    quad(&mut idx, wl_l, tip_l_l, tip_l_t, wl_t);
+
+    // ── Horizontal stabilizer ──
+    let hr = push([0.02, 0.06, -0.62]);
+    let hl = push([-0.02, 0.06, -0.62]);
+    let ht = push([0.0, 0.06, -0.82]);
+    let tip_hr = push([0.40, 0.08, -0.78]);
+    let tip_hl = push([-0.40, 0.08, -0.78]);
+    tri(&mut idx, hr, tip_hr, ht);
+    tri(&mut idx, hr, ht, tip_hr);
+    tri(&mut idx, hl, ht, tip_hl);
+    tri(&mut idx, hl, tip_hl, ht);
+
+    // ── Vertical fin ──
+    let fin_root_fwd = push([0.0, 0.10, -0.52]);
+    let fin_root_aft = push([0.0, 0.08, -0.86]);
+    let fin_tip = push([0.0, 0.42, -0.72]);
+    tri(&mut idx, fin_root_fwd, fin_root_aft, fin_tip);
+    tri(&mut idx, fin_root_fwd, fin_tip, fin_root_aft);
+
+    (verts, idx)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -197,6 +283,18 @@ mod tests {
         // u = 0.5 is 0° longitude, i.e. the +X axis.
         let mid = &v[(SPHERE_LON / 2) as usize];
         assert!((mid.uv[0] - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn aircraft_mesh_is_closed_and_indexed() {
+        let (v, idx) = aircraft();
+        assert!(v.len() > 20, "too few verts for an airliner: {}", v.len());
+        assert!(idx.len() >= 60, "too few triangles: {}", idx.len() / 3);
+        assert!(idx.len() % 3 == 0);
+        assert!(idx.iter().all(|i| (*i as usize) < v.len()));
+        // Nose should be the furthest +Z point.
+        let z_max = v.iter().map(|p| p.pos[2]).fold(f32::NEG_INFINITY, f32::max);
+        assert!(z_max > 0.9, "nose not at +Z: {z_max}");
     }
 
     #[test]

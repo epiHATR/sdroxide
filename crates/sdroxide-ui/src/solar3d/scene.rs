@@ -302,6 +302,8 @@ pub enum Prim {
     CloudVolume,
     /// A comet's ion or dust tail, as a screen-facing ribbon.
     Tail,
+    /// Low-poly airliner for the ADS-B Earth pane.
+    Aircraft,
 }
 
 /// A text label anchored to a point in the scene.
@@ -2378,7 +2380,7 @@ fn adsb_lift(alt_ft: f32) -> f32 {
     1.0 + alt_km / CLOUD_EARTH_R_KM
 }
 
-/// ADS-B targets: a small 3D silhouette at altitude (and optional callsign).
+/// ADS-B targets: a small solid airliner at altitude (and optional callsign).
 /// Drawn whenever the host has pushed any into [`SolarUi::adsb`].
 fn adsb_traffic(s: &mut Scene, st: &SolarUi, b: &Bodies, cam: &Camera) {
     if st.adsb.aircraft.is_empty() {
@@ -2404,12 +2406,14 @@ fn adsb_traffic(s: &mut Scene, st: &SolarUi, b: &Bodies, cam: &Camera) {
         // Selection is list/UI state only — keep every contact the same ink so
         // the air picture does not recolour under a click.
         let color = if a.emergency { ink::PINK } else { ink::TEXT_STRONG };
-        // Scale the silhouette with eye distance so it stays readable when
-        // the camera pulls back to frame regional traffic.
+        // Scale with eye distance so it stays readable when the camera pulls
+        // back to frame regional traffic. Selected / emergency get a nudge.
         let eye_dist = (cam.eye - tip).len().max(b.earth_r * 1.0e-4);
-        let span = (eye_dist * 0.028).clamp(b.earth_r * 4.0e-5, b.earth_r * 2.5e-3);
-        let width = if a.selected || a.emergency { 2.6 } else { 2.0 };
-        adsb_silhouette(s, tip, east, north, up, a.track_deg, span, width, lin(color, 0.92 * fade));
+        let mut span = (eye_dist * 0.028).clamp(b.earth_r * 4.0e-5, b.earth_r * 2.5e-3);
+        if a.selected || a.emergency {
+            span *= 1.2;
+        }
+        adsb_aircraft(s, tip, east, north, up, a.track_deg, span, color, fade);
         if faces_camera(cam, up, tip) {
             s.adsb_picks.push(AdsbPick {
                 world: tip.arr(),
@@ -2433,9 +2437,8 @@ fn adsb_traffic(s: &mut Scene, st: &SolarUi, b: &Bodies, cam: &Camera) {
     }
 }
 
-/// Line-drawn aircraft: nose–tail, wings, stabilizer, and a vertical fin,
-/// oriented by true track in the local ENU frame.
-fn adsb_silhouette(
+/// Solid low-poly airliner oriented by true track in the local ENU frame.
+fn adsb_aircraft(
     s: &mut Scene,
     tip: V3,
     east: V3,
@@ -2443,21 +2446,23 @@ fn adsb_silhouette(
     up: V3,
     track_deg: Option<f32>,
     size: f32,
-    width: f32,
-    color: [f32; 4],
+    color: Color32,
+    fade: f32,
 ) {
     let hdg = track_deg.unwrap_or(0.0).to_radians();
     let (sin, cos) = hdg.sin_cos();
+    // Mesh frame: +X starboard, +Y up, +Z nose — see [`mesh::aircraft`].
     let fwd = (north * cos + east * sin).normalize();
     let right = (east * cos - north * sin).normalize();
-    let nose = tip + fwd * size;
-    let tail = tip - fwd * size * 0.85;
-    let wing = tip - fwd * size * 0.05;
-    let stab = tip - fwd * size * 0.70;
-    s.lines.push(seg(nose, tail, width, color));
-    s.lines.push(seg(wing - right * size * 0.95, wing + right * size * 0.95, width, color));
-    s.lines.push(seg(stab - right * size * 0.38, stab + right * size * 0.38, width * 0.85, color));
-    s.lines.push(seg(tail, tail + up * size * 0.38, width * 0.85, color));
+    let mut d = DrawData::new(
+        M4::from_basis(right, up, fwd, tip, size),
+        M4::from_basis(right, up, fwd, V3::ZERO, 1.0),
+        color,
+        0.0,
+    );
+    d.tint = lin(color, 1.0);
+    d.params[2] = 0.92 * fade;
+    s.draws.push((Prim::Aircraft, d));
 }
 
 /// The flat map in the FT8 panel draws the live set as a great-circle line

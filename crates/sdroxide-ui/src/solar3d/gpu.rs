@@ -59,6 +59,7 @@ pub struct SolarResources {
     cone_pipe: wgpu::RenderPipeline,
     ring_pipe: wgpu::RenderPipeline,
     tail_pipe: wgpu::RenderPipeline,
+    aircraft_pipe: wgpu::RenderPipeline,
     line_pipe: wgpu::RenderPipeline,
     sprite_pipe: wgpu::RenderPipeline,
     blit_pipe: wgpu::RenderPipeline,
@@ -87,6 +88,9 @@ pub struct SolarResources {
     plume_vb: wgpu::Buffer,
     plume_ib: wgpu::Buffer,
     plume_indices: u32,
+    aircraft_vb: wgpu::Buffer,
+    aircraft_ib: wgpu::Buffer,
+    aircraft_indices: u32,
     quad_vb: wgpu::Buffer,
 
     line_buf: wgpu::Buffer,
@@ -172,6 +176,7 @@ fn build(rs: &RenderState) -> SolarResources {
     let cone_sh = shader("solar-cone", include_str!("../shaders/solar_cone.wgsl"));
     let ring_sh = shader("solar-ring", include_str!("../shaders/solar_ring.wgsl"));
     let tail_sh = shader("solar-tail", include_str!("../shaders/solar_tail.wgsl"));
+    let aircraft_sh = shader("solar-aircraft", include_str!("../shaders/solar_aircraft.wgsl"));
     let line_sh = shader("solar-line", include_str!("../shaders/solar_line.wgsl"));
     let sprite_sh = shader("solar-sprite", include_str!("../shaders/solar_sprite.wgsl"));
     let blit_sh = shader("solar-blit", include_str!("../shaders/solar_blit.wgsl"));
@@ -454,6 +459,17 @@ fn build(rs: &RenderState) -> SolarResources {
         depth_state(false, wgpu::CompareFunction::Greater),
         sample_count,
     );
+    // Opaque airliners: write depth so they sit correctly above the Earth and
+    // occult each other on a busy approach.
+    let aircraft_pipe = make_pipe(
+        "solar-aircraft",
+        &draw_layout,
+        &aircraft_sh,
+        &[mesh_layout.clone()],
+        Some(premultiplied),
+        depth_state(true, wgpu::CompareFunction::Greater),
+        sample_count,
+    );
     let line_pipe = make_pipe(
         "solar-line",
         &scene_layout,
@@ -482,6 +498,7 @@ fn build(rs: &RenderState) -> SolarResources {
     let (cv, ci) = mesh::cone();
     let (rv, ri) = mesh::ring();
     let (pv, pi) = mesh::plume();
+    let (av, ai) = mesh::aircraft();
     let quad = mesh::quad();
     let vb = |label: &str, data: &[u8], usage: wgpu::BufferUsages| {
         device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -498,6 +515,10 @@ fn build(rs: &RenderState) -> SolarResources {
     let ring_ib = vb("solar-ring-ib", bytemuck::cast_slice(&ri), wgpu::BufferUsages::INDEX);
     let plume_vb = vb("solar-plume-vb", bytemuck::cast_slice(&pv), wgpu::BufferUsages::VERTEX);
     let plume_ib = vb("solar-plume-ib", bytemuck::cast_slice(&pi), wgpu::BufferUsages::INDEX);
+    let aircraft_vb =
+        vb("solar-aircraft-vb", bytemuck::cast_slice(&av), wgpu::BufferUsages::VERTEX);
+    let aircraft_ib =
+        vb("solar-aircraft-ib", bytemuck::cast_slice(&ai), wgpu::BufferUsages::INDEX);
     let quad_vb = vb("solar-quad-vb", bytemuck::cast_slice(&quad), wgpu::BufferUsages::VERTEX);
 
     let stars = super::scene::stars();
@@ -677,6 +698,7 @@ fn build(rs: &RenderState) -> SolarResources {
         cone_pipe,
         ring_pipe,
         tail_pipe,
+        aircraft_pipe,
         line_pipe,
         sprite_pipe,
         blit_pipe,
@@ -702,6 +724,9 @@ fn build(rs: &RenderState) -> SolarResources {
         plume_vb,
         plume_ib,
         plume_indices: pi.len() as u32,
+        aircraft_vb,
+        aircraft_ib,
+        aircraft_indices: ai.len() as u32,
         quad_vb,
         line_buf: inst_buf("solar-lines", line_cap),
         line_cap,
@@ -1526,6 +1551,11 @@ impl CallbackTrait for SolarCallback {
                         pass.set_vertex_buffer(0, r.plume_vb.slice(..));
                         pass.set_index_buffer(r.plume_ib.slice(..), wgpu::IndexFormat::Uint32);
                     }
+                    Prim::Aircraft => {
+                        pass.set_pipeline(&r.aircraft_pipe);
+                        pass.set_vertex_buffer(0, r.aircraft_vb.slice(..));
+                        pass.set_index_buffer(r.aircraft_ib.slice(..), wgpu::IndexFormat::Uint32);
+                    }
                 }
                 bound = Some(*prim);
             }
@@ -1537,6 +1567,7 @@ impl CallbackTrait for SolarCallback {
                 Prim::Cone => r.cone_indices,
                 Prim::Ring => r.ring_indices,
                 Prim::Tail => r.plume_indices,
+                Prim::Aircraft => r.aircraft_indices,
             };
             pass.draw_indexed(0..n, 0, 0..1);
         }
