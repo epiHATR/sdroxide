@@ -5666,7 +5666,7 @@ impl SdroxideApp {
         narrow: bool,
         extra: f32,
     ) {
-        let [mail, mem, scan_label, grid_label, prof, settings] = SYSTEM_CHIPS_BOTTOM;
+        let [mail, mem, scan_label, grid_label, task_label, prof, settings] = SYSTEM_CHIPS_BOTTOM;
         if chip_stretched(ui, self.mail.open, mail, extra)
             .on_hover_text("Winlink radio email")
             .clicked()
@@ -5713,6 +5713,29 @@ impl SdroxideApp {
             .clicked()
         {
             self.show_grid = !self.show_grid;
+        }
+        let task_running = self
+            .background_tasks
+            .tasks
+            .iter()
+            .any(|t| t.status == sdroxide_types::BackgroundTaskStatus::Running);
+        let task_chip = if task_running {
+            accent_chip_stretched(
+                ui,
+                true,
+                task_label,
+                crate::theme::GREEN(),
+                crate::theme::INK_ON_BRIGHT(),
+                extra,
+            )
+        } else {
+            chip_stretched(ui, self.show_tasks, task_label, extra)
+        };
+        if task_chip
+            .on_hover_text("Background tasks — schedule decode windows when the radio is free")
+            .clicked()
+        {
+            self.show_tasks = !self.show_tasks;
         }
         if !narrow {
             self.profiles_button(ui, cmds, prof, extra);
@@ -5982,7 +6005,8 @@ impl PttPress {
 const SYSTEM_CHIPS_TOP: [&str; 7] = ["LOG", "SPOTS", "AWARDS", "BANDS", "SAT", "ISM", "AUDIO"];
 
 /// The rest of them. See [`SYSTEM_CHIPS_TOP`].
-const SYSTEM_CHIPS_BOTTOM: [&str; 6] = ["MAIL", "MEM", "SCAN", "GRID", "PROF", "⚙ SETTINGS"];
+const SYSTEM_CHIPS_BOTTOM: [&str; 7] =
+    ["MAIL", "MEM", "SCAN", "GRID", "TASK", "PROF", "⚙ SETTINGS"];
 
 /// The Display box's top row: the solar view, then the chips that choose what
 /// the panadapter draws — the last of those only on a front end with a
@@ -7139,7 +7163,15 @@ fn band_mode_menu(
                         continue;
                     }
                     band_chip(
-                        ui, b, mode, digital, state, caps, ranges_stated, conditions, daylight,
+                        ui,
+                        b,
+                        mode,
+                        digital,
+                        state,
+                        caps,
+                        ranges_stated,
+                        conditions,
+                        daylight,
                         cmds,
                     );
                 }

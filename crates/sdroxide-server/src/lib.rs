@@ -204,6 +204,9 @@ pub(crate) struct Latest {
     /// attaches later would otherwise open the scanner window on defaults it
     /// would then write back over the operator's.
     pub scanner: sdroxide_types::ScannerConfig,
+    /// Background scheduled-decode tasks, replayed on connect for the same
+    /// reason as `scanner`.
+    pub background_tasks: sdroxide_types::BackgroundTasksConfig,
     /// The engine announces the operator config (callsign, grid, templates)
     /// exactly once, at startup, so the settings editors are populated before
     /// any digital mode is selected. In server mode that happens long before
@@ -679,13 +682,7 @@ impl Shared {
             rx_codec = first.rx_codec;
         }
         let id = self.next_session_id.fetch_add(1, Ordering::Relaxed);
-        sessions.push(SessionTx {
-            id,
-            reliable,
-            audio,
-            rx_codec,
-            audio_seq: AtomicU32::new(0),
-        });
+        sessions.push(SessionTx { id, reliable, audio, rx_codec, audio_seq: AtomicU32::new(0) });
         Ok(id)
     }
 
@@ -885,14 +882,8 @@ impl Shared {
             // landed only on main looked like "nothing happened" — especially
             // when the channel was outside the current IQ window.
             Command::RecallMemory(mem_id) => {
-                let Some(m) = self
-                    .latest
-                    .lock()
-                    .unwrap()
-                    .memories
-                    .iter()
-                    .find(|m| m.id == mem_id)
-                    .cloned()
+                let Some(m) =
+                    self.latest.lock().unwrap().memories.iter().find(|m| m.id == mem_id).cloned()
                 else {
                     return cmd;
                 };
@@ -902,10 +893,7 @@ impl Shared {
                     v.rx.filter_lo = m.filter_lo;
                     v.rx.filter_hi = m.filter_hi;
                 }
-                let _ = self.cmd_tx.send(Command::ListenerSetMode {
-                    id: session_id,
-                    mode: m.mode,
-                });
+                let _ = self.cmd_tx.send(Command::ListenerSetMode { id: session_id, mode: m.mode });
                 let _ = self.cmd_tx.send(Command::ListenerSetFilter {
                     id: session_id,
                     lo: m.filter_lo,
@@ -1461,6 +1449,10 @@ fn handle_event(shared: &Shared, ev: RadioEvent) {
                 latest.scanner = c.clone();
                 Some(ServerMsg::Scanner(c))
             }
+            RadioEvent::BackgroundTasks(c) => {
+                latest.background_tasks = c.clone();
+                Some(ServerMsg::BackgroundTasks(c))
+            }
             RadioEvent::Meters(m) => Some(ServerMsg::Meters(m)),
             RadioEvent::Spectrum(_) => None, // spectrum travels via the watch lane
             RadioEvent::WideSpectrum(_) => None, // ...and so does the full-band lane
@@ -1679,8 +1671,7 @@ fn handle_event(shared: &Shared, ev: RadioEvent) {
                     let mode_mismatch = prev.rx.mode != rx.mode;
                     let prev_in_band =
                         prev.freq_hz >= band_lo - 1.0 && prev.freq_hz <= band_hi + 1.0;
-                    let engine_in_band =
-                        freq_hz >= band_lo - 1.0 && freq_hz <= band_hi + 1.0;
+                    let engine_in_band = freq_hz >= band_lo - 1.0 && freq_hz <= band_hi + 1.0;
                     let protect_attach = prev_in_band && engine_in_band;
                     if freq_mismatch && protect_attach {
                         listener_resync = Some((id, prev.freq_hz));
@@ -1805,8 +1796,7 @@ fn add_static_routes(app: Router, web_root: Option<PathBuf>) -> Router {
 /// else in `dist` keeps fixed names and must revalidate.
 fn fingerprinted_web_asset(name: &str) -> bool {
     name.ends_with("_bg.wasm")
-        || (name.starts_with("sdroxide-web-")
-            && (name.ends_with(".js") || name.ends_with(".wasm")))
+        || (name.starts_with("sdroxide-web-") && (name.ends_with(".js") || name.ends_with(".wasm")))
 }
 
 /// Cache-Control for a request path into the web client, or `None` when the
@@ -1837,11 +1827,7 @@ fn web_asset_cache_control(path: &str) -> Option<&'static str> {
         || name.ends_with(".ico")
         || name.ends_with(".wasm")
         || name.ends_with(".map");
-    if static_ext {
-        Some("no-cache")
-    } else {
-        None
-    }
+    if static_ext { Some("no-cache") } else { None }
 }
 
 async fn web_cache_control_layer(
@@ -1890,7 +1876,8 @@ fn add_embedded_or_placeholder(app: Router) -> Router {
                     .and_then(|v| v.to_str().ok())
                     .is_some_and(|v| v.split(',').any(|t| t.trim() == etag));
                 if fresh {
-                    let mut resp = (StatusCode::NOT_MODIFIED, [(header::ETAG, etag)]).into_response();
+                    let mut resp =
+                        (StatusCode::NOT_MODIFIED, [(header::ETAG, etag)]).into_response();
                     if let Some(cc) = web_asset_cache_control(path) {
                         if let Ok(v) = HeaderValue::from_str(cc) {
                             resp.headers_mut().insert(header::CACHE_CONTROL, v);
@@ -1903,10 +1890,7 @@ fn add_embedded_or_placeholder(app: Router) -> Router {
                 let mime = if path.ends_with(".wasm") {
                     "application/wasm".to_string()
                 } else {
-                    mime_guess::from_path(path)
-                        .first_or_octet_stream()
-                        .as_ref()
-                        .to_string()
+                    mime_guess::from_path(path).first_or_octet_stream().as_ref().to_string()
                 };
                 let body = f.data.into_owned();
                 let len = body.len();

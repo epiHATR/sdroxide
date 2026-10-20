@@ -70,6 +70,7 @@ mod spot;
 mod sstv;
 mod state;
 mod station;
+mod tasks;
 mod tciserver;
 pub mod text;
 mod tone;
@@ -291,6 +292,11 @@ pub use state::{
     panadapter_fft_ceiling, swr_tune_limit, zoom_lane_decimation,
 };
 pub use station::StationConfig;
+pub use tasks::{
+    BackgroundTask, BackgroundTaskSchedule, BackgroundTaskStatus, BackgroundTaskTz,
+    BackgroundTasksConfig, WEEKDAY_ALL, WEEKDAY_FRI, WEEKDAY_MON, WEEKDAY_SAT, WEEKDAY_SUN,
+    WEEKDAY_THU, WEEKDAY_TUE, WEEKDAY_WED,
+};
 pub use tciserver::TciServerConfig;
 pub use tone::{CTCSS_TONES, SubTone};
 pub use ui::{

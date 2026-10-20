@@ -1608,7 +1608,18 @@ use sdroxide_types::{
 /// v195: `Command::SetVdl2UdpConfig` + `StationConfig.vdl2_udp` (`vdl2_udp.json`)
 /// — dumpvdl2-compatible JSON over UDP for decoded VDL2 frames (Settings →
 /// Servers / VDL2 SETUP).
-pub const PROTO_VERSION: u16 = 195;
+///
+/// v196: background scheduled decode tasks — `Command::SetBackgroundTasks`,
+/// `RadioEvent::BackgroundTasks` / `ServerMsg::BackgroundTasks`
+/// (`background_tasks.json`). System TASKS chip arms mode+freq windows the
+/// engine runs when the radio is free (last-wins on overlap).
+///
+/// v197: task schedule kinds on [`sdroxide_types::BackgroundTask`] — one-time,
+/// daily, weekly (weekday mask), and interval (`period_secs` / `until_unix`).
+///
+/// v198: [`sdroxide_types::BackgroundTaskTz`] (UTC vs local wall-clock) on
+/// background tasks — daily/weekly match in the picked zone.
+pub const PROTO_VERSION: u16 = 198;
 const VERSION_BYTE: u8 = 0x12;
 
 #[derive(Debug, thiserror::Error)]
@@ -2082,6 +2093,10 @@ pub enum ServerMsg {
     ///
     /// Appended last, for the usual reason.
     MeshtasticStatus(Box<sdroxide_types::MeshtasticStatus>),
+    /// Background scheduled-decode tasks. Replayed on connect and re-sent on
+    /// every change — see [`sdroxide_types::BackgroundTasksConfig`].
+    /// Appended last, for the usual reason.
+    BackgroundTasks(sdroxide_types::BackgroundTasksConfig),
 }
 
 /// One radio in a station's roster, as a client sees it.

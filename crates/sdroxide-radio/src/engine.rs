@@ -1988,6 +1988,15 @@ fn unix_now_f64() -> f64 {
     SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64())
 }
 
+/// Seconds east of UTC at `unix` on this host — for local-time task windows.
+fn host_local_offset_at(unix: i64) -> i64 {
+    use chrono::{Offset, TimeZone};
+    chrono::Local
+        .timestamp_opt(unix, 0)
+        .single()
+        .map_or(0, |t| i64::from(t.offset().fix().local_minus_utc()))
+}
+
 /// Convert Unix seconds to a UTC civil date-time `(year, month, day, hour, min,
 /// sec)`. Howard Hinnant's `civil_from_days` algorithm — exact, no leap-second
 /// or timezone handling (UTC), and no external crate.
@@ -2878,6 +2887,9 @@ struct Engine {
     /// The operator's persisted scanner settings. What the scanner is *doing*
     /// lives in `state.scan`, which every client already receives.
     scan_cfg: sdroxide_types::ScannerConfig,
+    /// Background scheduled decode tasks (System TASKS). The engine runs the
+    /// winning window when the radio is free — last-created wins on overlap.
+    bg_tasks: sdroxide_types::BackgroundTasksConfig,
     /// The running scan, or `None` when it is stopped.
     scan: Option<Scan>,
     /// Scratch for the sweep's spectrum read, kept so a scan allocates nothing
@@ -4000,6 +4012,18 @@ fn engine_thread(
     // A hand-edited `scanner.json` can name a range and a skip list that were
     // never taken in it; the list is the part that goes.
     scan_cfg.forget_stale_skips();
+    let mut bg_tasks = engine_cfg.store.load_background_tasks().sane();
+    // A restart cannot still be "running".
+    for t in &mut bg_tasks.tasks {
+        if matches!(
+            t.status,
+            sdroxide_types::BackgroundTaskStatus::Running
+                | sdroxide_types::BackgroundTaskStatus::Waiting
+        ) {
+            t.status = sdroxide_types::BackgroundTaskStatus::Scheduled;
+        }
+    }
+    bg_tasks.active_id = None;
     let stacks = sdroxide_config::load_bandstacks();
     let profiles = sdroxide_config::load_profiles();
     // Like the session, the per-mode overrides are only read and written by an
@@ -4024,6 +4048,7 @@ fn engine_thread(
     let _ = event_tx.send(RadioEvent::Memories(memories.clone()));
     let _ = event_tx.send(RadioEvent::MemoryFolders(mem_folders.clone()));
     let _ = event_tx.send(RadioEvent::Scanner(scan_cfg.clone()));
+    let _ = event_tx.send(RadioEvent::BackgroundTasks(bg_tasks.clone()));
     let _ = event_tx.send(RadioEvent::Profiles(profiles.iter().map(|p| p.name.clone()).collect()));
     // Surface any warning captured while opening the source (e.g. radio audio
     // device unavailable / mono card chosen for IQ) so the UI can show it
@@ -4337,6 +4362,7 @@ fn engine_thread(
         iq_rec_buf: Vec::new(),
         iq_wav: None,
         scan_cfg,
+        bg_tasks,
         scan: None,
         scan_db: Vec::new(),
         audio_level: 0.0,
@@ -4729,6 +4755,7 @@ fn engine_thread(
         engine.poll_qo100();
         engine.poll_hfdl();
         engine.poll_scanner();
+        engine.poll_background_tasks();
         engine.poll_tci_server();
         engine.poll_rigctld();
         engine.poll_band_change();
@@ -6618,9 +6645,8 @@ impl Engine {
             }
             Err(e) => {
                 warn!("VDL2 JSON UDP output: {e}");
-                let _ = self
-                    .event_tx
-                    .send(RadioEvent::NetStatus(Some(format!("VDL2 JSON UDP: {e}"))));
+                let _ =
+                    self.event_tx.send(RadioEvent::NetStatus(Some(format!("VDL2 JSON UDP: {e}"))));
             }
         }
     }
@@ -8671,6 +8697,10 @@ impl Engine {
             SetScanning(on) => self.set_scanning(on),
             ScanNext => self.scan_skip(false),
             ScanSkip => self.scan_skip(true),
+            SetBackgroundTasks(cfg) => {
+                self.bg_tasks = cfg.sane();
+                self.save_background_tasks();
+            }
             SetAudioDuck(gain) => {
                 if let Some(mixer) = self.mixer.as_mut() {
                     mixer.set_duck(gain);
@@ -12223,9 +12253,8 @@ impl Engine {
 
     /// Move the dial for Auto TUNE without treating it as an operator cancel.
     fn sonde_hunt_tune(&mut self, hz: f64) {
-        let hz = hz
-            .clamp(sdroxide_types::RS41_BAND_LO_HZ, sdroxide_types::RS41_BAND_HI_HZ)
-            .max(0.0);
+        let hz =
+            hz.clamp(sdroxide_types::RS41_BAND_LO_HZ, sdroxide_types::RS41_BAND_HI_HZ).max(0.0);
         self.sonde_hunt_moving = true;
         match self.state.active_vfo {
             Vfo::A => self.state.vfo_a_hz = hz,
@@ -15111,6 +15140,126 @@ impl Engine {
             warn!("saving scanner config: {e}");
         }
         let _ = self.event_tx.send(RadioEvent::Scanner(self.scan_cfg.clone()));
+    }
+
+    fn save_background_tasks(&mut self) {
+        if let Err(e) = self.store.save_background_tasks(&self.bg_tasks) {
+            warn!("saving background tasks: {e}");
+        }
+        self.emit_background_tasks();
+    }
+
+    fn emit_background_tasks(&mut self) {
+        let _ = self.event_tx.send(RadioEvent::BackgroundTasks(self.bg_tasks.clone()));
+    }
+
+    /// Arm the winning scheduled decode when the radio is free.
+    ///
+    /// Overlapping windows: the task with the latest `updated_unix` (then
+    /// highest id) wins. Busy radio (TX / PTT / digi TX / scan) → Waiting.
+    fn poll_background_tasks(&mut self) {
+        if self.bg_tasks.tasks.is_empty() {
+            return;
+        }
+        let now = unix_now_f64() as i64;
+        let mut changed = false;
+
+        let offset_at = host_local_offset_at;
+        for t in &mut self.bg_tasks.tasks {
+            if t.is_finished(now) {
+                if t.status != sdroxide_types::BackgroundTaskStatus::Done {
+                    t.status = sdroxide_types::BackgroundTaskStatus::Done;
+                    changed = true;
+                }
+            } else if !t.covers(now, &offset_at) {
+                if t.status != sdroxide_types::BackgroundTaskStatus::Scheduled {
+                    t.status = sdroxide_types::BackgroundTaskStatus::Scheduled;
+                    changed = true;
+                }
+            }
+        }
+
+        let winner_id = self.bg_tasks.winner_at(now, &offset_at).map(|t| t.id);
+        for t in &mut self.bg_tasks.tasks {
+            if t.covers(now, &offset_at) && Some(t.id) != winner_id {
+                if t.status != sdroxide_types::BackgroundTaskStatus::Waiting {
+                    t.status = sdroxide_types::BackgroundTaskStatus::Waiting;
+                    changed = true;
+                }
+            }
+        }
+
+        let Some(id) = winner_id else {
+            if self.bg_tasks.active_id.take().is_some() {
+                changed = true;
+            }
+            if changed {
+                self.emit_background_tasks();
+            }
+            return;
+        };
+
+        let busy = self.on_air()
+            || self.state.tx.ptt
+            || self.state.tx.tune
+            || self.digi_tx
+            || self.state.scan.running;
+        if busy {
+            if let Some(t) = self.bg_tasks.tasks.iter_mut().find(|t| t.id == id) {
+                if t.status != sdroxide_types::BackgroundTaskStatus::Waiting {
+                    t.status = sdroxide_types::BackgroundTaskStatus::Waiting;
+                    changed = true;
+                }
+            }
+            if changed {
+                self.emit_background_tasks();
+            }
+            return;
+        }
+
+        let (mode, freq_hz) = match self.bg_tasks.tasks.iter().find(|t| t.id == id) {
+            Some(t) => (t.mode, t.freq_hz),
+            None => return,
+        };
+
+        let cur_mode = self.state.rx[0].mode;
+        let cur_hz = match self.state.active_vfo {
+            Vfo::A => self.state.vfo_a_hz,
+            Vfo::B => self.state.vfo_b_hz,
+        };
+        let need_mode = cur_mode != mode;
+        let need_freq = (cur_hz - freq_hz).abs() > 0.5;
+        if need_mode || need_freq {
+            self.stop_scan_for_operator();
+            if need_mode {
+                self.set_rx_mode(RxId::Main, mode);
+            }
+            if need_freq {
+                match self.state.active_vfo {
+                    Vfo::A => self.state.vfo_a_hz = freq_hz,
+                    Vfo::B => self.state.vfo_b_hz = freq_hz,
+                }
+                self.state.band = Band::containing(freq_hz);
+                self.keep_vfo_in_span();
+                self.update_tuning();
+            }
+            let _ = self.event_tx.send(RadioEvent::State(self.state.clone()));
+            changed = true;
+        }
+
+        if self.bg_tasks.active_id != Some(id) {
+            self.bg_tasks.active_id = Some(id);
+            changed = true;
+        }
+        if let Some(t) = self.bg_tasks.tasks.iter_mut().find(|t| t.id == id) {
+            if t.status != sdroxide_types::BackgroundTaskStatus::Running {
+                t.status = sdroxide_types::BackgroundTaskStatus::Running;
+                changed = true;
+            }
+        }
+        if changed {
+            self.emit_background_tasks();
+        }
     }
 
     /// Refuse a transmit request, and *say so*.

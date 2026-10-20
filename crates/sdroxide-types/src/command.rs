@@ -3,8 +3,8 @@ use serde::{Deserialize, Serialize};
 use crate::{
     AgcMode, Band, DigiConfig, Direction, ImageKind, LoginTarget, Mode, MqttConfig, NetworkConfig,
     NrLevel, QsoStep, RadioConfig, RigctldConfig, RotatorConfig, RxId, SatConfig, SatLockConfig,
-    SkimmerSettings, SpectrumConfig, SstvMode, TciServerConfig, TxEqState, UploadTarget, Vdl2UdpConfig,
-    Vfo, WsjtxConfig,
+    SkimmerSettings, SpectrumConfig, SstvMode, TciServerConfig, TxEqState, UploadTarget,
+    Vdl2UdpConfig, Vfo, WsjtxConfig,
 };
 
 /// The single control vocabulary. The GUI, the WebSocket protocol, and the
@@ -1247,4 +1247,9 @@ pub enum Command {
     /// whether frames are sent. Output only — Settings → Servers / VDL2 SETUP.
     /// Appended for the usual reason.
     SetVdl2UdpConfig(Vdl2UdpConfig),
+
+    /// Replace (and persist) the background scheduled-decode task list.
+    /// Echoed as [`crate::RadioEvent::BackgroundTasks`]. Appended for the
+    /// usual reason — postcard numbers variants by position.
+    SetBackgroundTasks(crate::BackgroundTasksConfig),
 }

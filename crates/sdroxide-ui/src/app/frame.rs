@@ -246,6 +246,7 @@ impl eframe::App for SdroxideApp {
         // A channel list chosen in the memories window: parsed here and sent
         // to the engine, which owns the list and the numbering in it.
         self.poll_chirp_import(&mut cmds);
+        self.poll_tasks_import(&mut cmds);
         // A "stop after" deadline armed in the REC popup: stop the MP3
         // recording once it passes (issue #520).
         self.poll_recording_timer(&mut cmds);
@@ -929,6 +930,7 @@ impl eframe::App for SdroxideApp {
 
         self.memories_window(&ctx, &mut cmds);
         self.scanner_window(&ctx, &mut cmds);
+        self.tasks_window(&ctx, &mut cmds);
         self.ism_window(&ctx, &mut cmds);
         self.adsb_setup_window(&ctx, &mut cmds);
         self.cw_macro_window(&ctx, &mut cmds);
@@ -960,6 +962,7 @@ impl eframe::App for SdroxideApp {
         // Confirm Modals after raise — otherwise Settings / SETUP move_to_top
         // covers the question. raise also skips while these flags are set.
         self.resolve_undock_confirm(&ctx);
+        self.resolve_tasks_import_modals(&ctx, &mut cmds);
         {
             let mut radio_tab_reqs = Vec::new();
             self.resolve_close_radio_confirm(&ctx, &mut radio_tab_reqs);
@@ -1020,25 +1023,15 @@ impl eframe::App for SdroxideApp {
 
             // ADS-B MAP pop-out — same deferred-viewport host as solar.
             self.adsb_map_win.set_window_seed(self.ui_settings.adsb_map_window);
-            let aircraft = self
-                .adsb_status
-                .as_ref()
-                .map(|s| s.aircraft.as_slice())
-                .unwrap_or(&[]);
+            let aircraft = self.adsb_status.as_ref().map(|s| s.aircraft.as_slice()).unwrap_or(&[]);
             let grid = self.digi_cfg_edit.my_grid.trim().to_owned();
             let home = self.adsb_home();
             let cfg = self.state.adsb;
             let now = crate::time::now_unix();
             let selected = self.adsb_map.selected;
-            if let Some(win_sel) = self.adsb_map_win.viewport(
-                &ctx,
-                aircraft,
-                &grid,
-                home,
-                cfg,
-                now,
-                selected,
-            ) {
+            if let Some(win_sel) =
+                self.adsb_map_win.viewport(&ctx, aircraft, &grid, home, cfg, now, selected)
+            {
                 self.adsb_map.selected = win_sel;
             }
             if let Some(geom) = self.adsb_map_win.window_now() {
@@ -1362,6 +1355,7 @@ impl SdroxideApp {
                 RadioEvent::Memories(m) => self.memories = m,
                 RadioEvent::MemoryFolders(f) => self.mem_folders = f,
                 RadioEvent::Scanner(c) => self.scanner = c,
+                RadioEvent::BackgroundTasks(c) => self.background_tasks = c,
                 RadioEvent::Profiles(names) => {
                     self.profiles = names;
                     if std::mem::take(&mut self.profile_apply_pending) {

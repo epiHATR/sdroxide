@@ -46,6 +46,7 @@ pub(in crate::app) mod spectrum;
 pub(in crate::app) mod speech;
 pub(in crate::app) mod spots;
 pub(in crate::app) mod system_dock;
+pub(in crate::app) mod tasks;
 pub(in crate::app) use system_dock::SystemDock;
 pub(in crate::app) mod top_bar;
 pub(crate) mod util;
@@ -140,6 +141,7 @@ pub(in crate::app) struct SystemWasOpen {
     pub scanner: bool,
     pub grid: bool,
     pub settings: bool,
+    pub tasks: bool,
 }
 
 pub struct SdroxideApp {
@@ -161,6 +163,10 @@ pub struct SdroxideApp {
     /// The scanner's settings, mirrored from the engine and edited in place —
     /// the whole struct goes back on any change, the way the skimmer's does.
     scanner: sdroxide_types::ScannerConfig,
+    /// Background scheduled decode tasks — mirrored from the engine.
+    background_tasks: sdroxide_types::BackgroundTasksConfig,
+    /// Draft while creating/editing a task in the TASKS window.
+    tasks_edit: Option<sdroxide_types::BackgroundTask>,
     view: ViewState,
     peaks: spectrum_view::PeakHold,
     /// UI-side smoothing for the spectrum *line* (waterfall stays un-averaged).
@@ -484,6 +490,8 @@ pub struct SdroxideApp {
     /// silently closing up.
     rds_next_seq: u64,
     show_scanner: bool,
+    /// Background scheduled decode tasks (System TASKS chip).
+    show_tasks: bool,
     /// The ISM decoder window, opened from the ISM chip in the system row.
     show_ism: bool,
     /// Every 868 MHz device the engine has heard, newest first. A whole-table
@@ -1062,6 +1070,14 @@ pub struct SdroxideApp {
     /// settings it would replace are on the engine's machine anyway.
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     settings_import_inbox: crate::download::LoadInbox,
+    /// Inbox for a background-tasks JSON file chosen via TASKS → IMPORT.
+    tasks_import_inbox: crate::download::LoadInbox,
+    /// Short note after the last tasks import/export (not persisted).
+    tasks_transfer_note: Option<String>,
+    /// Parsed import waiting on a "replace existing?" confirm.
+    tasks_import_pending: Option<Vec<sdroxide_types::BackgroundTask>>,
+    /// Successful import summary waiting for an OK dismiss.
+    tasks_import_done: Option<(usize, usize)>,
     /// What the last settings export or import did, shown beside the buttons
     /// until the dialog is closed. Not persisted: it describes an action, not a
     /// setting, and one from a previous session would be a lie about this one.
@@ -1479,6 +1495,8 @@ impl SdroxideApp {
             memories: Vec::new(),
             mem_folders: Vec::new(),
             scanner: sdroxide_types::ScannerConfig::default(),
+            background_tasks: sdroxide_types::BackgroundTasksConfig::default(),
+            tasks_edit: None,
             view,
             peaks: spectrum_view::PeakHold::default(),
             spec_smooth: spectrum_view::SpectrumSmooth::default(),
@@ -1594,6 +1612,7 @@ impl SdroxideApp {
             rds_log: std::collections::VecDeque::new(),
             rds_next_seq: 0,
             show_scanner: false,
+            show_tasks: false,
             show_ism: false,
             ism_reports: Vec::new(),
             ism_status: None,
@@ -1814,6 +1833,10 @@ impl SdroxideApp {
             adif_import_inbox: Arc::new(Mutex::new(None)),
             settings_import_inbox: Arc::new(Mutex::new(None)),
             settings_transfer_note: None,
+            tasks_import_inbox: Arc::new(Mutex::new(None)),
+            tasks_transfer_note: None,
+            tasks_import_pending: None,
+            tasks_import_done: None,
             chirp_import_inbox: Arc::new(Mutex::new(None)),
             pending_lookups: Vec::new(),
             callsign_cache: Default::default(),
@@ -2334,11 +2357,7 @@ impl SdroxideApp {
         self.view = layout.view;
         self.apply_system_dock_snapshot(&layout.system_dock);
         self.band_docked = layout.band_docked;
-        self.band_dock_visible = if layout.band_docked {
-            true
-        } else {
-            layout.band_dock_visible
-        };
+        self.band_dock_visible = if layout.band_docked { true } else { layout.band_dock_visible };
         let zoom = layout.ui_zoom;
         crate::theme::set_ui_zoom(zoom);
         self.ui_settings.ui_zoom = crate::theme::ui_zoom();

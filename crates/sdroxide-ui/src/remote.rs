@@ -368,6 +368,7 @@ impl RemoteController {
             ServerMsg::Memories(m) => self.pending.push_back(RadioEvent::Memories(m)),
             ServerMsg::MemoryFolders(f) => self.pending.push_back(RadioEvent::MemoryFolders(f)),
             ServerMsg::Scanner(c) => self.pending.push_back(RadioEvent::Scanner(c)),
+            ServerMsg::BackgroundTasks(c) => self.pending.push_back(RadioEvent::BackgroundTasks(c)),
             ServerMsg::Profiles(p) => self.pending.push_back(RadioEvent::Profiles(p)),
             // Dropped rather than decoded while another tab holds the page's
             // single output: the work saved is the point on a browser tab

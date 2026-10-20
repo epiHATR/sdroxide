@@ -1656,6 +1656,27 @@ pub fn chip_reset(ui: &mut Ui, size: egui::Vec2) -> Response {
     resp
 }
 
+/// A chip carrying two overlapping squares — "clone" — instead of a label.
+/// Painted rather than typed for the reason [`chip_link`] gives.
+pub fn chip_clone(ui: &mut Ui, size: egui::Vec2) -> Response {
+    let resp = chip_impl(ui, false, RichText::new(""), None, Sense::click(), Some(size));
+    if ui.is_rect_visible(resp.rect) {
+        let ink = ui.style().interact_selectable(&resp, false).fg_stroke.color;
+        let stroke = Stroke::new((size.y * 0.07).clamp(1.4, 2.2), ink);
+        let c = resp.rect.center();
+        let side = resp.rect.height() * 0.34;
+        let offset = side * 0.28;
+        let p = ui.painter();
+        // Back square (upper-left) and front square (lower-right): the usual
+        // "duplicate" mark without relying on a font glyph.
+        for (dx, dy) in [(-offset, -offset), (offset, offset)] {
+            let r = Rect::from_center_size(Pos2::new(c.x + dx, c.y + dy), vec2(side, side));
+            p.rect_stroke(r, CornerRadius::same(1), stroke, StrokeKind::Outside);
+        }
+    }
+    resp
+}
+
 /// Magnetic-compass chip: rose rotates with `heading_rad` (0 = north up).
 ///
 /// Painted rather than typed — same reason as [`chip_link`] / [`chip_reset`].
@@ -1681,22 +1702,14 @@ pub fn chip_compass(ui: &mut Ui, selected: bool, heading_rad: f32, size: egui::V
             p.line_segment([at(a, r * 0.72), at(a, r * 0.98)], stroke);
         }
         // North needle (filled) + light south opposite.
-        let north = [
-            at(0.0, r * 0.88),
-            at(0.22, r * 0.12),
-            at(-0.22, r * 0.12),
-        ];
+        let north = [at(0.0, r * 0.88), at(0.22, r * 0.12), at(-0.22, r * 0.12)];
         p.add(Shape::convex_polygon(north.to_vec(), accent, Stroke::NONE));
         let south = [
             at(std::f32::consts::PI, r * 0.72),
             at(std::f32::consts::PI + 0.20, r * 0.10),
             at(std::f32::consts::PI - 0.20, r * 0.10),
         ];
-        p.add(Shape::convex_polygon(
-            south.to_vec(),
-            ink.gamma_multiply(0.55),
-            Stroke::NONE,
-        ));
+        p.add(Shape::convex_polygon(south.to_vec(), ink.gamma_multiply(0.55), Stroke::NONE));
         p.circle_filled(c, r * 0.10, ink);
     }
     resp

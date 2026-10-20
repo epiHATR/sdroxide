@@ -63,11 +63,13 @@ pub(in crate::app) enum SystemDock {
     Scanner,
     Grid,
     Settings,
+    /// Background scheduled decode jobs.
+    Tasks,
 }
 
 impl SystemDock {
     /// Every System-strip overlay that can float or pin into the dock column.
-    pub(in crate::app) const ALL: [Self; 12] = [
+    pub(in crate::app) const ALL: [Self; 13] = [
         Self::Logbook,
         Self::Spots,
         Self::Awards,
@@ -80,6 +82,7 @@ impl SystemDock {
         Self::Scanner,
         Self::Grid,
         Self::Settings,
+        Self::Tasks,
     ];
 
     pub(in crate::app) fn title(self) -> &'static str {
@@ -96,6 +99,7 @@ impl SystemDock {
             Self::Scanner => "SCANNER",
             Self::Grid => "GRID TRACKER",
             Self::Settings => "SETTINGS",
+            Self::Tasks => "TASKS",
         }
     }
 
@@ -115,6 +119,7 @@ impl SystemDock {
             Self::Scanner => "Scanner",
             Self::Grid => "GRID TRACKER",
             Self::Settings => "settings-window-v2",
+            Self::Tasks => "Tasks",
         }
     }
 
@@ -134,6 +139,7 @@ impl SystemDock {
             Self::Scanner => "scanner",
             Self::Grid => "grid",
             Self::Settings => "settings",
+            Self::Tasks => "tasks",
         }
     }
 
@@ -152,6 +158,7 @@ impl SystemDock {
             "scanner" => Self::Scanner,
             "grid" => Self::Grid,
             "settings" => Self::Settings,
+            "tasks" => Self::Tasks,
             _ => return None,
         })
     }
@@ -170,6 +177,7 @@ impl SystemDock {
             Self::Scanner => app.show_scanner,
             Self::Grid => app.show_grid,
             Self::Settings => app.show_settings,
+            Self::Tasks => app.show_tasks,
         }
     }
 
@@ -187,6 +195,7 @@ impl SystemDock {
             Self::Scanner => app.show_scanner = open,
             Self::Grid => app.show_grid = open,
             Self::Settings => app.show_settings = open,
+            Self::Tasks => app.show_tasks = open,
         }
     }
 
@@ -209,6 +218,7 @@ impl SystemDock {
             Self::Scanner => &mut p.scanner,
             Self::Grid => &mut p.grid,
             Self::Settings => &mut p.settings,
+            Self::Tasks => &mut p.tasks,
             Self::Mail => unreachable!("handled above"),
         }
     }
@@ -470,6 +480,8 @@ impl SdroxideApp {
         self.confirm_close_radio.is_some()
             || self.confirm_undock.is_some()
             || self.sat_win.confirm_unwatch.is_some()
+            || self.tasks_import_pending.is_some()
+            || self.tasks_import_done.is_some()
     }
 
     /// Keep the front floating modal interactive; block everything under it.
@@ -508,10 +520,7 @@ impl SdroxideApp {
         // above it among Middle. Re-raise so the veil covers them. Still under
         // every Foreground window / ComboBox.
         ctx.move_to_top(Self::modal_dim_layer(ctx));
-        let win = egui::LayerId::new(
-            egui::Order::Foreground,
-            crate::layout::salted_id(ctx, front),
-        );
+        let win = egui::LayerId::new(egui::Order::Foreground, crate::layout::salted_id(ctx, front));
         // Popup dropdowns and confirm Modals both live in Foreground; re-raising
         // the system window would cover them. Leave z-order and modal layer alone.
         if egui::Popup::is_any_open(ctx) || self.nested_confirm_open() {

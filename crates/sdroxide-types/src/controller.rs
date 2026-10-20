@@ -422,6 +422,11 @@ pub enum RadioEvent {
     ///
     /// Appended last, for the usual reason.
     MeshtasticStatus(Box<crate::MeshtasticStatus>),
+    /// Background scheduled-decode tasks, after a change or on connect — the
+    /// same contract as [`RadioEvent::Scanner`]. Live status fields ride in
+    /// the payload so the TASKS window can show running / waiting without a
+    /// second channel. Appended last, for the usual reason.
+    BackgroundTasks(crate::BackgroundTasksConfig),
 }
 
 /// Snapshot of the frontend's switchable sound devices (native clients).

@@ -849,6 +849,17 @@ impl Store {
         self.save("scanner.json", cfg)
     }
 
+    pub fn load_background_tasks(&self) -> sdroxide_types::BackgroundTasksConfig {
+        self.load("background_tasks.json")
+    }
+
+    pub fn save_background_tasks(
+        &self,
+        cfg: &sdroxide_types::BackgroundTasksConfig,
+    ) -> Result<(), ConfigError> {
+        self.save("background_tasks.json", cfg)
+    }
+
     pub fn load_tci_server_config(&self) -> sdroxide_types::TciServerConfig {
         self.load("tciserver.json")
     }
@@ -1844,6 +1855,17 @@ pub fn load_scanner_config() -> sdroxide_types::ScannerConfig {
 
 pub fn save_scanner_config(cfg: &sdroxide_types::ScannerConfig) -> Result<(), ConfigError> {
     Store::station().save_scanner_config(cfg)
+}
+
+/// Background scheduled decode tasks (System TASKS chip).
+pub fn load_background_tasks() -> sdroxide_types::BackgroundTasksConfig {
+    Store::station().load_background_tasks()
+}
+
+pub fn save_background_tasks(
+    cfg: &sdroxide_types::BackgroundTasksConfig,
+) -> Result<(), ConfigError> {
+    Store::station().save_background_tasks(cfg)
 }
 
 /// FSQ contacts (address book for directed FSQCALL messaging).

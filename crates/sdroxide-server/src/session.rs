@@ -157,6 +157,7 @@ async fn run_session(
         memories,
         mem_folders,
         scanner,
+        background_tasks,
         digi,
         voice,
         images,
@@ -186,6 +187,7 @@ async fn run_session(
             latest.memories.clone(),
             latest.mem_folders.clone(),
             latest.scanner.clone(),
+            latest.background_tasks.clone(),
             latest.digi.clone(),
             latest.voice.clone(),
             latest.images.clone(),
@@ -229,6 +231,7 @@ async fn run_session(
     let _ = socket.send(msg(&ServerMsg::Memories(memories))).await;
     let _ = socket.send(msg(&ServerMsg::MemoryFolders(mem_folders))).await;
     let _ = socket.send(msg(&ServerMsg::Scanner(scanner))).await;
+    let _ = socket.send(msg(&ServerMsg::BackgroundTasks(background_tasks))).await;
     let _ = socket.send(msg(&ServerMsg::Profiles(profiles))).await;
     if let Some(d) = digi {
         let _ = socket.send(msg(&ServerMsg::Ft8Status(d))).await;
@@ -303,10 +306,7 @@ async fn run_session(
     // Independent VFO seat on IQ radios (no-op on CAT/audio-mode). Seed the
     // overlay immediately so dial commands rewrite before the engine answers.
     if !caps.audio_mode {
-        let view = crate::ListenerView {
-            freq_hz: state.rx_freq_hz(),
-            rx: state.rx[0],
-        };
+        let view = crate::ListenerView { freq_hz: state.rx_freq_hz(), rx: state.rx[0] };
         shared.listener_views.lock().unwrap().insert(session_id, view);
         let _ = shared.cmd_tx.send(Command::AttachListener { id: session_id });
     }
