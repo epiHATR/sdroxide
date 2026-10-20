@@ -40,12 +40,7 @@ pub struct SondeBandHunt {
 
 impl Default for SondeBandHunt {
     fn default() -> Self {
-        SondeBandHunt {
-            phase: Phase::Idle,
-            steps: Vec::new(),
-            armed: false,
-            quiet_since: None,
-        }
+        SondeBandHunt { phase: Phase::Idle, steps: Vec::new(), armed: false, quiet_since: None }
     }
 }
 
@@ -213,10 +208,7 @@ mod tests {
         let first = h.scan_hz().unwrap();
         // Force settle + skip window.
         if let Phase::Hunting { step, .. } = h.phase {
-            h.phase = Phase::Hunting {
-                step,
-                since: Instant::now() - SETTLE - SKIP,
-            };
+            h.phase = Phase::Hunting { step, since: Instant::now() - SETTLE - SKIP };
         }
         match h.tick(false, &[]) {
             HuntAction::Tune(hz) => assert_ne!(hz, first),

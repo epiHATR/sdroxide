@@ -55,6 +55,8 @@ pub mod waterfall_gpu;
 mod wefax;
 mod widgets;
 
+#[cfg(feature = "remote")]
+pub use adsb_map_window::AdsbMapApp;
 pub use app::SdroxideApp;
 pub use multi::{MultiApp, RadioFactory, RadioTab, RemoteFactory};
 #[cfg(feature = "remote")]
@@ -64,8 +66,6 @@ pub use remote::{AudioBridge, RemoteController};
 /// instead — see `solar3d::Solar3d`.
 #[cfg(feature = "remote")]
 pub use solar3d::SolarApp;
-#[cfg(feature = "remote")]
-pub use adsb_map_window::AdsbMapApp;
 
 /// Wgpu access must go through this re-export so every crate agrees on the
 /// wgpu version (project rule).

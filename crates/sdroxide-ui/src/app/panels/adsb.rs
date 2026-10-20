@@ -71,12 +71,22 @@ impl SdroxideApp {
             }
         };
         let now = crate::time::now_unix();
-        let content_bottom = ui.cursor().top() + panel_h - 26.0;
+        // Prefer the parent’s remaining height (correct under wasm clip and
+        // angled-frame margins). Fall back to the panel_h fudge only when the
+        // parent left height unconstrained.
+        let body_bottom = {
+            let rem = ui.available_height();
+            if rem.is_finite() && rem > 0.0 && rem < 10_000.0 {
+                ui.cursor().top() + rem
+            } else {
+                ui.cursor().top() + panel_h - 26.0
+            }
+        };
 
         self.adsb_header(ui, cmds, &st);
         ui.add_space(3.0);
 
-        let avail_h = (content_bottom - ui.cursor().top()).max(80.0);
+        let avail_h = (body_bottom - ui.cursor().top()).max(80.0);
         let pane = self.phone_pane(ui, self.state.rx[0].mode);
         let full_w = ui.available_width();
 
@@ -103,7 +113,14 @@ impl SdroxideApp {
                 }
             }
             if pane.is_none_or(|p| p == 1) {
-                ui.vertical(|ui| self.adsb_map_pane(ui, &st, now, avail_h));
+                // Phone MAP pane: full width. Desktop/web: remaining column.
+                // Allocate the full column so the map can fill it exactly.
+                let map_w = if pane.is_some() { full_w } else { ui.available_width() };
+                ui.allocate_ui_with_layout(
+                    egui::vec2(map_w, avail_h),
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| self.adsb_map_pane(ui, &st, now),
+                );
             }
         });
     }
@@ -382,9 +399,8 @@ impl SdroxideApp {
             });
     }
 
-    fn adsb_map_pane(&mut self, ui: &mut egui::Ui, st: &AdsbStatus, now: i64, h: f32) {
+    fn adsb_map_pane(&mut self, ui: &mut egui::Ui, st: &AdsbStatus, now: i64) {
         use crate::adsb_map::AdsbMapKind;
-        let chip_h = crate::chrome::chip_height(ui, Some(9.5)) + 4.0;
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.x = 3.0;
             let flat = self.adsb_map.kind == AdsbMapKind::Flat;
@@ -435,7 +451,8 @@ impl SdroxideApp {
         });
         let home = self.adsb_home();
         let cfg = self.state.adsb;
-        let map_h = (h - chip_h).max(crate::adsb_map::MIN_HEIGHT);
+        // Whatever is left after the chips — do not guess chip height.
+        let map_h = ui.available_height().max(crate::adsb_map::MIN_HEIGHT);
         match self.adsb_map.kind {
             AdsbMapKind::Flat => {
                 let state = &mut self.adsb_map;
@@ -444,15 +461,8 @@ impl SdroxideApp {
             AdsbMapKind::Air3d => {
                 let grid = self.digi_cfg_edit.my_grid.trim().to_owned();
                 let selected = self.adsb_map.selected;
-                let clicked = self.adsb_globe.show(
-                    ui,
-                    &st.aircraft,
-                    &grid,
-                    selected,
-                    now,
-                    cfg,
-                    map_h,
-                );
+                let clicked =
+                    self.adsb_globe.show(ui, &st.aircraft, &grid, selected, now, cfg, map_h);
                 if let Some(icao) = clicked {
                     self.adsb_map.selected = (selected != Some(icao)).then_some(icao);
                 }
@@ -511,7 +521,7 @@ impl SdroxideApp {
                 .default_height(size.y),
             ctx,
             pending,
-            size
+            size,
         )
         .show(ctx, |ui| {
             crate::chrome::window_body_bg(ui);

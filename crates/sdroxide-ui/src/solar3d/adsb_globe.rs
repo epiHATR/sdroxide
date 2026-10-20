@@ -61,16 +61,13 @@ impl AdsbGlobe {
         if avail_w < crate::adsb_map::MIN_HEIGHT {
             return None;
         }
-        let h = max_h.min(avail_w).max(crate::adsb_map::MIN_HEIGHT);
+        // Fill the allocated pane (same as the flat map — not a forced square).
+        let h = max_h.max(crate::adsb_map::MIN_HEIGHT);
         ui.set_min_height(h);
 
         if self.render_state.is_none() {
             ui.centered_and_justified(|ui| {
-                ui.label(
-                    egui::RichText::new("3D globe needs a GPU renderer")
-                        .weak()
-                        .size(12.0),
-                );
+                ui.label(egui::RichText::new("3D globe needs a GPU renderer").weak().size(12.0));
             });
             return None;
         }

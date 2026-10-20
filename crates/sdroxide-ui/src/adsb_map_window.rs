@@ -44,13 +44,9 @@ mod native {
         };
         let want = seed.map_or_else(|| fill_monitor(monitor), |s| egui::Vec2::from(s.size));
         let chrome = egui::vec2(16.0, 40.0);
-        let size = crate::layout::fit_inner_size(
-            monitor,
-            want + chrome,
-            want,
-            egui::vec2(480.0, 320.0),
-        )
-        .unwrap_or(want);
+        let size =
+            crate::layout::fit_inner_size(monitor, want + chrome, want, egui::vec2(480.0, 320.0))
+                .unwrap_or(want);
         (size, seed.and_then(|s| s.pos).map(egui::Pos2::from))
     }
 
@@ -227,12 +223,7 @@ mod native {
     fn paint_window(ui: &mut egui::Ui, st: &mut Inner) {
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
-            ui.label(
-                RichText::new("ADS-B MAP")
-                    .strong()
-                    .size(12.0)
-                    .color(theme::TEXT_STRONG()),
-            );
+            ui.label(RichText::new("ADS-B MAP").strong().size(12.0).color(theme::TEXT_STRONG()));
             let flat = st.map.kind == AdsbMapKind::Flat;
             if crate::chrome::chip(ui, flat, RichText::new("2D").size(10.0))
                 .on_hover_text("Top-down radar picture.")
@@ -316,9 +307,8 @@ pub mod app {
             }
 
             let ctx = cc.egui_ctx.clone();
-            let ctrl = RemoteController::connect(url, None, move || {
-                crate::repaint::after_ms(&ctx, 33)
-            })?;
+            let ctrl =
+                RemoteController::connect(url, None, move || crate::repaint::after_ms(&ctx, 33))?;
 
             Ok(AdsbMapApp {
                 ctrl,
@@ -334,9 +324,7 @@ pub mod app {
 
         fn home(&self) -> Option<(f64, f64)> {
             let g = self.grid.trim();
-            (!g.is_empty())
-                .then(|| sdroxide_types::grid_to_latlon(g))
-                .flatten()
+            (!g.is_empty()).then(|| sdroxide_types::grid_to_latlon(g)).flatten()
         }
     }
 

@@ -31,9 +31,7 @@
 //! aeroplane is, drawn in the same ink as the ones that are true, and the map
 //! is the one place with no room for a hedge.
 
-use eframe::egui::{
-    Align2, Color32, FontId, Pos2, Rect, Sense, Shape, Stroke, Ui, pos2, vec2,
-};
+use eframe::egui::{Align2, Color32, FontId, Pos2, Rect, Sense, Shape, Stroke, Ui, pos2, vec2};
 use sdroxide_types::{AdsbAircraft, AdsbSettings};
 
 use crate::theme;
@@ -95,21 +93,21 @@ fn paint_aircraft(
     };
     // Fuselage: pointed nose, parallel sides, pointed tail cone (+y = nose).
     let fuse = vec![
-        rot(c, d, 0.0, r),            // nose
+        rot(c, d, 0.0, r), // nose
         rot(c, d, 0.13 * r, 0.55 * r),
         rot(c, d, 0.13 * r, -0.55 * r),
-        rot(c, d, 0.0, -r),           // tail tip
+        rot(c, d, 0.0, -r), // tail tip
         rot(c, d, -0.13 * r, -0.55 * r),
         rot(c, d, -0.13 * r, 0.55 * r),
     ];
     // Swept main wing through mid-body.
     let wing = vec![
-        rot(c, d, 0.0, 0.22 * r),     // leading root
-        rot(c, d, r, -0.08 * r),      // starboard tip
+        rot(c, d, 0.0, 0.22 * r), // leading root
+        rot(c, d, r, -0.08 * r),  // starboard tip
         rot(c, d, 0.85 * r, -0.22 * r),
-        rot(c, d, 0.0, -0.18 * r),    // trailing root
+        rot(c, d, 0.0, -0.18 * r), // trailing root
         rot(c, d, -0.85 * r, -0.22 * r),
-        rot(c, d, -r, -0.08 * r),     // port tip
+        rot(c, d, -r, -0.08 * r), // port tip
     ];
     // Horizontal stabilizers near the tail.
     let stab = vec![
@@ -149,11 +147,7 @@ pub struct AdsbMapState {
 
 impl Default for AdsbMapState {
     fn default() -> Self {
-        Self {
-            view: MapView::default(),
-            selected: None,
-            kind: AdsbMapKind::Flat,
-        }
+        Self { view: MapView::default(), selected: None, kind: AdsbMapKind::Flat }
     }
 }
 
@@ -259,7 +253,8 @@ pub fn show(
     if avail_w < MIN_HEIGHT {
         return None;
     }
-    let h = max_h.min(avail_w).max(MIN_HEIGHT);
+    // Fill the allocated pane (panel or fullscreen), not a forced square.
+    let h = max_h.max(MIN_HEIGHT);
     let (rect, resp) = ui.allocate_exact_size(vec2(avail_w, h), Sense::click_and_drag());
     if !ui.is_rect_visible(rect) {
         return None;

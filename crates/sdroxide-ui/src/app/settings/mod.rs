@@ -1194,7 +1194,7 @@ impl SdroxideApp {
                     .vscroll(true),
                 ctx,
                 pending,
-                want
+                want,
             ))
         };
         let resp = win.and_then(|win| {
@@ -1358,7 +1358,11 @@ impl SdroxideApp {
             crate::chrome::paint_window_border(ctx, &r.response);
             crate::layout::settle_center_pending(ctx, id, &mut self.system_center_pending.settings);
         }
-        if !docked && resp.as_ref().is_some_and(|r| self.system_title_pin(ctx, &r.response, "settings-window-v2")) {
+        if !docked
+            && resp
+                .as_ref()
+                .is_some_and(|r| self.system_title_pin(ctx, &r.response, "settings-window-v2"))
+        {
             self.dock_system(crate::app::SystemDock::Settings);
         }
         if !docked {
@@ -3547,7 +3551,12 @@ impl SdroxideApp {
                 ui.add_space(12.0);
                 ui.separator();
                 ui.add_space(8.0);
-                settings_vdl2_udp_tab(ui, io.vdl2_udp_edit, self.vdl2_udp_seeded, io.vdl2_udp_apply);
+                settings_vdl2_udp_tab(
+                    ui,
+                    io.vdl2_udp_edit,
+                    self.vdl2_udp_seeded,
+                    io.vdl2_udp_apply,
+                );
                 ui.add_space(12.0);
                 ui.separator();
                 ui.add_space(8.0);

@@ -2407,8 +2407,7 @@ fn adsb_traffic(s: &mut Scene, st: &SolarUi, b: &Bodies, cam: &Camera) {
         // Scale the silhouette with eye distance so it stays readable when
         // the camera pulls back to frame regional traffic.
         let eye_dist = (cam.eye - tip).len().max(b.earth_r * 1.0e-4);
-        let span = (eye_dist * 0.028)
-            .clamp(b.earth_r * 4.0e-5, b.earth_r * 2.5e-3);
+        let span = (eye_dist * 0.028).clamp(b.earth_r * 4.0e-5, b.earth_r * 2.5e-3);
         let width = if a.selected || a.emergency { 2.6 } else { 2.0 };
         adsb_silhouette(s, tip, east, north, up, a.track_deg, span, width, lin(color, 0.92 * fade));
         if faces_camera(cam, up, tip) {
@@ -2457,12 +2456,7 @@ fn adsb_silhouette(
     let stab = tip - fwd * size * 0.70;
     s.lines.push(seg(nose, tail, width, color));
     s.lines.push(seg(wing - right * size * 0.95, wing + right * size * 0.95, width, color));
-    s.lines.push(seg(
-        stab - right * size * 0.38,
-        stab + right * size * 0.38,
-        width * 0.85,
-        color,
-    ));
+    s.lines.push(seg(stab - right * size * 0.38, stab + right * size * 0.38, width * 0.85, color));
     s.lines.push(seg(tail, tail + up * size * 0.38, width * 0.85, color));
 }
 

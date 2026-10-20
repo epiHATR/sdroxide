@@ -91,7 +91,7 @@ impl SdroxideApp {
                 .default_width(size.x),
             ctx,
             pending,
-            size
+            size,
         )
         .show(ctx, |ui| {
             crate::chrome::window_body_bg(ui);

@@ -290,7 +290,8 @@ fn wav_loop(
         return;
     }
     let mut rs_mono = (nch == 1).then(|| MonoResampler::new(in_rate, MP3_RATE as f64)).flatten();
-    let mut rs_stereo = (nch == 2).then(|| StereoResampler::new(in_rate, MP3_RATE as f64)).flatten();
+    let mut rs_stereo =
+        (nch == 2).then(|| StereoResampler::new(in_rate, MP3_RATE as f64)).flatten();
     let mut pending = Vec::new();
     let mut out = Vec::new();
     let mut data_bytes: u64 = 0;

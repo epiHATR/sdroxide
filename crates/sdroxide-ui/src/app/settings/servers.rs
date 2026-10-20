@@ -699,9 +699,7 @@ pub(in crate::app) fn settings_vdl2_udp_tab(
     seeded: bool,
     apply: &mut bool,
 ) {
-    ui.label(
-        RichText::new("VDL2 JSON over UDP").size(14.0).strong().color(crate::theme::CYAN()),
-    );
+    ui.label(RichText::new("VDL2 JSON over UDP").size(14.0).strong().color(crate::theme::CYAN()));
     ui.add_space(4.0);
     if !seeded {
         ui.label(RichText::new("Waiting for the station's VDL2 UDP configuration…").weak());

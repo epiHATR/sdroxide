@@ -439,7 +439,7 @@ impl SdroxideApp {
                 .default_height(size.y),
             ctx,
             pending,
-            size
+            size,
         )
         .show(ctx, |ui| {
             crate::chrome::window_body_bg(ui);
@@ -565,12 +565,8 @@ impl SdroxideApp {
                 .weak(),
             );
             let mut export_on = self.vdl2_udp_edit.enabled;
-            let export_changed = crate::chrome::checkbox(
-                ui,
-                &mut export_on,
-                "Send decoded JSON over UDP",
-            )
-            .changed();
+            let export_changed =
+                crate::chrome::checkbox(ui, &mut export_on, "Send decoded JSON over UDP").changed();
             if export_changed {
                 self.vdl2_udp_edit.enabled = export_on;
                 cmds.push(Command::SetVdl2UdpConfig(self.vdl2_udp_edit.clone()));

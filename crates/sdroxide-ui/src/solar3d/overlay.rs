@@ -239,8 +239,8 @@ pub fn adsb_earth_pane(ui: &mut egui::Ui, st: &mut SolarUi) -> Option<u32> {
 /// Overlay compass: ease orbit yaw so the camera looks north over the QTH.
 fn adsb_north_chip(ui: &egui::Ui, st: &mut SolarUi, rect: egui::Rect) {
     let yaw = st.view.yaw.rem_euclid(std::f32::consts::TAU);
-    let facing_north = st.adsb_north_fly.is_none()
-        && (yaw < 0.05 || yaw > std::f32::consts::TAU - 0.05);
+    let facing_north =
+        st.adsb_north_fly.is_none() && (yaw < 0.05 || yaw > std::f32::consts::TAU - 0.05);
     let side = chrome::chip_height(ui, Some(11.0)).max(26.0);
     egui::Area::new(egui::Id::new("adsb-globe-north"))
         .order(egui::Order::Foreground)

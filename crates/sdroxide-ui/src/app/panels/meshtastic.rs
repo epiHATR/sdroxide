@@ -453,7 +453,7 @@ impl SdroxideApp {
                 .default_height(size.y),
             ctx,
             pending,
-            size
+            size,
         )
         .show(ctx, |ui| {
             crate::chrome::window_body_bg(ui);
@@ -546,7 +546,11 @@ impl SdroxideApp {
         });
         if let Some(r) = &resp {
             crate::chrome::paint_window_border(ctx, &r.response);
-            crate::layout::settle_center_pending(ctx, id, &mut self.meshtastic_setup_center_pending);
+            crate::layout::settle_center_pending(
+                ctx,
+                id,
+                &mut self.meshtastic_setup_center_pending,
+            );
         }
         if cfg != self.state.meshtastic {
             let region_changed = cfg.region != self.state.meshtastic.region;

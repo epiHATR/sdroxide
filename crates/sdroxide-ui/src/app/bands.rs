@@ -105,7 +105,7 @@ impl SdroxideApp {
                 .max_height(max_h),
             ctx,
             pending,
-            size
+            size,
         )
         .show(ctx, |ui| {
             crate::chrome::window_body_bg(ui);
@@ -231,12 +231,7 @@ impl SdroxideApp {
     }
 
     /// One data row of the BANDS table.
-    fn bands_table_row(
-        &self,
-        ui: &mut egui::Ui,
-        field: &sdroxide_types::PropField,
-        b: Band,
-    ) {
+    fn bands_table_row(&self, ui: &mut egui::Ui, field: &sdroxide_types::PropField, b: Band) {
         let dim = |s: &str| RichText::new(s).size(9.5).color(dim_ink());
         ui.label(RichText::new(b.label()).size(11.0).strong());
 
