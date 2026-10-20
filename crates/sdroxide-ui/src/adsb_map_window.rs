@@ -256,11 +256,20 @@ mod native {
                         .filter_map(|a| crate::solar3d::adsb_marker(a, st.map.selected))
                         .collect(),
                 };
-                crate::solar3d::overlay::adsb_earth_pane(ui, &mut st.globe)
+                if st.map.center {
+                    if let Some(m) = st.globe.adsb.aircraft.iter().find(|a| a.selected) {
+                        st.globe.adsb_look = Some((m.lat, m.lon));
+                    } else {
+                        st.map.center = false;
+                    }
+                }
+                crate::solar3d::overlay::adsb_earth_pane(ui, &mut st.globe, &mut st.map.center)
             }
         };
         if let Some(icao) = clicked {
-            st.map.selected = (st.map.selected != Some(icao)).then_some(icao);
+            let next = (st.map.selected != Some(icao)).then_some(icao);
+            st.map.selected = next;
+            st.map.center = next.is_some();
         }
     }
 }
@@ -389,10 +398,20 @@ pub mod app {
                 }
                 AdsbMapKind::Air3d => {
                     let selected = self.map.selected;
-                    let clicked =
-                        self.globe.show(ui, &st.aircraft, &self.grid, selected, now, cfg, h);
+                    let clicked = self.globe.show(
+                        ui,
+                        &st.aircraft,
+                        &self.grid,
+                        selected,
+                        &mut self.map.center,
+                        now,
+                        cfg,
+                        h,
+                    );
                     if let Some(icao) = clicked {
-                        self.map.selected = (selected != Some(icao)).then_some(icao);
+                        let next = (selected != Some(icao)).then_some(icao);
+                        self.map.selected = next;
+                        self.map.center = next.is_some();
                     }
                 }
             }

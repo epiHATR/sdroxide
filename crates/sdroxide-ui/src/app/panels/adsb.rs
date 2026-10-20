@@ -277,7 +277,11 @@ impl SdroxideApp {
                 }
             });
         if let Some(icao) = pick {
-            self.adsb_map.selected = (selected != Some(icao)).then_some(icao);
+            let next = (selected != Some(icao)).then_some(icao);
+            self.adsb_map.selected = next;
+            if next.is_none() {
+                self.adsb_map.center = false;
+            }
         }
 
         if let Some(a) = card {
@@ -377,13 +381,22 @@ impl SdroxideApp {
                 );
 
                 ui.horizontal_wrapped(|ui| {
+                    let on = self.adsb_map.center;
                     if a.has_position()
-                        && crate::chrome::chip(ui, false, RichText::new("CENTER").size(10.0))
-                            .on_hover_text("Put this aircraft in the middle of the map")
+                        && crate::chrome::chip(ui, on, RichText::new("CENTER").size(10.0))
+                            .on_hover_text(if on {
+                                "Stop keeping this aircraft in the middle of the map"
+                            } else {
+                                "Put this aircraft in the middle of the map"
+                            })
                             .clicked()
-                        && let Some((lat, lon)) = a.lat.zip(a.lon)
                     {
-                        self.adsb_map.view.centre_on(lat, lon);
+                        if on {
+                            self.adsb_map.center = false;
+                        } else if let Some((lat, lon)) = a.lat.zip(a.lon) {
+                            self.adsb_map.center = true;
+                            self.adsb_map.view.centre_on(lat, lon);
+                        }
                     }
                 });
                 if !a.raw_hex.is_empty() {
@@ -461,10 +474,22 @@ impl SdroxideApp {
             AdsbMapKind::Air3d => {
                 let grid = self.digi_cfg_edit.my_grid.trim().to_owned();
                 let selected = self.adsb_map.selected;
-                let clicked =
-                    self.adsb_globe.show(ui, &st.aircraft, &grid, selected, now, cfg, map_h);
+                let clicked = self.adsb_globe.show(
+                    ui,
+                    &st.aircraft,
+                    &grid,
+                    selected,
+                    &mut self.adsb_map.center,
+                    now,
+                    cfg,
+                    map_h,
+                );
                 if let Some(icao) = clicked {
-                    self.adsb_map.selected = (selected != Some(icao)).then_some(icao);
+                    let next = (selected != Some(icao)).then_some(icao);
+                    self.adsb_map.selected = next;
+                    // Selecting on the globe centres and lights CENTER; a second
+                    // click on the same bird clears both.
+                    self.adsb_map.center = next.is_some();
                 }
             }
         }

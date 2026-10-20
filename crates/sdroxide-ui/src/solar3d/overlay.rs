@@ -140,7 +140,7 @@ pub fn ui(ui: &mut egui::Ui, st: &mut SolarUi) {
 
 /// Earth globe for the ADS-B MAP 3D pane: same wgpu Earth as the solar window,
 /// without the solar-system chrome. Returns the ICAO clicked this frame, if any.
-pub fn adsb_earth_pane(ui: &mut egui::Ui, st: &mut SolarUi) -> Option<u32> {
+pub fn adsb_earth_pane(ui: &mut egui::Ui, st: &mut SolarUi, center: &mut bool) -> Option<u32> {
     use super::camera;
     use super::scene;
 
@@ -163,15 +163,19 @@ pub fn adsb_earth_pane(ui: &mut egui::Ui, st: &mut SolarUi) -> Option<u32> {
     if st.focus() != super::state::Focus::Earth {
         st.set_focus(super::state::Focus::Earth);
     }
-    // Pivot is always the operator's QTH — never a free look-at on the map.
+    // Home reset: QTH look-at and drop any aircraft follow.
     if std::mem::take(&mut st.fly_home_pending) {
+        *center = false;
         if let Some(qth) = st.qth {
             camera::adsb_apply_home(st, qth);
         }
     }
-    st.adsb_look = st.qth;
+    // Default look-at is the QTH until CENTER parks it on an aircraft.
+    if !*center && st.adsb_look.is_none() {
+        st.adsb_look = st.qth;
+    }
 
-    interact_adsb(ui, st, &resp);
+    interact_adsb(ui, st, &resp, center);
     let dt = ui.input(|i| i.stable_dt);
     if camera::adsb_step_north(st, dt) {
         crate::repaint::animate(ui.ctx());
@@ -256,11 +260,12 @@ fn adsb_north_chip(ui: &egui::Ui, st: &mut SolarUi, rect: egui::Rect) {
         });
 }
 
-/// Orbit around the QTH (drag) and zoom with the scroll wheel only.
-fn interact_adsb(ui: &egui::Ui, st: &mut SolarUi, resp: &egui::Response) {
+/// Orbit around the look-at (drag) and zoom with the scroll wheel only.
+fn interact_adsb(ui: &egui::Ui, st: &mut SolarUi, resp: &egui::Response, center: &mut bool) {
     use super::camera::{ADSB_DIST_MAX, ADSB_DIST_MIN, ADSB_ELEV_MAX, ADSB_ELEV_MIN};
 
     let mut touched = false;
+    let mut orbited = false;
     st.adsb_grab = None;
 
     let pinch = ui.input(|i| i.multi_touch()).filter(|mt| resp.rect.contains(mt.center_pos));
@@ -275,14 +280,17 @@ fn interact_adsb(ui: &egui::Ui, st: &mut SolarUi, resp: &egui::Response) {
     } else if resp.dragged_by(egui::PointerButton::Primary)
         || resp.dragged_by(egui::PointerButton::Secondary)
     {
-        // Drag orbits the camera around the QTH — it never moves the focus.
+        // Drag orbits the camera around the look-at — it never pans the focus.
         let d = resp.drag_delta();
         if d.x != 0.0 {
             st.adsb_north_fly = None;
         }
         st.view.yaw -= d.x * 0.005;
         st.view.pitch = (st.view.pitch + d.y * 0.004).clamp(ADSB_ELEV_MIN, ADSB_ELEV_MAX);
-        touched |= d != egui::Vec2::ZERO;
+        if d != egui::Vec2::ZERO {
+            touched = true;
+            orbited = true;
+        }
     }
 
     if resp.hovered() {
@@ -304,6 +312,12 @@ fn interact_adsb(ui: &egui::Ui, st: &mut SolarUi, resp: &egui::Response) {
         st.view_fly.cancel();
         st.focus_override = None;
         st.fly_home_pending = false;
+    }
+    // Orbiting is a free look: stop tracking the selected aircraft. Zoom alone
+    // keeps CENTER on so the bird stays under the nose while the operator
+    // pulls in.
+    if orbited {
+        *center = false;
     }
     if touched || resp.is_pointer_button_down_on() {
         crate::repaint::animate(ui.ctx());

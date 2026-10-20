@@ -142,12 +142,21 @@ pub struct AdsbMapState {
     pub view: MapView,
     /// The aircraft whose card is open, by ICAO address.
     pub selected: Option<u32>,
+    /// Keep the map / globe centred on [`Self::selected`] (CENTER chip lit).
+    /// Cleared when the selection drops, the operator pans the 3D view, or they
+    /// turn the chip off.
+    pub center: bool,
     pub kind: AdsbMapKind,
 }
 
 impl Default for AdsbMapState {
     fn default() -> Self {
-        Self { view: MapView::default(), selected: None, kind: AdsbMapKind::Flat }
+        Self {
+            view: MapView::default(),
+            selected: None,
+            center: false,
+            kind: AdsbMapKind::Flat,
+        }
     }
 }
 
@@ -268,6 +277,18 @@ pub fn show(
     // where it used to be either.
     let live: Vec<&AdsbAircraft> =
         aircraft.iter().filter(|a| !a.pos_stale(now, cfg.drop_map_s)).collect();
+
+    // CENTER follow: keep the selected aircraft under the middle of the map.
+    if state.center {
+        match state
+            .selected
+            .and_then(|icao| live.iter().find(|a| a.icao == icao))
+            .and_then(|a| a.lat.zip(a.lon))
+        {
+            Some((lat, lon)) => state.view.centre_on(lat, lon),
+            None => state.center = false,
+        }
+    }
 
     // ── the view ──
     let aspect = (rect.height() / rect.width()) as f64;
@@ -463,10 +484,16 @@ pub fn show(
         resp.clone().on_hover_text(tip);
         if resp.clicked() {
             clicked = Some(a.icao);
+            // Flat-map pick does not arm CENTER — the chip and the 3D globe do.
+            // Switching aircraft drops a prior follow.
+            if state.selected != Some(a.icao) {
+                state.center = false;
+            }
             state.selected = clicked;
         }
     } else if resp.clicked() {
         state.selected = None;
+        state.center = false;
     }
 
     if manual && resp.hovered() {

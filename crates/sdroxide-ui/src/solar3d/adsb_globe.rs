@@ -47,12 +47,16 @@ impl AdsbGlobe {
     }
 
     /// Paint the globe into the ADS-B MAP pane. Returns the ICAO clicked.
+    ///
+    /// When `center` is set, the camera look-at tracks the selected aircraft.
+    /// Orbit/zoom by the operator clears `center` so free look sticks.
     pub fn show(
         &mut self,
         ui: &mut egui::Ui,
         aircraft: &[AdsbAircraft],
         grid: &str,
         selected: Option<u32>,
+        center: &mut bool,
         now: i64,
         cfg: AdsbSettings,
         max_h: f32,
@@ -86,8 +90,16 @@ impl AdsbGlobe {
                 .filter_map(|a| marker(a, selected))
                 .collect(),
         };
+        if *center {
+            if let Some(m) = self.state.adsb.aircraft.iter().find(|a| a.selected) {
+                self.state.adsb_look = Some((m.lat, m.lon));
+            } else {
+                *center = false;
+            }
+        }
 
-        overlay::adsb_earth_pane(ui, &mut self.state)
+        let clicked = overlay::adsb_earth_pane(ui, &mut self.state, center);
+        clicked
     }
 }
 
