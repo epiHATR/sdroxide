@@ -1040,6 +1040,9 @@ pub struct SdroxideApp {
     // ── VDL2 dumpvdl2-JSON UDP (Settings → Servers / VDL2 SETUP) ──
     vdl2_udp_edit: sdroxide_types::Vdl2UdpConfig,
     vdl2_udp_seeded: bool,
+    // ── ADS-B Mode-S Beast TCP (Settings → Servers) ──
+    adsb_beast_edit: sdroxide_types::AdsbBeastConfig,
+    adsb_beast_seeded: bool,
     /// Live status from `RadioEvent::RigctldStatus`. Same shape as the TCI
     /// server's, so the two share one status type.
     rigctld_status: Option<TciServerStatus>,
@@ -1821,6 +1824,8 @@ impl SdroxideApp {
             mqtt_seeded: false,
             vdl2_udp_edit: sdroxide_types::Vdl2UdpConfig::default(),
             vdl2_udp_seeded: false,
+            adsb_beast_edit: sdroxide_types::AdsbBeastConfig::default(),
+            adsb_beast_seeded: false,
             rigctld_status: None,
             tci_srv_edit: sdroxide_types::TciServerConfig::default(),
             tci_srv_seeded: false,

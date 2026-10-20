@@ -1,10 +1,10 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AgcMode, Band, DigiConfig, Direction, ImageKind, LoginTarget, Mode, MqttConfig, NetworkConfig,
-    NrLevel, QsoStep, RadioConfig, RigctldConfig, RotatorConfig, RxId, SatConfig, SatLockConfig,
-    SkimmerSettings, SpectrumConfig, SstvMode, TciServerConfig, TxEqState, UploadTarget,
-    Vdl2UdpConfig, Vfo, WsjtxConfig,
+    AdsbBeastConfig, AgcMode, Band, DigiConfig, Direction, ImageKind, LoginTarget, Mode,
+    MqttConfig, NetworkConfig, NrLevel, QsoStep, RadioConfig, RigctldConfig, RotatorConfig, RxId,
+    SatConfig, SatLockConfig, SkimmerSettings, SpectrumConfig, SstvMode, TciServerConfig,
+    TxEqState, UploadTarget, Vdl2UdpConfig, Vfo, WsjtxConfig,
 };
 
 /// The single control vocabulary. The GUI, the WebSocket protocol, and the
@@ -1252,4 +1252,9 @@ pub enum Command {
     /// Echoed as [`crate::RadioEvent::BackgroundTasks`]. Appended for the
     /// usual reason — postcard numbers variants by position.
     SetBackgroundTasks(crate::BackgroundTasksConfig),
+
+    /// Apply (and persist) the ADS-B Mode-S Beast TCP listen: bind, port, and
+    /// whether the server runs. Output only — Settings → Servers. Appended for
+    /// the usual reason.
+    SetAdsbBeastConfig(AdsbBeastConfig),
 }

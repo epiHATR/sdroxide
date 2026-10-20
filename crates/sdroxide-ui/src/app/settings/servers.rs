@@ -596,9 +596,9 @@ pub(in crate::app) fn settings_mqtt_tab(
     }
     ui.label(
         RichText::new(
-            "Publishes decoded traffic as JSON to an MQTT broker — digi, FT8, WSPR, radiosonde and \
-             Meshtastic. Output only: nothing on the broker can touch the radio. Leave a topic \
-             empty to skip that kind.",
+            "Publishes decoded traffic as JSON to an MQTT broker — digi, FT8, WSPR, radiosonde, \
+             Meshtastic and ADS-B. Output only: nothing on the broker can touch the radio. Leave a \
+             topic empty to skip that kind.",
         )
         .weak(),
     );
@@ -665,6 +665,7 @@ pub(in crate::app) fn settings_mqtt_tab(
                 ("WSPR", &mut cfg.wspr.topic, "sdroxide/WSPR"),
                 ("SONDE", &mut cfg.sonde.topic, "sdroxide/SONDE"),
                 ("MESH", &mut cfg.mesh.topic, "sdroxide/MESH"),
+                ("ADSB", &mut cfg.adsb.topic, "sdroxide/ADSB"),
             ] {
                 ui.label(label);
                 crate::chrome::field(
@@ -748,6 +749,63 @@ pub(in crate::app) fn settings_vdl2_udp_tab(
         crate::theme::INK_ON_CYAN(),
     )
     .on_hover_text("Persist and (re)open the UDP socket")
+    .clicked()
+    {
+        *apply = true;
+    }
+}
+
+/// ADS-B Mode-S Beast TCP listen — dump1090 / readsb compatible.
+pub(in crate::app) fn settings_adsb_beast_tab(
+    ui: &mut egui::Ui,
+    cfg: &mut sdroxide_types::AdsbBeastConfig,
+    seeded: bool,
+    apply: &mut bool,
+) {
+    ui.label(RichText::new("ADS-B Beast TCP").size(14.0).strong().color(crate::theme::CYAN()));
+    ui.add_space(4.0);
+    if !seeded {
+        ui.label(RichText::new("Waiting for the station's ADS-B Beast configuration…").weak());
+        return;
+    }
+    ui.label(
+        RichText::new(
+            "Serves accepted Mode-S frames in dump1090 Binary Beast format over TCP (default \
+             port 30005). Clients such as Virtual Radar Server, tar1090, and PlanePlotter can \
+             connect while ADS-B is decoding. Output only — nothing on the socket can touch the \
+             radio. Independent of MQTT: each has its own Enable.",
+        )
+        .weak(),
+    );
+    ui.add_space(6.0);
+    crate::chrome::checkbox(ui, &mut cfg.enabled, "Enable");
+    ui.add_space(6.0);
+    ui.add_enabled_ui(cfg.enabled, |ui| {
+        egui::Grid::new("adsb-beast-grid").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
+            ui.label("Listen on");
+            crate::chrome::field(
+                ui,
+                egui::TextEdit::singleline(&mut cfg.bind).desired_width(160.0).hint_text("0.0.0.0"),
+            )
+            .on_hover_text("0.0.0.0 reaches every interface; 127.0.0.1 stays on this machine.");
+            ui.end_row();
+
+            ui.label("Port");
+            ui.add(egui::DragValue::new(&mut cfg.port).range(1..=65535))
+                .on_hover_text("30005 is the dump1090 / readsb Beast default");
+            ui.end_row();
+        });
+    });
+
+    ui.add_space(8.0);
+    if crate::chrome::chip_accent(
+        ui,
+        false,
+        RichText::new(" APPLY ").strong(),
+        crate::theme::GREEN(),
+        crate::theme::INK_ON_CYAN(),
+    )
+    .on_hover_text("Persist and (re)bind the Beast TCP listener")
     .clicked()
     {
         *apply = true;

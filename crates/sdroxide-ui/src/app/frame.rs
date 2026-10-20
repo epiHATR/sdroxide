@@ -1681,6 +1681,10 @@ impl SdroxideApp {
                         self.vdl2_udp_edit = c.vdl2_udp.clone();
                         self.vdl2_udp_seeded = true;
                     }
+                    if !self.adsb_beast_seeded {
+                        self.adsb_beast_edit = c.adsb_beast.clone();
+                        self.adsb_beast_seeded = true;
+                    }
                     if !self.sat_cfg_seeded {
                         self.sat_cfg_edit = c.sat.clone();
                         self.sat_cfg = std::sync::Arc::new(c.sat.clone());

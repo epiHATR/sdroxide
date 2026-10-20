@@ -1619,7 +1619,11 @@ use sdroxide_types::{
 ///
 /// v198: [`sdroxide_types::BackgroundTaskTz`] (UTC vs local wall-clock) on
 /// background tasks — daily/weekly match in the picked zone.
-pub const PROTO_VERSION: u16 = 198;
+///
+/// v199: `Command::SetAdsbBeastConfig` + `StationConfig.adsb_beast`
+/// (`adsb_beast.json`) — dump1090-compatible Mode-S Beast TCP listen; and
+/// `MqttConfig.adsb` topic for decoded ADS-B aircraft JSON (Settings → Servers).
+pub const PROTO_VERSION: u16 = 199;
 const VERSION_BYTE: u8 = 0x12;
 
 #[derive(Debug, thiserror::Error)]

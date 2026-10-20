@@ -6,8 +6,9 @@
 //! the broker can touch the radio.
 //!
 //! Each decode kind has its own topic string. Defaults are `sdroxide/DIGI`,
-//! `sdroxide/FT8`, `sdroxide/WSPR`, `sdroxide/SONDE`, and `sdroxide/MESH`. An
-//! empty topic means that kind does not publish, even while MQTT is enabled.
+//! `sdroxide/FT8`, `sdroxide/WSPR`, `sdroxide/SONDE`, `sdroxide/MESH`, and
+//! `sdroxide/ADSB`. An empty topic means that kind does not publish, even while
+//! MQTT is enabled.
 
 use serde::{Deserialize, Serialize};
 
@@ -55,9 +56,12 @@ pub struct MqttConfig {
     /// Meshtastic mesh messages.
     pub mesh: MqttTopic,
     /// FT8-only stream (same payload as digi, only while the radio is in FT8).
-    /// Appended last for postcard layout of [`crate::StationConfig`].
     #[serde(default)]
     pub ft8: MqttTopic,
+    /// ADS-B aircraft table snapshots (compact JSON, no track history).
+    /// Appended last for postcard layout of [`crate::StationConfig`].
+    #[serde(default)]
+    pub adsb: MqttTopic,
 }
 
 impl Default for MqttConfig {
@@ -77,6 +81,7 @@ impl Default for MqttConfig {
             sonde: MqttTopic { topic: "sdroxide/SONDE".into() },
             mesh: MqttTopic { topic: "sdroxide/MESH".into() },
             ft8: MqttTopic { topic: "sdroxide/FT8".into() },
+            adsb: MqttTopic { topic: "sdroxide/ADSB".into() },
         }
     }
 }

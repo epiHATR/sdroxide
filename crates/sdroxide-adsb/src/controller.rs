@@ -35,6 +35,7 @@ use sdroxide_dsp::Complex32 as C32;
 use sdroxide_types::{AdsbSettings, AdsbStatus};
 use tracing::info;
 
+use crate::beast::{BeastFrame, BeastServer};
 use crate::demod::Demod;
 use crate::frame::{self, Rejected};
 use crate::track::Tracker;
@@ -63,6 +64,8 @@ enum Ctl {
     Config(AdsbSettings),
     /// Where the receiver is, for the surface-position reference.
     Home(Option<(f64, f64)>),
+    /// Mode-S Beast TCP sink. `None` clears it (server stopped / disabled).
+    Beast(Option<Sender<BeastFrame>>),
     Stop,
 }
 
@@ -94,6 +97,7 @@ impl AdsbController {
                             }
                             Ok(Ctl::Config(next)) => w.set_config(next),
                             Ok(Ctl::Home(h)) => w.set_home(h),
+                            Ok(Ctl::Beast(tx)) => w.beast_tx = tx,
                             Ok(Ctl::Stop) | Err(_) => break,
                         },
                         recv(iq_rx) -> msg => match msg {
@@ -142,6 +146,11 @@ impl AdsbController {
         let _ = self.ctl_tx.send(Ctl::Home(home));
     }
 
+    /// Attach or clear the Mode-S Beast frame sink (engine-owned TCP server).
+    pub fn set_beast_sink(&self, tx: Option<Sender<BeastFrame>>) {
+        let _ = self.ctl_tx.send(Ctl::Beast(tx));
+    }
+
     /// Drain whatever the worker has produced since the last poll. Non-blocking.
     pub fn poll(&self) -> Vec<AdsbAction> {
         let mut out = Vec::new();
@@ -173,6 +182,8 @@ struct Worker {
     unmatched: u64,
     /// Scratch, kept so a block does not allocate.
     cand: Vec<crate::demod::Candidate>,
+    /// Optional Beast TCP sink — `try_send` only from the accept path.
+    beast_tx: Option<Sender<BeastFrame>>,
 }
 
 impl Worker {
@@ -188,6 +199,7 @@ impl Worker {
             bad_crc: 0,
             unmatched: 0,
             cand: Vec::new(),
+            beast_tx: None,
         }
     }
 
@@ -224,6 +236,17 @@ impl Worker {
             match frame::accept(&c.bytes, |icao| self.tracker.knows(icao, now)) {
                 Ok(acc) => {
                     self.frames += 1;
+                    if let Some(tx) = self.beast_tx.as_ref() {
+                        BeastServer::try_push(
+                            tx,
+                            BeastFrame {
+                                bytes: c.bytes.clone(),
+                                rssi_dbfs: c.rssi_dbfs,
+                                sample_index: self.samples,
+                                rate_hz: self.rate_hz,
+                            },
+                        );
+                    }
                     self.tracker.absorb(&acc, &c.bytes, c.rssi_dbfs, now, mono);
                 }
                 Err(Rejected::BadCrc | Rejected::Malformed) => self.bad_crc += 1,

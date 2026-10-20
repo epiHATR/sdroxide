@@ -57,6 +57,7 @@
 //! only just, it is
 //! [`sdroxide_types::AdsbStatus::degraded`], for the same reason.
 
+mod beast;
 mod controller;
 pub mod cpr;
 pub mod crc;
@@ -65,6 +66,7 @@ pub mod frame;
 pub mod message;
 pub mod track;
 
+pub use beast::{BeastFrame, BeastServer, encode_beast};
 pub use controller::{AdsbAction, AdsbController};
 pub use demod::{Candidate, Demod, modulate, modulate_at};
 pub use frame::{Accepted, Rejected, accept};

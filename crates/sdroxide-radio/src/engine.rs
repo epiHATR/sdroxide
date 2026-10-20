@@ -13,7 +13,7 @@ use std::time::{Duration, Instant, SystemTime};
 use crossbeam_channel::{Receiver, Sender, TryRecvError};
 use tracing::{debug, info, trace, warn};
 
-use sdroxide_adsb::{AdsbAction, AdsbController};
+use sdroxide_adsb::{AdsbAction, AdsbController, BeastServer};
 use sdroxide_ais::{AisAction, AisController};
 use sdroxide_config::BandStacks;
 use sdroxide_digi::{
@@ -2935,11 +2935,16 @@ struct Engine {
     mqtt_cfg: sdroxide_types::MqttConfig,
     /// Last Meshtastic message unix already sent to MQTT (dedupe).
     mqtt_mesh_last_unix: i64,
+    /// Last ADS-B aircraft publish fingerprint per ICAO: `(last_at, frames)`.
+    mqtt_adsb_seen: HashMap<u32, (i64, u32)>,
     /// dumpvdl2-compatible VDL2 JSON over UDP, if switched on.
     vdl2_udp: Option<sdroxide_vdl2::Vdl2JsonUdp>,
     vdl2_udp_cfg: sdroxide_types::Vdl2UdpConfig,
     /// Fingerprint of the last VDL2 message exported over UDP (dedupe).
     vdl2_udp_last: Option<(i64, u32, u32, usize)>,
+    /// Mode-S Beast TCP listen (Settings → Servers), if switched on.
+    adsb_beast: Option<BeastServer>,
+    adsb_beast_cfg: sdroxide_types::AdsbBeastConfig,
     /// Cached Maidenhead for PSK / MQTT / spots. Refreshed when digi or radio
     /// identity changes — never reloads `radio.json` on a per-decode path.
     report_grid_cache: String,
@@ -4373,9 +4378,12 @@ fn engine_thread(
         mqtt: sdroxide_net::MqttPublisher::default(),
         mqtt_cfg: sdroxide_types::MqttConfig::default(),
         mqtt_mesh_last_unix: 0,
+        mqtt_adsb_seen: HashMap::new(),
         vdl2_udp: None,
         vdl2_udp_cfg: sdroxide_types::Vdl2UdpConfig::default(),
         vdl2_udp_last: None,
+        adsb_beast: None,
+        adsb_beast_cfg: sdroxide_types::AdsbBeastConfig::default(),
         report_grid_cache: String::new(),
         wsjtx_beat: Instant::now(),
         rigctld: None,
@@ -4552,6 +4560,8 @@ fn engine_thread(
     engine.sync_mqtt();
     engine.vdl2_udp_cfg = engine.store.load_vdl2_udp_config();
     engine.sync_vdl2_udp();
+    engine.adsb_beast_cfg = engine.store.load_adsb_beast_config();
+    engine.sync_adsb_beast();
     // The satellite additions: the display tracker lives in the UI, but the
     // element sets are persisted here — and the satellite *lock*, when the
     // operator engages one, runs here too (see `poll_sat_track`).
@@ -6623,6 +6633,50 @@ impl Engine {
         self.mqtt.apply(self.mqtt_cfg.clone(), &self.digi_config.my_call, &grid);
     }
 
+    /// Start, stop, or rebind the Mode-S Beast TCP listen.
+    ///
+    /// Clears the ADS-B worker's sink before dropping the old server so a
+    /// dying socket never receives `try_send`s from demod.
+    fn sync_adsb_beast(&mut self) {
+        let cfg = &self.adsb_beast_cfg;
+        let want = cfg.enabled && cfg.port > 0;
+        if want && self.adsb_beast.as_ref().is_some_and(|s| s.addr() == cfg.addr()) {
+            // Still attach if the decoder just came up under an already-running
+            // server.
+            self.wire_adsb_beast_sink();
+            return;
+        }
+        if let Some(d) = self.adsb.as_ref() {
+            d.set_beast_sink(None);
+        }
+        let had = self.adsb_beast.take().is_some();
+        if !want {
+            if had {
+                info!("ADS-B Beast TCP stopped");
+            }
+            return;
+        }
+        match BeastServer::start(cfg) {
+            Ok(s) => {
+                self.adsb_beast = Some(s);
+                self.wire_adsb_beast_sink();
+            }
+            Err(e) => warn!("ADS-B Beast TCP: {e}"),
+        }
+    }
+
+    fn wire_adsb_beast_sink(&self) {
+        let Some(s) = self.adsb_beast.as_ref() else {
+            if let Some(d) = self.adsb.as_ref() {
+                d.set_beast_sink(None);
+            }
+            return;
+        };
+        if let Some(d) = self.adsb.as_ref() {
+            d.set_beast_sink(Some(s.frame_tx()));
+        }
+    }
+
     /// Start, retarget or stop the VDL2 dumpvdl2-JSON UDP output.
     fn sync_vdl2_udp(&mut self) {
         let cfg = &self.vdl2_udp_cfg;
@@ -6723,6 +6777,20 @@ impl Engine {
             newest = newest.max(m.unix);
         }
         *last_unix = newest;
+    }
+
+    /// Publish aircraft that moved since the last status (icao → last_at, frames).
+    fn mqtt_publish_adsb(&mut self, aircraft: &[sdroxide_types::AdsbAircraft]) {
+        let mut keep = HashMap::with_capacity(aircraft.len());
+        for a in aircraft {
+            let fp = (a.last_at, a.frames);
+            let prev = self.mqtt_adsb_seen.get(&a.icao).copied();
+            if prev != Some(fp) {
+                self.mqtt.publish_adsb(a);
+            }
+            keep.insert(a.icao, fp);
+        }
+        self.mqtt_adsb_seen = keep;
     }
 
     /// Notice the dial has crossed into another band, and drop what only meant
@@ -10014,6 +10082,16 @@ impl Engine {
                 return;
             }
 
+            SetAdsbBeastConfig(cfg) => {
+                if let Err(e) = self.store.save_adsb_beast_config(&cfg) {
+                    warn!("saving ADS-B Beast config: {e}");
+                }
+                self.adsb_beast_cfg = cfg;
+                self.sync_adsb_beast();
+                self.emit_station_config();
+                return;
+            }
+
             // Transmit-image presets and the received-picture stores (no
             // RadioState change → return before the State emit below).
             ImageSetSlot { slot, bytes } => {
@@ -11449,12 +11527,14 @@ impl Engine {
                 self.adsb = Some(c);
                 self.adsb_ddc = Some(ddc);
                 self.adsb_center_hz = center;
+                self.wire_adsb_beast_sink();
                 info!(rate = out_rate, center, "ADS-B decoder started");
             }
             (false, true) => {
                 self.adsb = None;
                 self.adsb_ddc = None;
                 self.adsb_buf.clear();
+                self.mqtt_adsb_seen.clear();
                 info!("ADS-B decoder stopped");
             }
             (true, true) => self.sync_adsb_window(),
@@ -11582,35 +11662,40 @@ impl Engine {
     /// where the front end's capabilities are.
     fn poll_adsb(&mut self) {
         let unavailable = self.adsb_unavailable();
-        let Some(d) = self.adsb.as_ref() else {
-            // Nothing running. On the ADS-B mode that is a fact worth sending —
-            // it is the only way the panel can say what is wrong — but off it
-            // there is nobody listening.
-            //
-            // Once, not per block: this runs at the front end's block rate,
-            // which on a fast source is hundreds of times a second, and every
-            // one of them would go to the UI and to every remote client.
-            if self.state.rx[0].mode.is_adsb() && self.adsb_idle_sent.as_ref() != Some(&unavailable)
-            {
-                self.adsb_idle_sent = Some(unavailable.clone());
-                let st = sdroxide_types::AdsbStatus {
-                    unavailable,
-                    suggest_center_hz: Some(sdroxide_types::ADSB_FREQ_HZ),
-                    ..Default::default()
-                };
-                let _ = self.event_tx.send(RadioEvent::AdsbStatus(Box::new(st)));
+        let actions = match self.adsb.as_ref() {
+            None => {
+                // Nothing running. On the ADS-B mode that is a fact worth sending —
+                // it is the only way the panel can say what is wrong — but off it
+                // there is nobody listening.
+                //
+                // Once, not per block: this runs at the front end's block rate,
+                // which on a fast source is hundreds of times a second, and every
+                // one of them would go to the UI and to every remote client.
+                if self.state.rx[0].mode.is_adsb()
+                    && self.adsb_idle_sent.as_ref() != Some(&unavailable)
+                {
+                    self.adsb_idle_sent = Some(unavailable.clone());
+                    let st = sdroxide_types::AdsbStatus {
+                        unavailable,
+                        suggest_center_hz: Some(sdroxide_types::ADSB_FREQ_HZ),
+                        ..Default::default()
+                    };
+                    let _ = self.event_tx.send(RadioEvent::AdsbStatus(Box::new(st)));
+                }
+                return;
             }
-            return;
+            Some(d) => d.poll(),
         };
         // Running again: whatever was last said about it being down is stale,
         // so a later stop says it afresh.
         self.adsb_idle_sent = None;
         let degraded = self.adsb_degraded();
-        for action in d.poll() {
+        for action in actions {
             let AdsbAction::Status(mut st) = action;
             st.unavailable = unavailable.clone();
             st.degraded = degraded.clone();
             st.suggest_center_hz = unavailable.is_some().then_some(sdroxide_types::ADSB_FREQ_HZ);
+            self.mqtt_publish_adsb(&st.aircraft);
             let _ = self.event_tx.send(RadioEvent::AdsbStatus(st));
         }
     }
@@ -13066,6 +13151,7 @@ impl Engine {
                 digi_presets: sdroxide_types::digi_presets().to_vec(),
                 mqtt: self.mqtt_cfg.clone(),
                 vdl2_udp: self.vdl2_udp_cfg.clone(),
+                adsb_beast: self.adsb_beast_cfg.clone(),
             },
         )));
     }

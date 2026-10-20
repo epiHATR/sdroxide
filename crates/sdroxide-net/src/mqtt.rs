@@ -1,17 +1,17 @@
-//! MQTT decode publisher: push digi / WSPR / sonde / mesh JSON to a broker.
+//! MQTT decode publisher: push digi / WSPR / sonde / mesh / ADS-B JSON to a broker.
 //!
 //! A dedicated thread runs rumqttc's connection loop; the engine only
 //! `try_send`s typed jobs. JSON encoding and broker I/O happen off the radio
 //! thread so a slow or dead broker never stalls decode.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
 use crossbeam_channel::{Receiver, Sender, TrySendError};
 use rumqttc::{Client, MqttOptions, QoS, Transport};
-use sdroxide_types::{Decode, MeshtasticMessage, MqttConfig, Rs41Sonde, WsprSpot};
+use sdroxide_types::{AdsbAircraft, Decode, MeshtasticMessage, MqttConfig, Rs41Sonde, WsprSpot};
 use serde::Serialize;
 use tracing::{info, warn};
 
@@ -32,6 +32,7 @@ enum JsonBody {
     Wspr(WsprPayload),
     Sonde(SondePayload),
     Mesh(MeshPayload),
+    Adsb(AdsbPayload),
 }
 
 /// Running MQTT publisher, or a no-op stub when disabled.
@@ -99,11 +100,7 @@ impl MqttPublisher {
         let stop_t = Arc::clone(&stop);
         let client_id = if cfg.client_id.trim().is_empty() {
             let call = rx_call.trim();
-            if call.is_empty() {
-                "sdroxide".into()
-            } else {
-                format!("sdroxide-{call}")
-            }
+            if call.is_empty() { "sdroxide".into() } else { format!("sdroxide-{call}") }
         } else {
             cfg.client_id.trim().to_string()
         };
@@ -207,10 +204,7 @@ impl MqttPublisher {
             rx_call: self.rx_call.clone(),
             rx_grid: self.rx_grid.clone(),
         };
-        self.try_enqueue(
-            tx,
-            Job::Json { topic: topic.to_string(), body: JsonBody::Wspr(body) },
-        );
+        self.try_enqueue(tx, Job::Json { topic: topic.to_string(), body: JsonBody::Wspr(body) });
     }
 
     pub fn publish_sonde(&self, s: &Rs41Sonde) {
@@ -230,10 +224,7 @@ impl MqttPublisher {
             rx_call: self.rx_call.clone(),
             rx_grid: self.rx_grid.clone(),
         };
-        self.try_enqueue(
-            tx,
-            Job::Json { topic: topic.to_string(), body: JsonBody::Sonde(body) },
-        );
+        self.try_enqueue(tx, Job::Json { topic: topic.to_string(), body: JsonBody::Sonde(body) });
     }
 
     pub fn publish_mesh(&self, m: &MeshtasticMessage) {
@@ -249,10 +240,38 @@ impl MqttPublisher {
             rx_call: self.rx_call.clone(),
             rx_grid: self.rx_grid.clone(),
         };
-        self.try_enqueue(
-            tx,
-            Job::Json { topic: topic.to_string(), body: JsonBody::Mesh(body) },
-        );
+        self.try_enqueue(tx, Job::Json { topic: topic.to_string(), body: JsonBody::Mesh(body) });
+    }
+
+    /// One aircraft row as compact JSON. Omits track history to keep payloads small.
+    pub fn publish_adsb(&self, a: &AdsbAircraft) {
+        let Some(topic) = self.cfg.adsb.trimmed() else { return };
+        let Some(tx) = &self.tx else { return };
+        let body = AdsbPayload {
+            ts: a.last_at,
+            icao: a.hex(),
+            callsign: a.callsign.clone(),
+            category: a.category.clone(),
+            lat: a.lat,
+            lon: a.lon,
+            altitude_ft: a.altitude_ft,
+            gnss_altitude_ft: a.gnss_altitude_ft,
+            ground_speed_kt: a.ground_speed_kt,
+            track_deg: a.track_deg,
+            vertical_rate_fpm: a.vertical_rate_fpm,
+            on_ground: a.on_ground,
+            squawk: a.squawk,
+            emergency: a.emergency.clone(),
+            rssi_dbfs: a.rssi_dbfs,
+            frames: a.frames,
+            source: a.source.label().to_string(),
+            first_at: a.first_at,
+            last_at: a.last_at,
+            last_pos_at: a.last_pos_at,
+            rx_call: self.rx_call.clone(),
+            rx_grid: self.rx_grid.clone(),
+        };
+        self.try_enqueue(tx, Job::Json { topic: topic.to_string(), body: JsonBody::Adsb(body) });
     }
 
     fn try_enqueue(&self, tx: &Sender<Job>, job: Job) {
@@ -408,6 +427,32 @@ struct MeshPayload {
     rx_grid: String,
 }
 
+#[derive(Debug, Serialize)]
+struct AdsbPayload {
+    ts: i64,
+    icao: String,
+    callsign: String,
+    category: Option<String>,
+    lat: Option<f64>,
+    lon: Option<f64>,
+    altitude_ft: Option<i32>,
+    gnss_altitude_ft: Option<i32>,
+    ground_speed_kt: Option<f32>,
+    track_deg: Option<f32>,
+    vertical_rate_fpm: Option<i32>,
+    on_ground: bool,
+    squawk: Option<u16>,
+    emergency: Option<String>,
+    rssi_dbfs: f32,
+    frames: u32,
+    source: String,
+    first_at: i64,
+    last_at: i64,
+    last_pos_at: i64,
+    rx_call: String,
+    rx_grid: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -469,5 +514,42 @@ mod tests {
         let v: serde_json::Value = serde_json::to_value(&body).unwrap();
         assert_eq!(v["type"], "RS41");
         assert!(v.get("type_").is_none());
+    }
+
+    #[test]
+    fn adsb_payload_omits_track() {
+        let mut a = AdsbAircraft::new(0x3C6444, 1_000);
+        a.callsign = "DLH123".into();
+        a.lat = Some(48.1);
+        a.lon = Some(11.5);
+        a.track.push((48.1, 11.5));
+        let body = AdsbPayload {
+            ts: a.last_at,
+            icao: a.hex(),
+            callsign: a.callsign.clone(),
+            category: None,
+            lat: a.lat,
+            lon: a.lon,
+            altitude_ft: None,
+            gnss_altitude_ft: None,
+            ground_speed_kt: None,
+            track_deg: None,
+            vertical_rate_fpm: None,
+            on_ground: false,
+            squawk: None,
+            emergency: None,
+            rssi_dbfs: a.rssi_dbfs,
+            frames: a.frames,
+            source: a.source.label().to_string(),
+            first_at: a.first_at,
+            last_at: a.last_at,
+            last_pos_at: a.last_pos_at,
+            rx_call: "XV4HT".into(),
+            rx_grid: "OL20".into(),
+        };
+        let v: serde_json::Value = serde_json::to_value(&body).unwrap();
+        assert_eq!(v["icao"], "3C6444");
+        assert_eq!(v["callsign"], "DLH123");
+        assert!(v.get("track").is_none());
     }
 }

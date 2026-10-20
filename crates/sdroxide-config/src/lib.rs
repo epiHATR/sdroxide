@@ -908,6 +908,17 @@ impl Store {
     ) -> Result<(), ConfigError> {
         self.save("vdl2_udp.json", cfg)
     }
+
+    pub fn load_adsb_beast_config(&self) -> sdroxide_types::AdsbBeastConfig {
+        self.load("adsb_beast.json")
+    }
+
+    pub fn save_adsb_beast_config(
+        &self,
+        cfg: &sdroxide_types::AdsbBeastConfig,
+    ) -> Result<(), ConfigError> {
+        self.save("adsb_beast.json", cfg)
+    }
 }
 
 /// One radio in the station (`radios.json`).
@@ -1941,6 +1952,15 @@ pub fn load_vdl2_udp_config() -> sdroxide_types::Vdl2UdpConfig {
 
 pub fn save_vdl2_udp_config(cfg: &sdroxide_types::Vdl2UdpConfig) -> Result<(), ConfigError> {
     Store::station().save_vdl2_udp_config(cfg)
+}
+
+/// ADS-B Mode-S Beast TCP listen (Settings → Servers). Owned by the engine.
+pub fn load_adsb_beast_config() -> sdroxide_types::AdsbBeastConfig {
+    Store::station().load_adsb_beast_config()
+}
+
+pub fn save_adsb_beast_config(cfg: &sdroxide_types::AdsbBeastConfig) -> Result<(), ConfigError> {
+    Store::station().save_adsb_beast_config(cfg)
 }
 
 /// Control-input bindings: keyboard chords, panadapter mouse behaviour and the

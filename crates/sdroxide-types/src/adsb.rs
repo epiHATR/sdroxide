@@ -372,6 +372,36 @@ impl AdsbSettings {
     }
 }
 
+/// Mode-S Beast TCP output (`adsb_beast.json`, Settings → Servers).
+///
+/// dump1090-compatible binary stream on a TCP listen port (default 30005).
+/// Output only — clients connect and read; nothing on the socket can touch the
+/// radio. Off by default.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AdsbBeastConfig {
+    pub enabled: bool,
+    /// Listen address. `0.0.0.0` reaches every interface; `127.0.0.1` stays local.
+    pub bind: String,
+    /// TCP port. 30005 is the dump1090 / readsb Beast default.
+    pub port: u16,
+}
+
+impl Default for AdsbBeastConfig {
+    fn default() -> Self {
+        AdsbBeastConfig { enabled: false, bind: "0.0.0.0".into(), port: 30005 }
+    }
+}
+
+impl AdsbBeastConfig {
+    /// The listen address as the server spells it — trimmed, and `0.0.0.0` for
+    /// a blank bind — so the engine rebuilds the listener only on a real change.
+    pub fn addr(&self) -> String {
+        let bind = self.bind.trim();
+        format!("{}:{}", if bind.is_empty() { "0.0.0.0" } else { bind }, self.port)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

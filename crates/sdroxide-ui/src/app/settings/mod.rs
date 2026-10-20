@@ -51,8 +51,8 @@ use self::radio::{
 #[cfg(not(target_arch = "wasm32"))]
 use self::remote::settings_remote_tab;
 use self::servers::{
-    settings_mqtt_tab, settings_rigctld_tab, settings_rotator_tab, settings_tci_server_tab,
-    settings_vdl2_udp_tab, settings_wsjtx_tab,
+    settings_adsb_beast_tab, settings_mqtt_tab, settings_rigctld_tab, settings_rotator_tab,
+    settings_tci_server_tab, settings_vdl2_udp_tab, settings_wsjtx_tab,
 };
 use self::tle::settings_tle_tab;
 use self::ui_tab::settings_ui_tab;
@@ -300,6 +300,8 @@ pub(in crate::app) struct SettingsIo<'a> {
     mqtt_apply: &'a mut bool,
     vdl2_udp_edit: &'a mut sdroxide_types::Vdl2UdpConfig,
     vdl2_udp_apply: &'a mut bool,
+    adsb_beast_edit: &'a mut sdroxide_types::AdsbBeastConfig,
+    adsb_beast_apply: &'a mut bool,
     /// The rotctld *client* — the satellite lock steering a motorized antenna.
     rot_edit: &'a mut sdroxide_types::RotatorConfig,
     rot_apply: &'a mut bool,
@@ -1127,6 +1129,8 @@ impl SdroxideApp {
         let mut mqtt_apply = false;
         let mut vdl2_udp_edit = self.vdl2_udp_edit.clone();
         let mut vdl2_udp_apply = false;
+        let mut adsb_beast_edit = self.adsb_beast_edit.clone();
+        let mut adsb_beast_apply = false;
         let mut rot_edit = self.rot_cfg_edit.clone();
         let mut rot_apply = false;
         let mut relay_edit = self.relay_edit.clone();
@@ -1321,6 +1325,8 @@ impl SdroxideApp {
                             mqtt_apply: &mut mqtt_apply,
                             vdl2_udp_edit: &mut vdl2_udp_edit,
                             vdl2_udp_apply: &mut vdl2_udp_apply,
+                            adsb_beast_edit: &mut adsb_beast_edit,
+                            adsb_beast_apply: &mut adsb_beast_apply,
                             rot_edit: &mut rot_edit,
                             rot_apply: &mut rot_apply,
                             relay_edit: &mut relay_edit,
@@ -1447,6 +1453,10 @@ impl SdroxideApp {
         self.vdl2_udp_edit = vdl2_udp_edit;
         if vdl2_udp_apply {
             cmds.push(Command::SetVdl2UdpConfig(self.vdl2_udp_edit.clone()));
+        }
+        self.adsb_beast_edit = adsb_beast_edit;
+        if adsb_beast_apply {
+            cmds.push(Command::SetAdsbBeastConfig(self.adsb_beast_edit.clone()));
         }
         self.rot_cfg_edit = rot_edit;
         if rot_apply {
@@ -3556,6 +3566,15 @@ impl SdroxideApp {
                     io.vdl2_udp_edit,
                     self.vdl2_udp_seeded,
                     io.vdl2_udp_apply,
+                );
+                ui.add_space(12.0);
+                ui.separator();
+                ui.add_space(8.0);
+                settings_adsb_beast_tab(
+                    ui,
+                    io.adsb_beast_edit,
+                    self.adsb_beast_seeded,
+                    io.adsb_beast_apply,
                 );
                 ui.add_space(12.0);
                 ui.separator();
