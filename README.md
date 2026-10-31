@@ -16,6 +16,9 @@ a WebSocket server that serves the same UI to a browser.
 
 ## Docs
 
+- **[Getting Started](https://github.com/epiHATR/sdroxide/wiki/Getting-Started)** —
+  prerequisites and install on Linux, Windows, and macOS
+  (source: [`docs/GETTING_STARTED.md`](docs/GETTING_STARTED.md))
 - **[User Manual](https://github.com/epiHATR/sdroxide/wiki)** — how to operate it
   (source: [`docs/USER_MANUAL.md`](docs/USER_MANUAL.md))
 - [QO-100 quick-start](docs/qo100-quickstart.en.md)
