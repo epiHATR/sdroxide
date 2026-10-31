@@ -18,8 +18,9 @@ if [[ $# -ne 1 ]]; then
 fi
 
 NEW=$1
-if [[ ! "$NEW" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-  echo "version must look like 1.6.12, got: $NEW" >&2
+# Cargo/semver: 1.6.12 or 1.6.19-beta / 1.7.0-rc.1
+if [[ ! "$NEW" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+  echo "version must look like 1.6.12 or 1.6.19-beta, got: $NEW" >&2
   exit 1
 fi
 

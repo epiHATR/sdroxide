@@ -1075,13 +1075,20 @@ jobs:
             cat changes.md
           } > notes.md
 
+          # Semver pre-releases (v1.6.19-beta, v1.7.0-rc.1, …) must not become
+          # GitHub's "latest" release — mark them --prerelease.
+          PRE=()
+          if [[ "$GITHUB_REF_NAME" == *-* ]]; then
+            PRE=(--prerelease)
+          fi
+
           if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
             # Re-run / retag: refresh the body (create skips when the release
             # already exists, which left bad notes on the empty v1.6.11 attempt).
             gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
-              --title "sdroxide $GITHUB_REF_NAME" --notes-file notes.md
+              --title "sdroxide $GITHUB_REF_NAME" --notes-file notes.md "${PRE[@]}"
           else
             gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
-              --title "sdroxide $GITHUB_REF_NAME" --notes-file notes.md
+              --title "sdroxide $GITHUB_REF_NAME" --notes-file notes.md "${PRE[@]}"
           fi
           gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --clobber dist/*
