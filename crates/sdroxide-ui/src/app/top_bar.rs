@@ -5035,6 +5035,7 @@ impl SdroxideApp {
         self.solar_button(ui, extra);
         if picks_layers && !narrow {
             self.layers_button(ui, spec, extra);
+            self.fullscreen_button(ui, extra);
         }
         if picks_layers
             && has_wide
@@ -5050,6 +5051,36 @@ impl SdroxideApp {
             // block of minutes-old band, drawn as if it were the last few
             // seconds. Start it again from now instead.
             self.wide_wf.clear();
+        }
+    }
+
+    /// Icon-only fullscreen toggle, beside SPEC. Web only — the browser has no
+    /// window chrome of its own; native already maximises through the OS.
+    #[cfg_attr(not(target_arch = "wasm32"), allow(unused_variables))]
+    fn fullscreen_button(&mut self, ui: &mut egui::Ui, extra: f32) {
+        #[cfg(target_arch = "wasm32")]
+        {
+            let on = crate::fullscreen::is_fullscreen();
+            let label = RichText::new("⛶").size(9.5);
+            let btn = if extra > 0.0 {
+                let size = egui::vec2(
+                    crate::chrome::chip_width(ui, "⛶", Some(9.5)) + extra,
+                    crate::chrome::chip_height(ui, Some(9.5)),
+                );
+                crate::chrome::chip_sized(ui, on, label, size)
+            } else {
+                crate::chrome::chip(ui, on, label)
+            };
+            if btn
+                .on_hover_text(if on {
+                    "Leave fullscreen"
+                } else {
+                    "Show the app fullscreen"
+                })
+                .clicked()
+            {
+                crate::fullscreen::toggle();
+            }
         }
     }
 
@@ -5442,8 +5473,8 @@ impl SdroxideApp {
     fn display_rows_w(&self, ui: &egui::Ui) -> f32 {
         let row1: &[&str] =
             if self.wide_frame.is_some() { &DISPLAY_VIEW_CHIPS } else { &DISPLAY_VIEW_CHIPS[..2] };
-        chip_row_w(ui, row1).max(chip_row_w(ui, &DISPLAY_TOOL_CHIPS))
-            + 2.0 * crate::chrome::MODULE_MARGIN_X
+        let view_w = chip_row_w(ui, row1) + fullscreen_chip_row_extra(ui);
+        view_w.max(chip_row_w(ui, &DISPLAY_TOOL_CHIPS)) + 2.0 * crate::chrome::MODULE_MARGIN_X
     }
 
     /// The condensed Display box: the view chips on top, the tool chips below,
@@ -5452,7 +5483,13 @@ impl SdroxideApp {
         let inner = w - 2.0 * crate::chrome::MODULE_MARGIN_X;
         let row1: &[&str] =
             if self.wide_frame.is_some() { &DISPLAY_VIEW_CHIPS } else { &DISPLAY_VIEW_CHIPS[..2] };
-        let extra1 = ((inner - chip_row_w(ui, row1)) / row1.len() as f32).max(0.0);
+        // Count the web fullscreen chip as one more stretch share next to SPEC.
+        #[cfg(target_arch = "wasm32")]
+        let view_n = row1.len() as f32 + 1.0;
+        #[cfg(not(target_arch = "wasm32"))]
+        let view_n = row1.len() as f32;
+        let view_w = chip_row_w(ui, row1) + fullscreen_chip_row_extra(ui);
+        let extra1 = ((inner - view_w) / view_n).max(0.0);
         let extra2 = ((inner - chip_row_w(ui, &DISPLAY_TOOL_CHIPS))
             / DISPLAY_TOOL_CHIPS.len() as f32)
             .max(0.0);
@@ -6907,6 +6944,20 @@ fn panadapter_group_w(ui: &egui::Ui) -> f32 {
 fn chip_row_w(ui: &egui::Ui, labels: &[&str]) -> f32 {
     let chips: f32 = labels.iter().map(|l| crate::chrome::chip_width(ui, l, None)).sum();
     chips + MODULE_ROW_SPACING * (labels.len() - 1) as f32
+}
+
+/// Extra width the web fullscreen chip adds after SPEC (icon + gap). Native is
+/// zero — the OS already maximises the window.
+fn fullscreen_chip_row_extra(ui: &egui::Ui) -> f32 {
+    #[cfg(target_arch = "wasm32")]
+    {
+        MODULE_ROW_SPACING + crate::chrome::chip_width(ui, "⛶", Some(9.5))
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = ui;
+        0.0
+    }
 }
 
 /// A chip stretched `extra` points past its label — for the condensed boxes'
