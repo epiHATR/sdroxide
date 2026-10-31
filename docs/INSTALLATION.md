@@ -31,8 +31,10 @@ APPIMAGE_EXTRACT_AND_RUN=1 ./sdroxide-*-linux-*-compat.AppImage
 
 ### Recommended: `.deb`
 
-1. Download the matching `.deb` (`-compat` for Ubuntu 22.04 / Debian 12 /
-   Raspberry Pi OS bookworm and similar; plain for newer glibc).
+1. Download the **`-compat`** `.deb` unless you know you need the plain one.
+   Use `-compat` on Ubuntu 22.04, Debian 12/13, Mint 21, Raspberry Pi OS
+   bookworm, and anything else that reports `Depends: libc6 (>= 2.43)` (or a
+   similar glibc error) against the non-compat package.
 2. Install:
 
 ```sh

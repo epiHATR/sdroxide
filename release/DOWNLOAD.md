@@ -27,12 +27,14 @@ Two builds are provided for every platform:
 
 On Linux both builds additionally come as a **`-compat`** artifact
 (e.g. `linux-x86_64-compat`), compiled against an older glibc (2.35).
-Take the `-compat` file if the regular one refuses to start with
-``version `GLIBC_2.39' not found`` — which is what happens on
-stable/LTS distributions such as Ubuntu 22.04, Linux Mint 21,
-Debian 12 and Raspberry Pi OS (bookworm). The regular Linux builds
-need glibc 2.39 or newer (Ubuntu 24.04 / Mint 22 / Debian 13); the
-`-compat` builds and `.deb`s work on both old and new distributions.
+Take the `-compat` file if the regular one refuses to install or start
+with a glibc error — for example `Depends: libc6 (>= 2.43)` on apt, or
+``version `GLIBC_2.39' not found`` at runtime. That is the usual case on
+stable/LTS distributions such as Ubuntu 22.04, Linux Mint 21, Debian 12,
+**Debian 13** (glibc 2.41), and Raspberry Pi OS (bookworm). Prefer
+`-compat` unless you know your distro’s libc meets the non-compat
+requirement; the `-compat` builds and `.deb`s work on both old and new
+distributions.
 
 ## Just want to try it? Take the AppImage
 
