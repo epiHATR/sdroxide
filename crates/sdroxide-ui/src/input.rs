@@ -115,7 +115,7 @@ fn absolute_range(act: Action, state: &RadioState, rig_squelch: bool) -> Option<
         AgcMaxGain => (0.0, 120.0),
         ManualGain => (0.0, MAX_MANUAL_GAIN_DB),
         RitOffset | XitOffset => (-MAX_OFFSET_HZ, MAX_OFFSET_HZ),
-        DigiAudioFreq => (100.0, 3500.0),
+        DigiAudioFreq => (100.0, 3300.0),
         SpectrumFloorDb => (-160.0, 0.0),
         SpectrumCeilDb => (-120.0, 40.0),
         FilterWidth => (MIN_FILTER_HZ, state.rx[0].mode.max_filter_hz()),
@@ -300,7 +300,7 @@ pub(crate) fn apply_action(
                 let base = target.unwrap_or_else(|| {
                     (state.rx[0].filter_lo + state.rx[0].filter_hi) / 2.0 + delta
                 });
-                cmds.push(Command::SetDigiAudioFreq(base.clamp(100.0, 3500.0)));
+                cmds.push(Command::SetDigiAudioFreq(base.clamp(100.0, 3300.0)));
             }
             SpectrumZoom => {
                 let span = ui.view.span();

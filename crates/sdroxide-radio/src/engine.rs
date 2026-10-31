@@ -7369,6 +7369,48 @@ impl Engine {
         self.push_control_filter();
     }
 
+    /// Keep a slotted digi TX tone inside the red passband wash.
+    ///
+    /// FT8/FT4 decode the whole USB audio window, but the digi tap is still
+    /// post-filter: a narrowed passband that leaves the cyan TX cursor outside
+    /// the red edges drops that tone from both RX and TX audio. Expand the
+    /// filter just enough to cover the tone, without exceeding the mode's
+    /// default (100–3300 Hz) window.
+    fn sync_slotted_filter(&mut self) {
+        let mode = self.state.rx[0].mode;
+        if !mode.is_slotted() {
+            return;
+        }
+        let Some(hz) = self.digi.as_ref().map(|d| d.audio_hz()) else {
+            return;
+        };
+        let (dlo, dhi) = mode.default_filter_at(self.state.rx_freq_hz());
+        let r = &mut self.state.rx[0];
+        let mut lo = r.filter_lo;
+        let mut hi = r.filter_hi;
+        if hz < lo {
+            lo = hz.max(dlo.min(dhi)).min(dlo.max(dhi));
+        }
+        if hz > hi {
+            hi = hz.min(dlo.max(dhi)).max(dlo.min(dhi));
+        }
+        // Keep edges ordered and inside the mode default.
+        let (flo, fhi) = (dlo.min(dhi), dlo.max(dhi));
+        lo = lo.clamp(flo, fhi);
+        hi = hi.clamp(flo, fhi);
+        if hi < lo {
+            (lo, hi) = (flo, fhi);
+        }
+        if (r.filter_lo - lo).abs() < 0.5 && (r.filter_hi - hi).abs() < 0.5 {
+            return;
+        }
+        (r.filter_lo, r.filter_hi) = (lo, hi);
+        if let Some(d) = self.main.as_mut().and_then(|c| c.demod.as_mut()) {
+            d.set_filter(lo, hi);
+        }
+        self.push_control_filter();
+    }
+
     /// The sidetone pitch the CW panel is copying at.
     ///
     /// The controller's rather than the configuration's, because the operator
@@ -9404,6 +9446,7 @@ impl Engine {
                     d.set_audio_hz(hz);
                 }
                 self.sync_cw_filter();
+                self.sync_slotted_filter();
                 self.sync_cw_dial();
                 // In CW the offset is the sidetone pitch, and its home is the
                 // station configuration rather than the band memory below. The

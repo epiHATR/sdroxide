@@ -1906,7 +1906,9 @@ pub fn show_ext(
                         // label is a label; with it off it tunes, as before.
                         if !auto_tx_freq && !hold_tx_freq {
                             let audio = (spot_hz - state.rx_freq_hz()) as f32;
-                            cmds.push(Command::SetDigiAudioFreq(audio.clamp(200.0, 3500.0)));
+                            // Match the FT8/FT4 decode + default-filter window
+                            // (100–3300 Hz); 200 Hz floor keeps the tone off DC.
+                            cmds.push(Command::SetDigiAudioFreq(audio.clamp(200.0, 3300.0)));
                         }
                     } else {
                         // Skimmer spot: switch to the spot's mode and tune onto it.
@@ -1957,7 +1959,7 @@ pub fn show_ext(
                     // the case this exists for is a licence edge, where a slip
                     // is an out-of-band transmission.
                     let audio = (view.x_to_freq(pos.x, &rect) - state.rx_freq_hz()) as f32;
-                    cmds.push(Command::SetDigiAudioFreq(audio.clamp(200.0, 3500.0)));
+                    cmds.push(Command::SetDigiAudioFreq(audio.clamp(200.0, 3300.0)));
                 } else {
                     // CW: tune so the clicked signal lands *on* the cursor, not
                     // on the dial. The dial in CW is a sidetone-pitch below what
@@ -3097,7 +3099,7 @@ fn click_tune_label(
 ) -> String {
     let hz = view.x_to_freq(x, rect);
     if cursor.is_some_and(|c| c.click_sets_offset) {
-        let audio = (hz - state.rx_freq_hz()).clamp(200.0, 3500.0);
+        let audio = (hz - state.rx_freq_hz()).clamp(200.0, 3300.0);
         format!("{audio:.0} Hz")
     } else {
         // The label is the frequency of the *signal*, which in CW is a pitch

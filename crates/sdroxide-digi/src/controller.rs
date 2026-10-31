@@ -19,7 +19,7 @@ use sdroxide_types::{
 
 use crate::clock::ClockMonitor;
 use crate::modem::{ApHints, Ft8Modem};
-use crate::params::{DECODE_RATE, DigiParams};
+use crate::params::{AUDIO_MAX_HZ, AUDIO_MIN_HZ, DECODE_RATE, DigiParams};
 
 /// How much of a slot's audio has to arrive before the period counts as whole.
 ///
@@ -344,14 +344,44 @@ impl DigiController {
                         }
                     };
                     let stop = || worker_queued.load(Relaxed) > 0;
-                    modem.decode_slot_streaming(
-                        &job.audio,
-                        job.slot_utc,
-                        &job.ap,
-                        job.audio_hz,
-                        &stop,
-                        &emit,
-                    );
+                    // mfsk-core's SIC path indexes a buffer of length
+                    // `tones × samples_per_symbol` (151 680 for FT8) against
+                    // `audio.len()`. A short slot used to panic there and kill
+                    // this worker permanently — after that, no further FT8
+                    // decode until restart. Pad to a full slot (WSJT-X NMAX
+                    // style) and catch_unwind so one bad buffer cannot take
+                    // the decoder offline.
+                    let want = DigiParams::for_mode(worker_mode).slot_samples();
+                    let audio = if job.audio.len() < want {
+                        let mut padded = job.audio;
+                        padded.resize(want, 0);
+                        padded
+                    } else {
+                        job.audio
+                    };
+                    let decoded = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        modem.decode_slot_streaming(
+                            &audio,
+                            job.slot_utc,
+                            &job.ap,
+                            job.audio_hz,
+                            &stop,
+                            &emit,
+                        );
+                    }));
+                    if let Err(payload) = decoded {
+                        let msg = payload
+                            .downcast_ref::<&str>()
+                            .copied()
+                            .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+                            .unwrap_or("unknown panic");
+                        tracing::error!(
+                            slot = slot_idx,
+                            audio_len = audio.len(),
+                            "ft8 decode panicked ({msg}); skipping slot and recreating modem"
+                        );
+                        modem = Ft8Modem::new(worker_mode);
+                    }
                     if res_tx.send((slot_idx, Vec::new(), true)).is_err() {
                         break;
                     }
@@ -445,8 +475,13 @@ impl DigiController {
     }
 
     /// Move the transmit tone with no zone check — the sequencer's own moves.
+    ///
+    /// Clamped to the FT8/FT4 decode and default-filter window
+    /// ([`AUDIO_MIN_HZ`]..=[`AUDIO_MAX_HZ`]), not the wider 200–3500 UI range
+    /// that used to let the cyan TX cursor sit past the red passband wash
+    /// and past what the modem actually searches.
     fn tune_audio_hz(&mut self, hz: f32) {
-        self.audio_hz = hz.clamp(200.0, 3500.0);
+        self.audio_hz = hz.clamp(AUDIO_MIN_HZ, AUDIO_MAX_HZ);
         self.qso.set_audio_hz(self.audio_hz);
         self.status_dirty = true;
     }

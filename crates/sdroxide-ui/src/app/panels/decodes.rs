@@ -288,7 +288,7 @@ impl SdroxideApp {
                     ui.spacing_mut().item_spacing.x = 4.0;
                     ui.label(RichText::new("TX").size(11.0).color(crate::theme::gray(140)));
                     if crate::chrome::chip_enabled(ui, !held, false, "−").clicked() {
-                        cmds.push(Command::SetDigiAudioFreq(step_down.clamp(200.0, 3500.0)));
+                        cmds.push(Command::SetDigiAudioFreq(step_down.clamp(200.0, 3300.0)));
                     }
                     // The readout and the entry are the same widget: two of them
                     // would be two things to disagree with each other.
@@ -340,7 +340,7 @@ impl SdroxideApp {
                          is suggested here.",
                     );
                     if crate::chrome::chip_enabled(ui, !held, false, "+").clicked() {
-                        cmds.push(Command::SetDigiAudioFreq(step_up.clamp(200.0, 3500.0)));
+                        cmds.push(Command::SetDigiAudioFreq(step_up.clamp(200.0, 3300.0)));
                     }
                     // The unit rides beside the box rather than inside it. As a
                     // suffix it would be text sitting in the buffer the
@@ -349,7 +349,7 @@ impl SdroxideApp {
                     ui.label(RichText::new("Hz").size(11.0).color(crate::theme::gray(140)));
                     if resp.lost_focus() {
                         if let Ok(v) = self.digi_tx_hz_edit.trim().parse::<f32>() {
-                            let v = v.clamp(200.0, 3500.0);
+                            let v = v.clamp(200.0, 3300.0);
                             if (v - our_hz).abs() >= 0.5 {
                                 cmds.push(Command::SetDigiAudioFreq(v));
                             }
